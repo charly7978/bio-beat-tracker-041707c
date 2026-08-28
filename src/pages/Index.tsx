@@ -714,57 +714,65 @@ const Index = () => {
     }}>
       {/* SPLASH / BOOT SCREEN — Puerta de entrada a pantalla completa inmersiva */}
       {!session.isFullscreen && (
-        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black animate-in fade-in duration-700">
-          <div className="relative flex flex-col items-center max-w-xs text-center space-y-12">
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-gradient-to-b from-zinc-950 via-black to-zinc-950 animate-in fade-in duration-700">
+          <div className="relative flex flex-col items-center max-w-xs text-center space-y-10 px-4">
             
-            {/* Logo Pulsante / Indicador de estado */}
-            <div className="relative">
-              <div className="absolute inset-0 bg-emerald-500/20 blur-3xl rounded-full animate-pulse scale-150" />
-              <div className="relative w-24 h-24 rounded-full border-2 border-emerald-500/30 flex items-center justify-center">
-                <Heart className="w-10 h-10 text-emerald-400 animate-pulse" fill="currentColor" />
+            {/* Logo Pulsante / Anillos Biomédicos */}
+            <div className="relative flex items-center justify-center">
+              <div className="absolute inset-0 bg-emerald-500/20 blur-3xl rounded-full animate-ripple scale-150" />
+              <div className="absolute w-32 h-32 rounded-full border border-emerald-500/20 animate-spin duration-1000" style={{ animationDuration: '8s' }} />
+              <div className="relative w-24 h-24 rounded-full glass-card border border-emerald-500/40 flex items-center justify-center shadow-2xl shadow-emerald-950/60 glow-emerald">
+                <Heart className="w-10 h-10 text-emerald-400 animate-cardiac drop-shadow-[0_0_12px_rgba(16,185,129,0.8)]" fill="currentColor" />
               </div>
             </div>
 
-            <div className="space-y-4">
-              <h1 className="text-white text-2xl font-bold tracking-[0.2em]">BIO-BEAT TRACKER</h1>
-              <div className="flex items-center justify-center gap-3">
-                <span className="h-[1px] w-8 bg-emerald-900" />
-                <p className="text-emerald-500/60 text-[10px] font-bold tracking-[0.3em] uppercase">Monitor de Grado Clínico</p>
-                <span className="h-[1px] w-8 bg-emerald-900" />
+            <div className="space-y-3">
+              <h1 className="text-white text-3xl font-extrabold tracking-[0.18em] font-heading bg-gradient-to-r from-white via-zinc-200 to-emerald-300 bg-clip-text text-transparent">
+                BIO-BEAT
+              </h1>
+              <div className="flex items-center justify-center gap-2">
+                <span className="h-[1px] w-6 bg-emerald-500/40" />
+                <p className="text-emerald-400/80 text-[10px] font-bold tracking-[0.25em] uppercase font-mono">
+                  Monitor de Grado Clínico
+                </p>
+                <span className="h-[1px] w-6 bg-emerald-500/40" />
               </div>
             </div>
 
             <button 
               onClick={session.enterFullScreen}
-              className="group relative px-10 py-4 overflow-hidden rounded-full transition-all active:scale-95"
+              className="group relative px-8 py-3.5 overflow-hidden rounded-2xl transition-all duration-300 active:scale-95 shadow-xl shadow-emerald-950/40"
             >
-              <div className="absolute inset-0 bg-emerald-600/10 group-hover:bg-emerald-600/20 transition-colors" />
-              <div className="absolute inset-0 border border-emerald-500/30 group-hover:border-emerald-500/50 rounded-full" />
-              <span className="relative text-emerald-400 text-sm font-bold tracking-[0.2em]">INICIAR SISTEMA</span>
+              <div className="absolute inset-0 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 opacity-90 group-hover:opacity-100 transition-opacity" />
+              <div className="absolute inset-0 border border-emerald-300/40 rounded-2xl" />
+              <span className="relative text-white text-xs font-bold tracking-[0.2em] uppercase font-mono flex items-center gap-2">
+                <Activity className="w-4 h-4 text-emerald-200" />
+                INICIAR SISTEMA
+              </span>
             </button>
 
-            <div className="pt-10 grid grid-cols-2 gap-x-10 gap-y-6 opacity-90 animate-in slide-in-from-bottom-8 duration-1000 delay-300 fill-mode-both">
-              <div className="text-left space-y-1.5 border-l-2 border-emerald-500/20 pl-3">
-                <p className="text-white/60 text-[9px] font-bold tracking-widest uppercase">Pipeline</p>
-                <p className="text-emerald-300 text-[10px] font-mono leading-tight font-bold">ZERO-ALLOCATION<br/>ULTRA LOW LATENCY</p>
+            <div className="pt-6 grid grid-cols-2 gap-x-6 gap-y-4 opacity-90 animate-in slide-in-from-bottom-6 duration-700 delay-200 fill-mode-both">
+              <div className="text-left space-y-1 glass-card p-2.5 rounded-xl border border-white/5">
+                <p className="text-zinc-400 text-[8px] font-bold tracking-widest uppercase font-mono">Pipeline</p>
+                <p className="text-emerald-300 text-[9px] font-mono leading-tight font-bold">ZERO-ALLOCATION<br/>ULTRA LOW LATENCY</p>
               </div>
-              <div className="text-left space-y-1.5 border-l-2 border-emerald-500/20 pl-3">
-                <p className="text-white/60 text-[9px] font-bold tracking-widest uppercase">Engine</p>
-                <p className="text-emerald-300 text-[10px] font-mono leading-tight font-bold">PPG-RG FIDELITY<br/>PWA IMMERSIVE</p>
+              <div className="text-left space-y-1 glass-card p-2.5 rounded-xl border border-white/5">
+                <p className="text-zinc-400 text-[8px] font-bold tracking-widest uppercase font-mono">Engine</p>
+                <p className="text-cyan-300 text-[9px] font-mono leading-tight font-bold">PPG-RG FIDELITY<br/>PWA IMMERSIVE</p>
               </div>
-              <div className="text-left space-y-1.5 border-l-2 border-emerald-500/20 pl-3">
-                <p className="text-white/60 text-[9px] font-bold tracking-widest uppercase">Analytics</p>
-                <p className="text-emerald-300 text-[10px] font-mono leading-tight font-bold">HRV CLINICAL<br/>RMSSD / PNN50</p>
+              <div className="text-left space-y-1 glass-card p-2.5 rounded-xl border border-white/5">
+                <p className="text-zinc-400 text-[8px] font-bold tracking-widest uppercase font-mono">Analytics</p>
+                <p className="text-emerald-300 text-[9px] font-mono leading-tight font-bold">HRV CLINICAL<br/>RMSSD / PNN50</p>
               </div>
-              <div className="text-left space-y-1.5 border-l-2 border-emerald-500/20 pl-3">
-                <p className="text-white/60 text-[9px] font-bold tracking-widest uppercase">Security</p>
-                <p className="text-emerald-300 text-[10px] font-mono leading-tight font-bold">ANTI-SIM GUARDRAIL<br/>DATA INTEGRITY</p>
+              <div className="text-left space-y-1 glass-card p-2.5 rounded-xl border border-white/5">
+                <p className="text-zinc-400 text-[8px] font-bold tracking-widest uppercase font-mono">Security</p>
+                <p className="text-indigo-300 text-[9px] font-mono leading-tight font-bold">ANTI-SIM GUARD<br/>DATA INTEGRITY</p>
               </div>
             </div>
 
-            <div className="pt-8 space-y-2 opacity-40 animate-in fade-in duration-1000 delay-700 fill-mode-both">
-              <p className="text-white text-[9px] font-mono uppercase tracking-[0.3em]">Hardware: WebRTC Camera / Optical Sensor</p>
-              <p className="text-white text-[9px] font-mono uppercase tracking-[0.3em]">Software: V-Sign Engine v4.0.2 • Build 2024.05</p>
+            <div className="pt-4 space-y-1 opacity-50 text-center font-mono text-[8px] text-zinc-400 uppercase tracking-widest">
+              <p>Hardware: WebRTC Optical Sensor</p>
+              <p>Engine v4.0.2 • Build 2026.SOTA</p>
             </div>
           </div>
         </div>
@@ -781,43 +789,53 @@ const Index = () => {
           />
         </div>
 
-        {/* AJUSTES */}
-        <button
-          type="button"
-          onClick={() => setShowSettings(true)}
-          aria-label="Ajustes"
-          className="absolute top-4 right-4 z-30 p-2.5 rounded-full bg-black/50 backdrop-blur-md border border-zinc-900 text-white/75 hover:text-white hover:bg-black/80 hover:scale-105 active:scale-95 shadow-lg shadow-black/35 transition-all"
-        >
-          <Sliders className="h-4 w-4" />
-        </button>
+        {/* BARRA SUPERIOR DE ACCIONES RÁPIDAS */}
+        <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
+          {/* TELEMEDICINA (atajo rápido) */}
+          <button
+            type="button"
+            onClick={() => setShowTelemedicine(true)}
+            aria-label="Telemedicina"
+            className="p-2.5 rounded-2xl glass-panel text-emerald-400/90 hover:text-emerald-300 hover:scale-105 active:scale-95 shadow-xl transition-all duration-200 border border-white/10 hover:border-emerald-500/40"
+          >
+            <Activity className="h-4 w-4" />
+          </button>
 
-        {/* TELEMEDICINA (atajo rápido) */}
-        <button
-          type="button"
-          onClick={() => setShowTelemedicine(true)}
-          aria-label="Telemedicina"
-          className="absolute top-4 right-16 z-30 p-2.5 rounded-full bg-black/50 backdrop-blur-md border border-zinc-900 text-emerald-400/75 hover:text-emerald-400 hover:bg-black/80 hover:scale-105 active:scale-95 shadow-lg shadow-black/35 transition-all"
-        >
-          <Activity className="h-4 w-4" />
-        </button>
+          {/* AJUSTES */}
+          <button
+            type="button"
+            onClick={() => setShowSettings(true)}
+            aria-label="Ajustes"
+            className="p-2.5 rounded-2xl glass-panel text-zinc-300 hover:text-white hover:scale-105 active:scale-95 shadow-xl transition-all duration-200 border border-white/10 hover:border-white/25"
+          >
+            <Sliders className="h-4 w-4" />
+          </button>
+        </div>
 
         {/* TELEMEDICINA DIALOG */}
         {showTelemedicine && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in">
-            <div className="bg-black/95 border border-zinc-900/80 rounded-2xl max-w-sm w-[92%] shadow-2xl flex flex-col max-h-[80vh] animate-in zoom-in-95 duration-200">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-900">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-fade-in p-4">
+            <div className="glass-panel border border-white/15 rounded-3xl max-w-sm w-full shadow-2xl flex flex-col max-h-[85vh] overflow-hidden animate-in zoom-in-95 duration-200">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
                 <div className="flex items-center gap-2">
-                  <Activity className="w-5 h-5 text-emerald-400" />
-                  <h3 className="text-white text-sm font-bold">Telemedicina WebRTC</h3>
+                  <div className="p-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                    <Activity className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-white text-sm font-bold font-heading">Telemedicina P2P</h3>
+                    <p className="text-[9px] text-zinc-400 font-mono">WebRTC Secure Telemetry Bridge</p>
+                  </div>
                 </div>
-                <button onClick={() => setShowTelemedicine(false)}
-                  className="p-1.5 rounded-full bg-zinc-950 hover:bg-zinc-900 text-zinc-400 hover:text-white transition-colors">
+                <button
+                  onClick={() => setShowTelemedicine(false)}
+                  className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
+                >
                   <X className="w-4 h-4" />
                 </button>
               </div>
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                <p className="text-zinc-500 text-[9px] leading-relaxed">
-                  Conexión P2P con STUN. Copia tu SDP y compártelo con el remoto.
+                <p className="text-zinc-400 text-[10px] leading-relaxed">
+                  Conexión directa P2P encriptada. Copia tu descriptor de sesión (SDP) para enlazar en vivo con el médico.
                 </p>
                 <WebrtcCallWidget vitals={router.vitalSigns} />
               </div>
@@ -903,17 +921,19 @@ const Index = () => {
             const StatusIcon = statusIcon;
             
             return (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 animate-fade-in">
-                <div className="bg-black border border-slate-700/50 rounded-2xl max-w-sm w-[92%] shadow-2xl flex flex-col max-h-[85vh]">
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-fade-in p-4">
+                <div className="glass-panel border border-white/15 rounded-3xl max-w-sm w-full shadow-2xl flex flex-col max-h-[85vh] overflow-hidden animate-in zoom-in-95 duration-200">
                   
                   {/* Header con estado */}
-                  <div className={`flex-none px-4 py-3 ${bgClass} border-b border-zinc-900 rounded-t-2xl`}>
+                  <div className={`flex-none px-5 py-4 ${bgClass} border-b border-white/10`}>
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <StatusIcon className={`w-5 h-5 ${textClass}`} />
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 rounded-2xl bg-black/40 border border-white/10 shadow-inner">
+                          <StatusIcon className={`w-5 h-5 ${textClass}`} />
+                        </div>
                         <div>
-                          <h3 className="text-white text-sm font-bold tracking-wide">MEDICIÓN COMPLETADA</h3>
-                          <p className={`${textClass} text-[10px] font-semibold tracking-wider`}>{statusText}</p>
+                          <h3 className="text-white text-sm font-bold font-heading tracking-wide">MEDICIÓN COMPLETADA</h3>
+                          <p className={`${textClass} text-[10px] font-semibold tracking-wider uppercase font-mono`}>{statusText}</p>
                         </div>
                       </div>
                       <button 
@@ -921,84 +941,86 @@ const Index = () => {
                           session.setLocalMeasurementSummary(null);
                           session.setLocalShowResults(false);
                         }}
-                        className="p-1.5 rounded-full bg-zinc-900 hover:bg-slate-700 transition-colors"
+                        className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
                       >
-                        <X className="w-4 h-4 text-zinc-400" />
+                        <X className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
 
                   {/* Métricas principales */}
-                  <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                  <div className="flex-1 overflow-y-auto p-4 space-y-3">
                     
                     {/* BPM y SpO2 en fila */}
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="bg-zinc-950/80 rounded-xl p-3 text-center border border-zinc-900/50">
-                        <Heart className="w-4 h-4 text-red-400 mx-auto mb-1" fill="currentColor" />
-                        <div className="text-white text-2xl font-bold leading-none">{avgBpm}</div>
-                        <div className="text-zinc-500 text-[9px] mt-1 font-medium">BPM PROMEDIO</div>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div className="glass-card rounded-2xl p-3 text-center border border-white/5 shadow-lg">
+                        <Heart className="w-4 h-4 text-rose-400 mx-auto mb-1 animate-cardiac" fill="currentColor" />
+                        <div className="text-white text-2xl font-extrabold font-mono leading-none tracking-tight">{avgBpm}</div>
+                        <div className="text-zinc-400 text-[9px] mt-1 font-mono uppercase tracking-wider">BPM PROMEDIO</div>
                       </div>
-                      <div className="bg-zinc-950/80 rounded-xl p-3 text-center border border-zinc-900/50">
+                      <div className="glass-card rounded-2xl p-3 text-center border border-white/5 shadow-lg">
                         <Activity className="w-4 h-4 text-cyan-400 mx-auto mb-1" />
-                        <div className="text-white text-2xl font-bold leading-none">
+                        <div className="text-white text-2xl font-extrabold font-mono leading-none tracking-tight">
                           {router.vitalSigns.spo2.value != null && router.vitalSigns.spo2.value > 0 ? Math.round(router.vitalSigns.spo2.value) : '--'}
-                          <span className="text-sm text-zinc-400">%</span>
+                          <span className="text-sm text-cyan-300/70 ml-0.5">%</span>
                         </div>
-                        <div className="text-zinc-500 text-[9px] mt-1 font-medium">SpO₂</div>
+                        <div className="text-zinc-400 text-[9px] mt-1 font-mono uppercase tracking-wider">SpO₂</div>
                       </div>
                     </div>
 
                     {/* Presión arterial */}
                     {router.vitalSigns.bloodPressure.value && router.vitalSigns.bloodPressure.value.systolic > 0 && (
-                      <div className="bg-zinc-950/80 rounded-xl p-3 border border-zinc-900/50 flex items-center gap-3">
-                        <Shield className="w-5 h-5 text-blue-400" />
+                      <div className="glass-card rounded-2xl p-3.5 border border-white/5 flex items-center gap-3 shadow-lg">
+                        <div className="p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+                          <Shield className="w-4 h-4 text-indigo-400" />
+                        </div>
                         <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <div className="text-zinc-500 text-[9px] font-medium tracking-tight">PRESIÓN ARTERIAL</div>
+                          <div className="flex items-center justify-between mb-0.5">
+                            <div className="text-zinc-400 text-[9px] font-mono uppercase tracking-wider">PRESIÓN ARTERIAL</div>
                             {router.vitalSigns.bloodPressure.calibration?.available ? (
-                              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">CALIBRADO</span>
+                              <span className="text-[7px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">CALIBRADO</span>
                             ) : (
-                              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-orange-500/20 text-orange-400">SIN CALIBRAR</span>
+                              <span className="text-[7px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">ESTIMADO</span>
                             )}
                           </div>
-                          <div className="text-white text-lg font-bold">
+                          <div className="text-white text-lg font-bold font-mono">
                             {Math.round(router.vitalSigns.bloodPressure.value.systolic)}/{Math.round(router.vitalSigns.bloodPressure.value.diastolic)}
-                            <span className="text-xs text-zinc-500 ml-1">mmHg</span>
+                            <span className="text-xs text-zinc-400 ml-1 font-sans">mmHg</span>
                           </div>
                         </div>
                       </div>
                     )}
 
                     {/* Barras de ritmo */}
-                    <div className="bg-zinc-950/80 rounded-xl p-3 border border-zinc-900/50">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-zinc-400 text-[10px] font-semibold tracking-wide">ANÁLISIS DE RITMO</span>
-                        <div className="flex items-center gap-1">
+                    <div className="glass-card rounded-2xl p-3.5 border border-white/5 space-y-2 shadow-lg">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-zinc-300 text-[10px] font-bold font-mono tracking-wider uppercase">ANÁLISIS DE RITMO</span>
+                        <div className="flex items-center gap-1 text-zinc-400 text-[9px] font-mono">
                           <Clock className="w-3 h-3 text-zinc-500" />
-                          <span className="text-zinc-500 text-[9px]">60s</span>
+                          <span>60s</span>
                         </div>
                       </div>
                       
                       {/* Latidos normales */}
-                      <div className="mb-2">
-                        <div className="flex justify-between items-center mb-0.5">
-                          <span className="text-emerald-400 text-[9px] font-medium">■ Normales</span>
-                          <span className="text-white text-xs font-bold">{normalBeats}</span>
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-emerald-400 text-[9px] font-mono">■ Latidos Normales</span>
+                          <span className="text-white text-xs font-bold font-mono">{normalBeats}</span>
                         </div>
-                        <div className="w-full h-2 bg-zinc-900 rounded-full overflow-hidden">
-                          <div className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-full transition-all duration-1000 ease-out"
+                        <div className="w-full h-2 bg-black/40 rounded-full overflow-hidden p-0.5 border border-white/5">
+                          <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-1000 ease-out"
                                style={{ width: `${totalBeats > 0 ? (normalBeats / totalBeats) * 100 : 0}%` }} />
                         </div>
                       </div>
                       
                       {/* Arritmias */}
                       <div>
-                        <div className="flex justify-between items-center mb-0.5">
-                          <span className="text-red-400 text-[9px] font-medium">■ Arrítmicos</span>
-                          <span className="text-white text-xs font-bold">{arrhythmiaBeats}</span>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-rose-400 text-[9px] font-mono">■ Arrítmicos / Ectópicos</span>
+                          <span className="text-white text-xs font-bold font-mono">{arrhythmiaBeats}</span>
                         </div>
-                        <div className="w-full h-2 bg-zinc-900 rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full transition-all duration-1000 ease-out ${arrhythmiaBeats > 0 ? 'bg-gradient-to-r from-red-600 to-red-400' : 'bg-slate-700'}`}
+                        <div className="w-full h-2 bg-black/40 rounded-full overflow-hidden p-0.5 border border-white/5">
+                          <div className={`h-full rounded-full transition-all duration-1000 ease-out ${arrhythmiaBeats > 0 ? 'bg-gradient-to-r from-rose-600 to-red-500' : 'bg-zinc-800'}`}
                                style={{ width: `${totalBeats > 0 ? (arrhythmiaBeats / totalBeats) * 100 : 100}%` }} />
                         </div>
                       </div>
@@ -1006,17 +1028,17 @@ const Index = () => {
 
                     {/* Poincaré Plot de HRV */}
                     {router.rrIntervals && router.rrIntervals.length >= 2 && (
-                      <div className="flex justify-center my-2 animate-in fade-in zoom-in-95 duration-500">
+                      <div className="flex justify-center my-1 animate-in fade-in zoom-in-95 duration-500">
                         <PoincarePlot rrIntervals={router.rrIntervals} width={200} height={200} />
                       </div>
                     )}
 
                     {/* Porcentaje circular visual */}
-                    <div className="flex items-center justify-center gap-4 pt-1">
-                      <div className="relative w-16 h-16">
+                    <div className="glass-card rounded-2xl p-3 border border-white/5 flex items-center justify-center gap-4">
+                      <div className="relative w-14 h-14">
                         <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
                           <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                                fill="none" stroke="#1e293b" strokeWidth="3" />
+                                fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
                           <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                                 fill="none"
                                 className={strokeClass}
@@ -1025,19 +1047,20 @@ const Index = () => {
                                 strokeLinecap="round" />
                         </svg>
                         <div className="absolute inset-0 flex items-center justify-center">
-                          <span className={`text-sm font-bold ${textClass}`}>
+                          <span className={`text-xs font-bold font-mono ${textClass}`}>
                             {normalPercent}%
                           </span>
                         </div>
                       </div>
                       <div>
-                        <div className="text-white text-xs font-semibold">Ritmo Normal</div>
-                        <div className="text-zinc-500 text-[9px]">{totalBeats} latidos analizados</div>
-                        <div className={`text-[10px] font-semibold mt-0.5 ${textClass}`}>
+                        <div className="text-white text-xs font-bold font-heading">Regularidad de Ritmo</div>
+                        <div className="text-zinc-400 text-[9px] font-mono">{totalBeats} latidos registrados</div>
+                        <div className={`text-[10px] font-bold mt-0.5 font-mono ${textClass}`}>
                           {statusText}
                         </div>
                       </div>
                     </div>
+
                     {/* Botón Análisis AI */}
                     <button
                       onClick={() => {
@@ -1045,12 +1068,12 @@ const Index = () => {
                         setShowAIAnalysis(true);
                       }}
                       disabled={isAnalyzing}
-                      className="w-full mt-2 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-sm transition-all disabled:opacity-50"
+                      className="w-full mt-1 flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs font-mono uppercase tracking-wider transition-all active:scale-[0.98] shadow-xl shadow-purple-950/40 disabled:opacity-50 border border-purple-400/30"
                     >
                       {isAnalyzing ? (
                         <><Loader2 className="w-4 h-4 animate-spin" /> Analizando...</>
                       ) : (
-                        <><Brain className="w-4 h-4" /> Análisis AI de Salud</>
+                        <><Brain className="w-4 h-4 text-purple-200" /> Análisis AI de Salud</>
                       )}
                     </button>
                   </div>
@@ -1097,52 +1120,70 @@ const Index = () => {
 
           {/* PANEL DE AJUSTES Y CALIBRACIÓN */}
           {showSettings && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in">
-              <div className="bg-black/95 border border-zinc-900/80 rounded-2xl max-w-sm w-[92%] shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-fade-in p-4">
+              <div className="glass-panel border border-white/15 rounded-3xl max-w-sm w-full shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
                 
                 {/* Header */}
-                <div className="px-4 pt-3 bg-gradient-to-r from-slate-900 to-slate-950 border-b border-zinc-900 flex flex-col">
-                  <div className="flex items-center justify-between pb-2">
-                    <div className="flex items-center gap-2">
-                      <Sliders className="w-5 h-5 text-emerald-400" />
+                <div className="px-5 pt-4 bg-gradient-to-b from-white/5 to-transparent border-b border-white/10 flex flex-col">
+                  <div className="flex items-center justify-between pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 rounded-2xl bg-emerald-500/10 border border-emerald-500/20">
+                        <Sliders className="w-4 h-4 text-emerald-400" />
+                      </div>
                       <div>
-                        <h3 className="text-white text-sm font-bold tracking-wide uppercase">Ajustes del Sistema</h3>
-                        <p className="text-zinc-500 text-[8px] font-medium tracking-wider uppercase">Monitorización y calibración clínica</p>
+                        <h3 className="text-white text-sm font-bold font-heading tracking-wide uppercase">Ajustes del Sistema</h3>
+                        <p className="text-zinc-400 text-[8px] font-mono tracking-wider uppercase">Monitorización y calibración clínica</p>
                       </div>
                     </div>
                     <button 
                       onClick={() => setShowSettings(false)}
-                      className="p-1.5 rounded-full bg-zinc-950 hover:bg-zinc-900 text-zinc-400 hover:text-white transition-colors"
+                      className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
                     >
                       <X className="w-4 h-4" />
                     </button>
                   </div>
                   
                   {/* Tabs Selector */}
-                  <div className="flex border-t border-zinc-950 text-[10px] font-bold">
+                  <div className="flex gap-1 p-1 bg-black/40 rounded-2xl border border-white/5 text-[9px] font-bold font-mono mb-2">
                     <button 
                       onClick={() => setActiveTab('profile')}
-                      className={`flex-1 py-2 text-center transition-colors border-b-2 ${activeTab === 'profile' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-zinc-500 hover:text-slate-300'}`}
+                      className={`flex-1 py-1.5 px-2 text-center rounded-xl transition-all duration-200 ${
+                        activeTab === 'profile'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-md'
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
                     >
                       PERFIL
                     </button>
                     <button 
                       onClick={() => setActiveTab('calibration')}
-                      className={`flex-1 py-2 text-center transition-colors border-b-2 ${activeTab === 'calibration' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-zinc-500 hover:text-slate-300'}`}
+                      className={`flex-1 py-1.5 px-2 text-center rounded-xl transition-all duration-200 ${
+                        activeTab === 'calibration'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-md'
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
                     >
                       CALIBRACIÓN
                     </button>
                     <button 
                       onClick={() => setActiveTab('history')}
-                      className={`flex-1 py-2 text-center transition-colors border-b-2 ${activeTab === 'history' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-zinc-500 hover:text-slate-300'}`}
+                      className={`flex-1 py-1.5 px-2 text-center rounded-xl transition-all duration-200 ${
+                        activeTab === 'history'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-md'
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
                     >
-                      HISTORIAL ({history.length})
+                      HISTORIAL
                     </button>
                     <button 
                       onClick={() => setActiveTab('account')}
-                      className={`flex-1 py-2 text-center transition-colors border-b-2 ${activeTab === 'account' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-zinc-500 hover:text-slate-300'}`}
+                      className={`flex-1 py-1.5 px-2 text-center rounded-xl transition-all duration-200 ${
+                        activeTab === 'account'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-md'
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
                     >
-                      NUBE / SYNC
+                      SYNC
                     </button>
                   </div>
                 </div>

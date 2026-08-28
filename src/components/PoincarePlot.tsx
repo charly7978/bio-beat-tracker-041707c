@@ -206,14 +206,14 @@ export const PoincarePlot: React.FC<PoincarePlotProps> = ({
       ctx.arc(x, y, isIrregular ? 3.5 : 2.5, 0, Math.PI * 2);
       
       if (isIrregular) {
-        ctx.fillStyle = '#ef4444'; // red-500 para latidos irregulares
-        ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
-        ctx.lineWidth = 1;
+        ctx.fillStyle = '#f43f5e'; // rose-500
+        ctx.strokeStyle = 'rgba(244, 63, 94, 0.6)';
+        ctx.lineWidth = 1.5;
         ctx.stroke();
       } else {
         // Degradado de color según el índice temporal para ver la evolución
         const progress = idx / pairs.length;
-        ctx.fillStyle = `rgb(${Math.floor(34 + progress * 70)}, ${Math.floor(197 - progress * 40)}, ${Math.floor(94 + progress * 140)})`; // emerald a cyan
+        ctx.fillStyle = `rgb(${Math.floor(16 + progress * 80)}, ${Math.floor(185 - progress * 20)}, ${Math.floor(129 + progress * 80)})`; // emerald a cyan
       }
       ctx.fill();
     });
@@ -221,13 +221,16 @@ export const PoincarePlot: React.FC<PoincarePlotProps> = ({
   }, [rrIntervals, width, height]);
 
   return (
-    <div className="relative flex flex-col items-center justify-center p-2 bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-lg shadow-purple-950/10">
-      <div className="text-[10px] font-bold text-purple-400 tracking-wider mb-1 uppercase">
-        Espacio HRV (Gráfico de Poincaré)
+    <div className="relative flex flex-col items-center justify-center p-3 rounded-2xl glass-card border border-white/10 shadow-2xl overflow-hidden">
+      <div className="flex items-center gap-1.5 mb-2">
+        <div className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
+        <span className="text-[10px] font-bold text-violet-300 tracking-wider uppercase">
+          Espacio HRV (Gráfico de Poincaré)
+        </span>
       </div>
-      <canvas ref={canvasRef} className="rounded-lg" />
-      <div className="text-[8px] text-slate-500 mt-1 max-w-[200px] text-center leading-normal">
-        Los puntos sobre la línea diagonal indican regularidad cardíaca. La dispersión transversal representa HRV rápida.
+      <canvas ref={canvasRef} className="rounded-xl border border-zinc-800/80 shadow-inner" />
+      <div className="text-[9px] text-zinc-400 mt-2 max-w-[220px] text-center leading-relaxed">
+        Diagonal: ritmo sinusal constante. Dispersión perpendicular: modulación autonómica (HRV).
       </div>
     </div>
   );
