@@ -69,8 +69,13 @@ export class BloodPressureProcessor {
     externalHr?: number,
   ): BPEstimate {
     const insufficient: BPEstimate = {
-      systolic: 0, diastolic: 0, map: 0, pulsePressure: 0,
-      confidence: 'INSUFFICIENT', cyclesUsed: 0, featureQuality: 0,
+      systolic: 0,
+      diastolic: 0,
+      map: 0,
+      pulsePressure: 0,
+      confidence: 'INSUFFICIENT',
+      cyclesUsed: 0,
+      featureQuality: 0,
     };
 
     if (signalBuffer.length < VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES || rrIntervals.length < 2) {
@@ -106,7 +111,6 @@ export class BloodPressureProcessor {
     if (validRR.length < 2) return this.staleOrInsufficient(insufficient);
 
     const avgRR = validRR.reduce((a, b) => a + b, 0) / validRR.length;
-    // Usar HR del ensemble (Elgendi+Pan) si está disponible — más robusto que mean(RR)
     const hr = typeof externalHr === 'number' && externalHr > 0
       ? externalHr
       : 60000 / avgRR;
@@ -120,7 +124,12 @@ export class BloodPressureProcessor {
       dbpOffset: activeBpProfile.coefficients.dbpOffset ?? activeBpProfile.coefficients.diastolicOffset ?? 0,
     } : null;
 
-    const raw = estimatePhysiologicalBp(mf, { hr, rmssd: rrVar.rmssd, cyclePeriodMs }, this.anthropometric, calibrationOffsets);
+    const raw = estimatePhysiologicalBp(
+      mf,
+      { hr, rmssd: rrVar.rmssd, cyclePeriodMs },
+      this.anthropometric,
+      calibrationOffsets
+    );
     let sbp = raw.systolic;
     let dbp = raw.diastolic;
 
@@ -132,9 +141,6 @@ export class BloodPressureProcessor {
     let confidence: BPEstimate['confidence'] = 'LOW';
     if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_HIGH) confidence = 'HIGH';
     else if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_MEDIUM) confidence = 'MEDIUM';
-
-    // La estimación del motor ya incluye los ajustes del perfil antropométrico
-    // y de coherencia hemodinámica de forma nativa e integrada.
 
     if (this.lastSBP > 0) {
       sbp = this.lastSBP * (1 - EMA_ALPHA) + sbp * EMA_ALPHA;
@@ -161,13 +167,11 @@ export class BloodPressureProcessor {
 
     this.framesSinceLastEmit++;
     if (this.framesSinceLastEmit < EMIT_EVERY_N_FRAMES) {
-      const emitSbp = calibrationOffsets ? this.lastSBP - calibrationOffsets.sbpOffset : this.lastSBP;
-      const emitDbp = calibrationOffsets ? this.lastDBP - calibrationOffsets.dbpOffset : this.lastDBP;
       return {
-        systolic: Math.round(emitSbp),
-        diastolic: Math.round(emitDbp),
-        map: Math.round(emitDbp + (emitSbp - emitDbp) / 3),
-        pulsePressure: Math.round(emitSbp - emitDbp),
+        systolic: Math.round(this.lastSBP),
+        diastolic: Math.round(this.lastDBP),
+        map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
+        pulsePressure: Math.round(this.lastSBP - this.lastDBP),
         confidence,
         cyclesUsed: this.cycleBuffer.length,
         featureQuality: fq,
@@ -175,16 +179,11 @@ export class BloodPressureProcessor {
     }
     this.framesSinceLastEmit = 0;
 
-
-
-    const finalSbp = calibrationOffsets ? sbp - calibrationOffsets.sbpOffset : sbp;
-    const finalDbp = calibrationOffsets ? dbp - calibrationOffsets.dbpOffset : dbp;
-
     return {
-      systolic: Math.round(finalSbp),
-      diastolic: Math.round(finalDbp),
-      map: Math.round(finalDbp + (finalSbp - finalDbp) / 3),
-      pulsePressure: Math.round(finalSbp - finalDbp),
+      systolic: Math.round(sbp),
+      diastolic: Math.round(dbp),
+      map: Math.round(dbp + (sbp - dbp) / 3),
+      pulsePressure: Math.round(sbp - dbp),
       confidence,
       cyclesUsed: this.cycleBuffer.length,
       featureQuality: fq,
@@ -198,18 +197,6 @@ export class BloodPressureProcessor {
       this.estimateHistory.reduce((sum, v) => sum + (v - mean) ** 2, 0) / this.estimateHistory.length,
     );
     return variance < STALE_VARIANCE_THRESHOLD && confidence === 'LOW';
-  }
-
-  private buildThrottledEmit(confidence: BPEstimate['confidence'], fq: number): BPEstimate {
-    return {
-      systolic: Math.round(this.lastSBP),
-      diastolic: Math.round(this.lastDBP),
-      map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
-      pulsePressure: Math.round(this.lastSBP - this.lastDBP),
-      confidence,
-      cyclesUsed: this.cycleBuffer.length,
-      featureQuality: fq,
-    };
   }
 
   private staleOrInsufficient(insufficient: BPEstimate): BPEstimate {
@@ -226,20 +213,11 @@ export class BloodPressureProcessor {
       return insufficient;
     }
 
-    const calib = CalibrationManager.getInstance();
-    const activeBpProfile = calib.getActiveProfile('BP');
-    const sbpOff = activeBpProfile && activeBpProfile.expiresAt > Date.now()
-      ? (activeBpProfile.coefficients.sbpOffset ?? activeBpProfile.coefficients.systolicOffset ?? 0)
-      : 0;
-    const dbpOff = activeBpProfile && activeBpProfile.expiresAt > Date.now()
-      ? (activeBpProfile.coefficients.dbpOffset ?? activeBpProfile.coefficients.diastolicOffset ?? 0)
-      : 0;
-
     return {
-      systolic: Math.round(this.lastSBP - sbpOff),
-      diastolic: Math.round(this.lastDBP - dbpOff),
-      map: Math.round((this.lastDBP - dbpOff) + ((this.lastSBP - sbpOff) - (this.lastDBP - dbpOff)) / 3),
-      pulsePressure: Math.round((this.lastSBP - sbpOff) - (this.lastDBP - dbpOff)),
+      systolic: Math.round(this.lastSBP),
+      diastolic: Math.round(this.lastDBP),
+      map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
+      pulsePressure: Math.round(this.lastSBP - this.lastDBP),
       confidence: 'LOW',
       cyclesUsed: this.cycleBuffer.length,
       featureQuality: 0,
@@ -287,5 +265,4 @@ export class BloodPressureProcessor {
     this.staleFrames = 0;
     this.estimateHistory = [];
   }
-
 }

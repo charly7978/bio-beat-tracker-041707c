@@ -5,6 +5,7 @@ import {
   enforceHemodynamicCoherence,
   estimatePhysiologicalBp,
   isPhysiologicalBp,
+  morphologyPressures,
   type PwaMedianFeatures,
 } from '../pwaPhysiologicalBpEngine';
 
@@ -21,10 +22,11 @@ const baseFeatures: PwaMedianFeatures = {
   pw50Ms: 220,
   kValue: 0.38,
   vMax: 52,
+  harmonicDistortion: 0.12,
 };
 
-describe('pwaPhysiologicalBpEngine', () => {
-  it('índices en [0,1] desde morfología', () => {
+describe('pwaPhysiologicalBpEngine (SOTA Bio-PWA 2026)', () => {
+  it('índices fisiológicos en [0,1] derivados de morfología PDA', () => {
     const idx = computePhysiologicalIndices(baseFeatures, {
       hr: 72,
       rmssd: 35,
@@ -34,9 +36,11 @@ describe('pwaPhysiologicalBpEngine', () => {
     expect(idx.resistanceIndex).toBeLessThanOrEqual(1);
     expect(idx.complianceIndex).toBeGreaterThanOrEqual(0);
     expect(idx.complianceIndex).toBeLessThanOrEqual(1);
+    expect(idx.reflectionIndex).toBeGreaterThanOrEqual(0);
+    expect(idx.reflectionIndex).toBeLessThanOrEqual(1);
   });
 
-  it('estimación dentro de rangos fisiológicos sin offsets hardcodeados', () => {
+  it('estimación dentro de rangos fisiológicos coherentes', () => {
     const raw = estimatePhysiologicalBp(baseFeatures, {
       hr: 72,
       rmssd: 35,
@@ -47,16 +51,56 @@ describe('pwaPhysiologicalBpEngine', () => {
     expect(sbp).toBeGreaterThan(dbp);
     expect(dbp).toBeGreaterThanOrEqual(VITAL_THRESHOLDS.BP.DIASTOLIC_MIN);
     expect(sbp).toBeLessThanOrEqual(VITAL_THRESHOLDS.BP.SYSTOLIC_MAX);
+    expect(sbp - dbp).toBeGreaterThanOrEqual(VITAL_THRESHOLDS.BP.PP_MIN);
+    expect(sbp - dbp).toBeLessThanOrEqual(VITAL_THRESHOLDS.BP.PP_MAX);
+  });
+
+  it('estimación morfológica PWA directa dentro de límites', () => {
+    const morph = morphologyPressures(baseFeatures, {
+      hr: 72,
+      rmssd: 35,
+      cyclePeriodMs: 830,
+    });
+    expect(morph.sbp).toBeGreaterThan(morph.dbp);
+    expect(morph.sbp).toBeGreaterThanOrEqual(VITAL_THRESHOLDS.BP.SYSTOLIC_MIN);
+    expect(morph.dbp).toBeLessThanOrEqual(VITAL_THRESHOLDS.BP.DIASTOLIC_MAX);
   });
 
   it('rechaza presión fuera de rango fisiológico', () => {
     expect(isPhysiologicalBp(250, 80)).toBe(false);
     expect(isPhysiologicalBp(120, 20)).toBe(false);
+    expect(isPhysiologicalBp(80, 80)).toBe(false);
+    expect(isPhysiologicalBp(NaN, 80)).toBe(false);
   });
 
-  it('el perfil antropometrico afecta de forma hemodinamica coherente (mas edad -> menor compliancia)', () => {
-    const youngIdx = computePhysiologicalIndices(baseFeatures, { hr: 72, rmssd: 35, cyclePeriodMs: 830 }, { ageYears: 20, heightCm: 180, weightKg: 70, isMale: true });
-    const oldIdx = computePhysiologicalIndices(baseFeatures, { hr: 72, rmssd: 35, cyclePeriodMs: 830 }, { ageYears: 70, heightCm: 180, weightKg: 70, isMale: true });
+  it('el perfil antropométrico modula compliancia y resistencia según edad y BMI', () => {
+    const youngIdx = computePhysiologicalIndices(
+      baseFeatures,
+      { hr: 72, rmssd: 35, cyclePeriodMs: 830 },
+      { ageYears: 20, heightCm: 180, weightKg: 70, isMale: true },
+    );
+    const oldIdx = computePhysiologicalIndices(
+      baseFeatures,
+      { hr: 72, rmssd: 35, cyclePeriodMs: 830 },
+      { ageYears: 70, heightCm: 180, weightKg: 70, isMale: true },
+    );
     expect(oldIdx.complianceIndex).toBeLessThan(youngIdx.complianceIndex);
+    expect(oldIdx.resistanceIndex).toBeGreaterThan(youngIdx.resistanceIndex);
+  });
+
+  it('aplica offsets de calibración médica activa correctamente', () => {
+    const uncalib = estimatePhysiologicalBp(baseFeatures, {
+      hr: 72,
+      rmssd: 35,
+      cyclePeriodMs: 830,
+    });
+    const calib = estimatePhysiologicalBp(
+      baseFeatures,
+      { hr: 72, rmssd: 35, cyclePeriodMs: 830 },
+      null,
+      { sbpOffset: 10, dbpOffset: 5 },
+    );
+    expect(calib.systolic).toBeGreaterThan(uncalib.systolic);
+    expect(calib.diastolic).toBeGreaterThan(uncalib.diastolic);
   });
 });
