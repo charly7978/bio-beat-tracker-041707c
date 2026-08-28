@@ -52,6 +52,7 @@ export interface PPGSignalMeterProps {
   arrhythmiaCount?: number;
   contactState?: string;
   acquisitionStatus?: string;
+  getVideoElement?: () => HTMLVideoElement | HTMLCanvasElement | null;
   webgpuAvail?: 'yes' | 'no' | 'checking';
   encryptionReady?: boolean;
   healthAvail?: 'yes' | 'no' | 'checking';
@@ -124,6 +125,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   arrhythmiaCount = 0,
   contactState,
   acquisitionStatus,
+  getVideoElement,
   webgpuAvail = 'no',
   encryptionReady = false,
   healthAvail = 'no',
@@ -140,7 +142,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus,
     arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals,
     rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus,
-    contactState, acquisitionStatus, diagnostics,
+    contactState, acquisitionStatus, getVideoElement, diagnostics,
   });
 
   const sweepPulseRef = useRef(0);
@@ -198,7 +200,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus,
       arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals,
       rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus,
-      contactState, acquisitionStatus, diagnostics,
+      contactState, acquisitionStatus, getVideoElement, diagnostics,
     };
 
     if (rrIntervals && rrIntervals.length >= 2) {

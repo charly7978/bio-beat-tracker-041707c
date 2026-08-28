@@ -917,6 +917,7 @@ const Index = () => {
                 (lastSignal?.fingerDetected ? 'UNSTABLE_CONTACT' : 'NO_CONTACT')
               }
               acquisitionStatus={acquisitionStatusLabel}
+              getVideoElement={() => cameraRef.current?.getVideoElement() ?? canvasRef.current ?? null}
               webgpuAvail={webgpuAvail}
               encryptionReady={encryptionReady}
               healthAvail={healthAvail}

@@ -150,6 +150,7 @@ export interface PpgRenderProps {
   arrhythmiaCount: number;
   contactState?: string;
   acquisitionStatus?: string;
+  getVideoElement?: () => HTMLVideoElement | HTMLCanvasElement | null;
   diagnostics?: {
     status?: string;
     message?: string;
@@ -1371,116 +1372,239 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
 /**
  * Dibuja la animación holográfica de inicio de medición: apertura de iris biométrico,
+ * lente óptica de cristal transparente con transmisión en vivo de la cámara (dedo del usuario),
  * radar de calibración giratorio, escáner láser y visualización de acoplamiento óptico.
  */
 export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const p = state.props;
   const diag = p.diagnostics;
-  if (!p.isFingerDetected || p.preserveResults) return;
-  if (state.traceRevealed) return;
+  if (p.preserveResults || state.traceRevealed) return;
 
   const { plot } = state.layout;
   const progress = Math.max(0, Math.min(1, diag?.acquisitionProgress ?? 0));
   const cx = plot.x + plot.w / 2;
   const cy = plot.centerY;
+  const isDetected = p.isFingerDetected;
 
   ctx.save();
   ctx.beginPath();
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
-  // 1. Halo central de acoplamiento biométrico
-  const irisRad = Math.min(75, plot.h * 0.28);
-  const aura = ctx.createRadialGradient(cx, cy, 5, cx, cy, irisRad * 1.5);
-  aura.addColorStop(0, 'rgba(6, 182, 212, 0.22)');
-  aura.addColorStop(0.5, 'rgba(34, 197, 94, 0.08)');
+  const irisRad = Math.min(84, plot.h * 0.30);
+  const innerRad = irisRad * 0.78;
+
+  // 1. Halo central bioluminiscente de acoplamiento óptico
+  const aura = ctx.createRadialGradient(cx, cy, 6, cx, cy, irisRad * 1.55);
+  aura.addColorStop(0, isDetected ? 'rgba(6, 182, 212, 0.25)' : 'rgba(245, 158, 11, 0.20)');
+  aura.addColorStop(0.55, isDetected ? 'rgba(34, 197, 94, 0.10)' : 'rgba(245, 158, 11, 0.05)');
   aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
   ctx.fillStyle = aura;
   ctx.beginPath();
-  ctx.arc(cx, cy, irisRad * 1.5, 0, Math.PI * 2);
+  ctx.arc(cx, cy, irisRad * 1.55, 0, Math.PI * 2);
   ctx.fill();
 
-  // 2. Anillo de progreso circular exterior con marcas de radar
+  // 2. VIDEO EN VIVO DENTRO DEL CÍRCULO CENTRAL (Lente Óptica Transparente de Cristal)
+  const video = typeof p.getVideoElement === 'function' ? p.getVideoElement() : null;
+  const hasValidVideo =
+    video &&
+    ((video instanceof HTMLVideoElement && video.readyState >= 2 && video.videoWidth > 0) ||
+      (video instanceof HTMLCanvasElement && video.width > 0));
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, innerRad, 0, Math.PI * 2);
+  ctx.clip();
+
+  if (hasValidVideo) {
+    const vw = video instanceof HTMLVideoElement ? video.videoWidth : (video as HTMLCanvasElement).width;
+    const vh = video instanceof HTMLVideoElement ? video.videoHeight : (video as HTMLCanvasElement).height;
+    const size = Math.min(vw, vh);
+    const sx = (vw - size) / 2;
+    const sy = (vh - size) / 2;
+
+    // Dibuja el feed de la cámara mostrando el dedo del usuario
+    ctx.drawImage(
+      video,
+      sx,
+      sy,
+      size,
+      size,
+      cx - innerRad,
+      cy - innerRad,
+      innerRad * 2,
+      innerRad * 2
+    );
+  } else {
+    // Fondo de textura óptica espacial si aún no hay stream
+    ctx.fillStyle = '#06101e';
+    ctx.fillRect(cx - innerRad, cy - innerRad, innerRad * 2, innerRad * 2);
+  }
+
+  // Capa de cristal antirreflectante con viñeta radial (Lente biométrica)
+  const lensGrad = ctx.createRadialGradient(cx, cy, innerRad * 0.12, cx, cy, innerRad);
+  lensGrad.addColorStop(0, 'rgba(6, 182, 212, 0.04)');
+  lensGrad.addColorStop(0.60, 'rgba(34, 197, 94, 0.10)');
+  lensGrad.addColorStop(0.88, 'rgba(6, 182, 212, 0.25)');
+  lensGrad.addColorStop(1, 'rgba(2, 6, 14, 0.68)');
+  ctx.fillStyle = lensGrad;
+  ctx.fillRect(cx - innerRad, cy - innerRad, innerRad * 2, innerRad * 2);
+
+  // Micro-scanlines de alta definición para estética cyber-clínica
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
+  for (let ly = cy - innerRad; ly <= cy + innerRad; ly += 3) {
+    ctx.fillRect(cx - innerRad, ly, innerRad * 2, 1);
+  }
+
+  // Reflejo especular superior curvado (Efecto lente de cristal físico)
+  ctx.beginPath();
+  ctx.arc(cx, cy, innerRad * 0.88, -Math.PI * 0.78, -Math.PI * 0.22);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+  ctx.lineWidth = 2.0;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, innerRad * 0.88, Math.PI * 0.35, Math.PI * 0.65);
+  ctx.strokeStyle = 'rgba(103, 232, 249, 0.22)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  // Retícula táctica de alineación central
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.50)' : 'rgba(245, 158, 11, 0.60)';
+  ctx.lineWidth = 1.0;
+  const crossLen = 9;
+  const crossGap = 4;
+  ctx.beginPath();
+  ctx.moveTo(cx - crossLen - crossGap, cy); ctx.lineTo(cx - crossGap, cy);
+  ctx.moveTo(cx + crossGap, cy); ctx.lineTo(cx + crossLen + crossGap, cy);
+  ctx.moveTo(cx, cy - crossLen - crossGap); ctx.lineTo(cx, cy - crossGap);
+  ctx.moveTo(cx, cy + crossGap); ctx.lineTo(cx, cy + crossLen + crossGap);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.75)' : 'rgba(245, 158, 11, 0.75)';
+  ctx.stroke();
+
+  // Escáner láser vertical continuo sobre el dedo
+  const scanOffset = Math.sin(state.now * 0.0035) * (innerRad * 0.75);
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.85)' : 'rgba(245, 158, 11, 0.75)';
+  ctx.shadowColor = isDetected ? '#00f2ff' : '#f59e0b';
+  ctx.shadowBlur = 8;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(cx - innerRad * 0.85, cy + scanOffset);
+  ctx.lineTo(cx + innerRad * 0.85, cy + scanOffset);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  ctx.restore(); // Fin del clip de la lente de video
+
+  // 3. Anillo de progreso circular exterior con marcas de radar
   ctx.lineWidth = 3;
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
   ctx.beginPath();
   ctx.arc(cx, cy, irisRad, 0, Math.PI * 2);
   ctx.stroke();
 
-  // Arco de progreso activo con brillo
-  const progAngle = progress * Math.PI * 2;
-  ctx.strokeStyle = '#00f2ff';
-  ctx.shadowColor = '#00f2ff';
-  ctx.shadowBlur = 10;
-  ctx.beginPath();
-  ctx.arc(cx, cy, irisRad, -Math.PI / 2, -Math.PI / 2 + progAngle);
-  ctx.stroke();
-  ctx.shadowBlur = 0;
+  if (isDetected) {
+    const progAngle = progress * Math.PI * 2;
+    ctx.strokeStyle = '#00f2ff';
+    ctx.shadowColor = '#00f2ff';
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(cx, cy, irisRad, -Math.PI / 2, -Math.PI / 2 + progAngle);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  } else {
+    // Pulso ámbar indicando espera del dedo
+    const waitPulse = 0.5 + Math.sin(state.now * 0.005) * 0.5;
+    ctx.strokeStyle = `rgba(245, 158, 11, ${0.4 + waitPulse * 0.5})`;
+    ctx.shadowColor = '#f59e0b';
+    ctx.shadowBlur = 8 * waitPulse;
+    ctx.beginPath();
+    ctx.arc(cx, cy, irisRad, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
 
-  // 3. Retícula circular giratoria interior con marcas de grado
+  // 4. Retícula circular giratoria táctica con marcas de grado
   ctx.save();
   ctx.translate(cx, cy);
   const rot = (state.now * 0.0012) % (Math.PI * 2);
   ctx.rotate(rot);
-  ctx.strokeStyle = 'rgba(103, 232, 249, 0.40)';
+  ctx.strokeStyle = isDetected ? 'rgba(103, 232, 249, 0.45)' : 'rgba(245, 158, 11, 0.45)';
   ctx.lineWidth = 1;
-  const innerRad = irisRad * 0.72;
-  for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
+  for (let a = 0; a < Math.PI * 2; a += Math.PI / 8) {
+    const isQuarter = a % (Math.PI / 2) === 0;
+    const tickLen = isQuarter ? 6 : 3;
     const cos = Math.cos(a);
     const sin = Math.sin(a);
     ctx.beginPath();
-    ctx.moveTo(cos * (innerRad - 5), sin * (innerRad - 5));
-    ctx.lineTo(cos * innerRad, sin * innerRad);
+    ctx.moveTo(cos * (innerRad + 1), sin * (innerRad + 1));
+    ctx.lineTo(cos * (innerRad + 1 + tickLen), sin * (innerRad + 1 + tickLen));
     ctx.stroke();
   }
   ctx.restore();
 
-  // 4. Anillo pulsátil interior
-  const pulseRad = innerRad * (0.85 + Math.sin(state.now * 0.006) * 0.08);
-  ctx.strokeStyle = 'rgba(34, 197, 94, 0.65)';
+  // 5. Anillo pulsátil de resonancia
+  const pulseRad = innerRad * (1.02 + Math.sin(state.now * 0.006) * 0.03);
+  ctx.strokeStyle = isDetected ? 'rgba(34, 197, 94, 0.70)' : 'rgba(245, 158, 11, 0.50)';
   ctx.lineWidth = 1.4;
   ctx.beginPath();
   ctx.arc(cx, cy, pulseRad, 0, Math.PI * 2);
   ctx.stroke();
 
-  // 5. Escáner láser vertical de calibración
-  const scanOffset = Math.sin(state.now * 0.004) * (irisRad * 0.6);
-  ctx.strokeStyle = 'rgba(0, 242, 255, 0.75)';
-  ctx.shadowColor = '#00f2ff';
-  ctx.shadowBlur = 6;
-  ctx.lineWidth = 1.2;
-  ctx.beginPath();
-  ctx.moveTo(cx - innerRad * 0.6, cy + scanOffset);
-  ctx.lineTo(cx + innerRad * 0.6, cy + scanOffset);
-  ctx.stroke();
-  ctx.shadowBlur = 0;
+  // 6. Lectura de telemetría de calibración
+  if (isDetected) {
+    // Porcentaje en badge superior o central
+    const pctBadgeW = 54;
+    const pctBadgeH = 18;
+    const pctBadgeY = cy - innerRad + 8;
+    ctx.fillStyle = 'rgba(6, 14, 28, 0.85)';
+    ctx.beginPath();
+    ctx.roundRect(cx - pctBadgeW / 2, pctBadgeY, pctBadgeW, pctBadgeH, 9);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0, 242, 255, 0.40)';
+    ctx.stroke();
 
-  // 6. Lectura central de porcentaje
-  ctx.font = `bold 16px ${FONT_MONO}`;
-  ctx.fillStyle = '#ffffff';
-  ctx.textAlign = 'center';
-  ctx.fillText(`${Math.round(progress * 100)}%`, cx, cy + 6);
+    ctx.font = `bold 10px ${FONT_MONO}`;
+    ctx.fillStyle = '#00f2ff';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${Math.round(progress * 100)}%`, cx, pctBadgeY + 13);
+  }
 
   // 7. Mensaje de estado de inicialización en cápsula inferior
-  const msgText = progress < 0.35
-    ? 'ACOPLANDO SENSOR ÓPTICO'
-    : progress < 0.75
-    ? 'CALIBRANDO BIOMARCADORES'
-    : 'SINCRONIZANDO ONDA PPG';
+  let msgText = 'COLOCAR DEDO CUBRIENDO LA CÁMARA';
+  let msgColor = '#f59e0b';
+  let icon = '👆';
 
-  const badgeW = 200;
-  const badgeH = 20;
+  if (isDetected) {
+    msgColor = '#67e8f9';
+    icon = '⚡';
+    if (progress < 0.35) {
+      msgText = 'ACOPLANDO SENSOR ÓPTICO';
+    } else if (progress < 0.75) {
+      msgText = 'CALIBRANDO BIOMARCADORES';
+    } else {
+      msgText = 'SINCRONIZANDO ONDA PPG';
+    }
+  }
+
+  const badgeW = Math.min(230, plot.w - 20);
+  const badgeH = 22;
   const badgeY = cy + irisRad + 14;
-  ctx.fillStyle = 'rgba(10, 20, 36, 0.85)';
+  ctx.fillStyle = 'rgba(10, 20, 36, 0.90)';
   ctx.beginPath();
-  ctx.roundRect(cx - badgeW / 2, badgeY, badgeW, badgeH, 10);
+  ctx.roundRect(cx - badgeW / 2, badgeY, badgeW, badgeH, 11);
   ctx.fill();
-  ctx.strokeStyle = 'rgba(0, 242, 255, 0.30)';
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.35)' : 'rgba(245, 158, 11, 0.45)';
   ctx.stroke();
 
   ctx.font = `bold 9px ${FONT_MONO}`;
-  ctx.fillStyle = '#67e8f9';
-  ctx.fillText(`⚡ ${msgText}`, cx, badgeY + 14);
+  ctx.fillStyle = msgColor;
+  ctx.textAlign = 'center';
+  ctx.fillText(`${icon} ${msgText}`, cx, badgeY + 15);
 
   ctx.restore();
 }
