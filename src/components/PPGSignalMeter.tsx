@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useState, useLayoutEffect, useImperativeHandle } from 'react';
+import React, { useEffect, useRef, useCallback, useLayoutEffect, useImperativeHandle } from 'react';
 import { CircularBuffer } from '../utils/CircularBuffer';
 import { isNative } from '@/lib/device/platform';
 import { calculateHRV, isPhysiologicalRR } from '../utils/physio';
@@ -26,9 +26,7 @@ import {
 import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
 import { usePpg3dSettings } from '@/store/ppg3dSettings';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
-import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
-import { Ppg3DToggle } from './Ppg3DToggle';
 
 export interface PPGSignalMeterProps {
   value: number;
@@ -55,6 +53,10 @@ export interface PPGSignalMeterProps {
   arrhythmiaCount?: number;
   contactState?: string;
   acquisitionStatus?: string;
+  webgpuAvail?: 'yes' | 'no' | 'checking';
+  encryptionReady?: boolean;
+  healthAvail?: 'yes' | 'no' | 'checking';
+  riskResult?: string | null;
   diagnostics?: {
     status?: string;
     message?: string;
@@ -123,6 +125,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   arrhythmiaCount = 0,
   contactState,
   acquisitionStatus,
+  webgpuAvail = 'no',
+  encryptionReady = false,
+  healthAvail = 'no',
+  riskResult = null,
   diagnostics,
 }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -139,12 +145,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   });
 
   const sweepPulseRef = useRef(0);
-  const lastPeakTimeRef = useRef(0);
   const lastPeakProcessedRef = useRef(0);
   const arrActiveUntilRef = useRef(0);
   /** Latch: la onda se revela solo cuando la adquisición llega a READY (señal estable). */
   const traceRevealedRef = useRef(false);
-  const [showPulse, setShowPulse] = useState(false);
 
   const lastArrhythmiaCountRef = useRef(0);
   const beatHistoryRef = useRef<{ isArrhythmia: boolean; time: number; rr: number }[]>([]);
@@ -270,17 +274,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     contactState, acquisitionStatus, diagnostics,
   ]);
 
-  useEffect(() => {
-    if (isPeak && isFingerDetected) {
-      const now = Date.now();
-      if (now - lastPeakTimeRef.current > 250) {
-        lastPeakTimeRef.current = now;
-        setShowPulse(true);
-        const t = window.setTimeout(() => setShowPulse(false), 120);
-        return () => window.clearTimeout(t);
-      }
-    }
-  }, [isPeak, isFingerDetected]);
+
 
   useEffect(() => {
     if (!dataBufferRef.current) {
@@ -310,24 +304,24 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const ctx = canvas.getContext('2d', { alpha: false });
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const header = { x: 0, y: 0, w: cssW, h: 36 };
-    const metricsH = Math.max(92, Math.min(108, Math.round(cssH * 0.11)));
+    const header = { x: 0, y: 0, w: cssW, h: 40 };
+    const metricsH = Math.max(90, Math.min(106, Math.round(cssH * 0.11)));
     const metrics = { x: 0, y: header.h, w: cssW, h: metricsH };
 
-    const lowerH = Math.max(68, Math.min(86, Math.round(cssH * 0.095)));
+    const lowerH = Math.max(64, Math.min(82, Math.round(cssH * 0.09)));
     const footerH = 46;
     const safeAreaBottom = getSafeAreaBottom();
-    const buttonsH = 48 + safeAreaBottom;
+    const buttonsH = 88 + safeAreaBottom; // Bottom clinical deck unificado
     const plotY = header.h + metricsH;
     const plotH = cssH - plotY - lowerH - footerH - buttonsH;
 
     const plotX = 12;
     const plotW = cssW - plotX * 2;
-    const plot = { x: plotX, y: plotY + 6, w: plotW, h: Math.max(180, plotH - 6), centerY: 0 };
+    const plot = { x: plotX, y: plotY + 4, w: plotW, h: Math.max(160, plotH - 4), centerY: 0 };
     plot.centerY = plot.y + plot.h / 2;
 
     const lowerY = plot.y + plot.h + 4;
-    const trend = { x: plotX, y: lowerY, w: plotW, h: Math.max(64, lowerH - 4) };
+    const trend = { x: plotX, y: lowerY, w: plotW, h: Math.max(56, lowerH - 4) };
 
     const footer = { x: 0, y: cssH - buttonsH - footerH, w: cssW, h: footerH };
 
@@ -511,12 +505,14 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
       />
-      <PulseIndicator showPulse={showPulse} />
-      <Ppg3DToggle />
       <ActionButtons
         isMonitoring={isMonitoring}
         onStartMeasurement={onStartMeasurement}
         onReset={handleReset}
+        webgpuAvail={webgpuAvail}
+        encryptionReady={encryptionReady}
+        healthAvail={healthAvail}
+        riskResult={riskResult}
       />
     </div>
   );

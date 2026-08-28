@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2, Sliders, Cpu, User, Check } from "lucide-react";
+import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2, Sliders, User, Check } from "lucide-react";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
 import { CalibrationManager } from "@/modules/vital-signs/CalibrationManager";
 import { supabase } from "@/integrations/supabase/client";
@@ -789,27 +789,64 @@ const Index = () => {
           />
         </div>
 
-        {/* BARRA SUPERIOR DE ACCIONES RÁPIDAS */}
-        <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
-          {/* TELEMEDICINA (atajo rápido) */}
-          <button
-            type="button"
-            onClick={() => setShowTelemedicine(true)}
-            aria-label="Telemedicina"
-            className="p-2.5 rounded-2xl glass-panel text-emerald-400/90 hover:text-emerald-300 hover:scale-105 active:scale-95 shadow-xl transition-all duration-200 border border-white/10 hover:border-emerald-500/40"
-          >
-            <Activity className="h-4 w-4" />
-          </button>
+        {/* BARRA SUPERIOR CLÍNICA UNIFICADA (Glassmorphism, non-overlapping) */}
+        <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-3.5 h-11 glass-panel border-b border-white/10 shadow-lg">
+          {/* Lado Izquierdo: Branding & Estado de Monitorización */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex items-center justify-center">
+              {session.isMonitoring && (
+                <div className="absolute w-5 h-5 rounded-full bg-rose-500/30 animate-ping pointer-events-none duration-700" />
+              )}
+              <div className={`p-1.5 rounded-xl transition-colors ${session.isMonitoring ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40 glow-rose' : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'}`}>
+                <Heart className={`w-3.5 h-3.5 ${session.isMonitoring ? 'animate-cardiac fill-current' : ''}`} />
+              </div>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[11px] font-bold tracking-wider font-heading text-white leading-none">BIO-BEAT</span>
+              <span className={`text-[8px] font-mono font-semibold tracking-wider uppercase leading-none mt-0.5 ${session.isMonitoring ? 'text-emerald-400 animate-pulse' : 'text-zinc-500'}`}>
+                {session.isMonitoring ? 'MONITOREANDO' : 'EN ESPERA'}
+              </span>
+            </div>
+          </div>
 
-          {/* AJUSTES */}
-          <button
-            type="button"
-            onClick={() => setShowSettings(true)}
-            aria-label="Ajustes"
-            className="p-2.5 rounded-2xl glass-panel text-zinc-300 hover:text-white hover:scale-105 active:scale-95 shadow-xl transition-all duration-200 border border-white/10 hover:border-white/25"
-          >
-            <Sliders className="h-4 w-4" />
-          </button>
+          {/* Lado Derecho: SQI Badge + Acciones Rápidas */}
+          <div className="flex items-center gap-1.5">
+            {/* Calidad de Señal SQI */}
+            <div className={`px-2 py-0.5 rounded-full border text-[8px] font-mono font-bold tracking-wider flex items-center gap-1 ${
+              (lastSignal?.quality || 0) > 60
+                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 glow-emerald'
+                : (lastSignal?.quality || 0) > 30
+                ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                : 'bg-zinc-900/60 text-zinc-500 border-zinc-800/60'
+            }`}>
+              <div className={`w-1.5 h-1.5 rounded-full ${
+                (lastSignal?.quality || 0) > 60 ? 'bg-emerald-400 animate-pulse' : (lastSignal?.quality || 0) > 30 ? 'bg-amber-400' : 'bg-zinc-600'
+              }`} />
+              <span>SQI {Math.round(lastSignal?.quality || 0)}%</span>
+            </div>
+
+            {/* TELEMEDICINA */}
+            <button
+              type="button"
+              onClick={() => setShowTelemedicine(true)}
+              aria-label="Telemedicina"
+              title="Telemedicina P2P WebRTC"
+              className="p-1.5 rounded-xl bg-white/5 hover:bg-emerald-500/20 text-emerald-400/90 hover:text-emerald-300 active:scale-95 transition-all duration-150 border border-white/10 hover:border-emerald-500/40"
+            >
+              <Activity className="h-3.5 w-3.5" />
+            </button>
+
+            {/* AJUSTES */}
+            <button
+              type="button"
+              onClick={() => setShowSettings(true)}
+              aria-label="Ajustes"
+              title="Ajustes y Calibración"
+              className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white active:scale-95 transition-all duration-150 border border-white/10 hover:border-white/20"
+            >
+              <Sliders className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
 
         {/* TELEMEDICINA DIALOG */}
@@ -880,31 +917,12 @@ const Index = () => {
                 (lastSignal?.fingerDetected ? 'UNSTABLE_CONTACT' : 'NO_CONTACT')
               }
               acquisitionStatus={acquisitionStatusLabel}
+              webgpuAvail={webgpuAvail}
+              encryptionReady={encryptionReady}
+              healthAvail={healthAvail}
+              riskResult={riskResult}
               diagnostics={router.currentDiagnostics as unknown as import('@/components/PPGSignalMeter').PPGSignalMeterProps['diagnostics']}
             />
-          </div>
-
-          {/* STATUS BAR — sobre los botones INICIAR/RESET (h-12) y a la izquierda del toggle 3D */}
-          <div 
-            className="absolute left-2 right-16 z-20 flex items-center gap-2 justify-center"
-            style={{
-              bottom: 'calc(56px + env(safe-area-inset-bottom, 0px))'
-            }}
-          >
-            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${webgpuAvail === 'yes' ? 'bg-cyan-500/10 text-cyan-400' : 'bg-zinc-900/50 text-zinc-600'}`}>
-              <Cpu className="w-2 h-2" />GPU{webgpuAvail === 'yes' ? '' : '—'}
-            </span>
-            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${encryptionReady ? 'bg-amber-500/10 text-amber-400' : 'bg-zinc-900/50 text-zinc-600'}`}>
-              <Shield className="w-2 h-2" />{encryptionReady ? 'ENC' : '—'}
-            </span>
-            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${healthAvail === 'yes' ? 'bg-blue-500/10 text-blue-400' : 'bg-zinc-900/50 text-zinc-600'}`}>
-              <Activity className="w-2 h-2" />HC{healthAvail === 'yes' ? '' : '—'}
-            </span>
-            {riskResult && (
-              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${riskResult === 'IMMEDIATE' ? 'bg-red-500/10 text-red-400' : riskResult === 'SOON' ? 'bg-orange-500/10 text-orange-400' : riskResult === 'MONITOR' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
-                <Brain className="w-2 h-2" />{riskResult}
-              </span>
-            )}
           </div>
 
           {/* RESUMEN ESTADÍSTICO POST-MEDICIÓN */}

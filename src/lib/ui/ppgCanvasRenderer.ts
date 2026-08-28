@@ -393,9 +393,9 @@ export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: numb
 
 export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { header } = state.layout;
-  const { quality, isFingerDetected: detected, elapsedTime: elapsed, diagnostics } = state.props;
+  const { isFingerDetected: detected, elapsedTime: elapsed, diagnostics } = state.props;
 
-  ctx.fillStyle = 'rgba(8, 16, 28, 0.7)';
+  ctx.fillStyle = 'rgba(6, 12, 22, 0.90)';
   ctx.fillRect(header.x, header.y, header.w, header.h);
   ctx.strokeStyle = COLORS.PANEL_BORDER_DIM;
   ctx.beginPath();
@@ -403,20 +403,13 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.lineTo(header.w, header.y + header.h);
   ctx.stroke();
 
-  const pulse = (Math.sin(state.now / 400) + 1) / 2;
-  const statusColor = state.props.isMonitoring ? COLORS.SIGNAL : (state.props.preserveResults ? COLORS.TEXT_INFO : COLORS.TEXT_DIM);
-  ctx.beginPath();
-  ctx.arc(16, header.y + 18, 5, 0, Math.PI * 2);
-  ctx.fillStyle = state.props.isMonitoring
-    ? `rgba(34, 197, 94, ${0.55 + pulse * 0.45})`
-    : statusColor;
-  ctx.fill();
-
-  ctx.font = `bold 11px ${FONT_MONO}`;
-  ctx.fillStyle = COLORS.TEXT_PRIMARY;
+  // 1. Lado Izquierdo: Estado del Sensor Óptico
+  ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.textAlign = 'left';
-  ctx.fillText(state.props.isMonitoring ? 'MONITOREANDO' : (state.props.preserveResults ? 'RESULTADOS' : 'EN ESPERA'), 28, header.y + 22);
+  ctx.fillStyle = detected ? COLORS.TEXT_PRIMARY : COLORS.TEXT_DIM;
+  ctx.fillText(detected ? '● SENSOR ÓPTICO ACTIVO' : '○ COLOCAR DEDO SOBRE EL SENSOR', 16, header.y + 24);
 
+  // 2. Centro: Diagnóstico de Adquisición o Cronómetro de Sesión
   const d = new Date(state.now);
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
@@ -425,35 +418,9 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   const em = String(Math.floor(t / 60)).padStart(2, '0');
   const es = String(t % 60).padStart(2, '0');
 
-  ctx.font = `11px ${FONT_MONO}`;
-  ctx.fillStyle = COLORS.TEXT_SECONDARY;
-  ctx.textAlign = 'center';
-  ctx.fillText(`${hh}:${mm}:${ss}`, header.w / 2, header.y + 22);
-
-  ctx.textAlign = 'right';
-  const qColor = quality > 60 ? COLORS.TEXT_PRIMARY : quality > 30 ? COLORS.TEXT_WARN : (quality > 0 ? COLORS.TEXT_DANGER : COLORS.TEXT_DIM);
-  ctx.fillStyle = qColor;
-  ctx.fillText(`SQI ${Math.round(quality)}%`, header.w - 16, header.y + 22);
-
-  if (state.props.isMonitoring) {
-    const elapStr = `⏱ ${em}:${es}`;
-    ctx.font = `11px ${FONT_MONO}`;
-    ctx.textAlign = 'left';
-    ctx.fillStyle = COLORS.TEXT_INFO;
-    ctx.fillText(elapStr, 160, header.y + 22);
-  }
-
-  ctx.font = `10px ${FONT_MONO}`;
-  ctx.textAlign = 'right';
-  ctx.fillStyle = detected ? COLORS.TEXT_PRIMARY : COLORS.TEXT_DIM;
-  ctx.fillText(detected ? '● DEDO OK' : '○ SIN DEDO', header.w - 110, header.y + 22);
-
   const diag = diagnostics;
-  const hideLowFlicker =
-    diag?.status === 'LOW_SIGNAL_QUALITY' &&
-    diag.hasPulsatility === true;
-  const placementHint =
-    typeof diag?.placementHint === 'string' ? diag.placementHint : '';
+  const hideLowFlicker = diag?.status === 'LOW_SIGNAL_QUALITY' && diag.hasPulsatility === true;
+  const placementHint = typeof diag?.placementHint === 'string' ? diag.placementHint : '';
   const stage = diag?.acquisitionStage;
   const hardBlocker =
     diag?.status === 'MOTION_ARTIFACT' ||
@@ -466,31 +433,33 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     const pct = Math.round((diag?.acquisitionProgress ?? 0) * 100);
     ctx.fillStyle = COLORS.TEXT_INFO;
     ctx.textAlign = 'center';
-    if (placementHint) {
-      ctx.font = `bold 9px ${FONT_MONO}`;
-      ctx.fillText(`ESTABILIZANDO SEÑAL · ${pct}%`, header.w / 2, header.y + 8);
-      ctx.font = `9px ${FONT_MONO}`;
-      ctx.fillText(placementHint, header.w / 2, header.y + 18);
-    } else {
-      ctx.font = `bold 10px ${FONT_MONO}`;
-      ctx.fillText(`ESTABILIZANDO SEÑAL · ${pct}%`, header.w / 2, header.y + 12);
-    }
+    ctx.font = `bold 10px ${FONT_MONO}`;
+    ctx.fillText(`ESTABILIZANDO SEÑAL · ${pct}%`, header.w / 2, header.y + 24);
   } else if (placementHint && detected && stage === 'READY') {
     ctx.fillStyle = COLORS.TEXT_INFO;
-    ctx.font = `9px ${FONT_MONO}`;
+    ctx.font = `10px ${FONT_MONO}`;
     ctx.textAlign = 'center';
-    ctx.fillText(placementHint, header.w / 2, header.y + 12);
-  } else if (
-    diag?.status &&
-    diag.status !== 'VALID' &&
-    diag.status !== 'WARMUP' &&
-    !hideLowFlicker
-  ) {
+    ctx.fillText(placementHint, header.w / 2, header.y + 24);
+  } else if (diag?.status && diag.status !== 'VALID' && diag.status !== 'WARMUP' && !hideLowFlicker) {
     ctx.fillStyle = COLORS.TEXT_DANGER;
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.textAlign = 'center';
-    ctx.fillText(`⚠ ${diag.status}`, header.w / 2, header.y + 12);
+    ctx.fillText(`⚠ ${diag.status}`, header.w / 2, header.y + 24);
+  } else {
+    ctx.font = `10px ${FONT_MONO}`;
+    ctx.fillStyle = COLORS.TEXT_SECONDARY;
+    ctx.textAlign = 'center';
+    const centerText = state.props.isMonitoring ? `⏱ SESIÓN ${em}:${es}` : `${hh}:${mm}:${ss} UTC`;
+    ctx.fillText(centerText, header.w / 2, header.y + 24);
   }
+
+  // 3. Lado Derecho: Telemetría de FPS / Jitter de captura
+  const fpsEff = diag?.sqm?.fpsEffective ?? 30;
+  const jitterMs = diag?.sqm?.timestampJitterMs ?? 0;
+  ctx.font = `9px ${FONT_MONO}`;
+  ctx.textAlign = 'right';
+  ctx.fillStyle = COLORS.TEXT_DIM;
+  ctx.fillText(`${fpsEff.toFixed(1)} FPS · Jitter: ${jitterMs.toFixed(1)}ms`, header.w - 16, header.y + 24);
 }
 
 export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
