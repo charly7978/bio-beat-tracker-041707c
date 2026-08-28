@@ -1337,12 +1337,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       b: rawBlue,
     });
 
-    const finalCentroidMotion = Math.min(0.25, absorbed.tremorScore);
+    const finalRawRed = absorbed.red > 0 ? absorbed.red : rawRed;
+    const finalRawGreen = absorbed.green > 0 ? absorbed.green : rawGreen;
+    const finalRawBlue = absorbed.blue > 0 ? absorbed.blue : rawBlue;
+    const finalCentroidMotion = Math.min(0.20, absorbed.tremorScore);
 
     return {
-      rawRed,
-      rawGreen,
-      rawBlue,
+      rawRed: finalRawRed,
+      rawGreen: finalRawGreen,
+      rawBlue: finalRawBlue,
       coverageRatio: fingerCount / validCount,
       fingerScore: fingerCount > 0 ? fingerScoreSum / fingerCount : 0,
       fingerTileCount: fingerCount,

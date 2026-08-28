@@ -145,9 +145,9 @@ export const VITAL_THRESHOLDS = {
      * zona muerta amplia + EMA lenta → solo el movimiento SOSTENIDO suprime; un
      * latido aislado nunca alcanza el umbral.
      */
-    MOTION_DC_JUMP_DEADZONE: 0.02,
-    MOTION_DC_JUMP_SCALE: 0.06,
-    MOTION_SIGNAL_EMA_ALPHA: 0.25,
+    MOTION_DC_JUMP_DEADZONE: 0.065,
+    MOTION_DC_JUMP_SCALE: 0.15,
+    MOTION_SIGNAL_EMA_ALPHA: 0.15,
     /**
      * SQI POR SKEWNESS (Elgendi 2016, "Optimal SQI for PPG"): el índice de calidad
      * más fuerte. PPG limpio = skewness POSITIVA (subida sistólica abrupta → cola a
