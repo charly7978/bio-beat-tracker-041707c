@@ -1318,7 +1318,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const rawGreen = tw > 0 ? gWs / tw : 0;
     const rawBlue = tw > 0 ? bWs / tw : 0;
 
-    // Procesamiento con BioTremorAbsorber (Manifold Espaciotemporal + Phase-Locking Sub-Píxel)
+    // Procesamiento con BioTremorAbsorber (Sub-Pixel Phase-Locking y Calibración de Temblor)
     const tileRgbList: Array<{ r: number; g: number; b: number; count: number }> = [];
     for (let i = 0; i < N; i++) {
       const tm = metrics[i];
@@ -1337,15 +1337,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       b: rawBlue,
     });
 
-    const finalRawRed = absorbed.red > 0 ? absorbed.red : rawRed;
-    const finalRawGreen = absorbed.green > 0 ? absorbed.green : rawGreen;
-    const finalRawBlue = absorbed.blue > 0 ? absorbed.blue : rawBlue;
-    const finalCentroidMotion = Math.max(centroidMotion * 0.3, absorbed.tremorScore);
+    const finalCentroidMotion = Math.min(0.25, absorbed.tremorScore);
 
     return {
-      rawRed: finalRawRed,
-      rawGreen: finalRawGreen,
-      rawBlue: finalRawBlue,
+      rawRed,
+      rawGreen,
+      rawBlue,
       coverageRatio: fingerCount / validCount,
       fingerScore: fingerCount > 0 ? fingerScoreSum / fingerCount : 0,
       fingerTileCount: fingerCount,
