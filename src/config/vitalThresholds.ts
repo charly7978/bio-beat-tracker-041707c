@@ -232,24 +232,23 @@ export const VITAL_THRESHOLDS = {
    */
   STABILIZATION: {
     /** Ventana deslizante de BPM para medir convergencia (ms). */
-    WINDOW_MS: 4500,
-    /** Span temporal MÍNIMO de BPM válido y convergido antes de READY (ms). El
-     *  mínimo físico para confirmar que un ritmo se asentó — NO un warm-up ciego. */
-    MIN_WINDOW_MS: 3000,
+    WINDOW_MS: 3600,
+    /** Span temporal MÍNIMO de BPM válido y convergido antes de READY (ms). */
+    MIN_WINDOW_MS: 1800,
     /** Muestras mínimas de BPM válido en la ventana. */
-    MIN_SAMPLES: 40,
-    /** Margen máx (max−min) del BPM en la ventana para considerarlo CONVERGIDO (bpm). */
-    BPM_SPREAD_MAX: 6,
+    MIN_SAMPLES: 18,
+    /** Margen máx (max−min) del BPM en la ventana para considerarlo CONVERGIDO (bpm) — tolera HRV fisiológico. */
+    BPM_SPREAD_MAX: 12,
     /** Frames de calidad sostenida (SQI/PI/periodicidad/movimiento) requeridos. */
-    QUALITY_DWELL_FRAMES: 30,
+    QUALITY_DWELL_FRAMES: 15,
     /** Umbrales de calidad instantánea (sostenidos durante el dwell). */
-    MIN_SQI: 32,
-    MIN_PI: 0.0010,
-    MIN_PERIODICITY: 0.30,
-    MAX_MOTION: 0.6,
+    MIN_SQI: 25,
+    MIN_PI: 0.0008,
+    MIN_PERIODICITY: 0.25,
+    MAX_MOTION: 0.8,
     /** Suavizado del progreso (subida/bajada por frame). */
-    PROGRESS_RISE: 0.05,
-    PROGRESS_FALL: 0.03,
+    PROGRESS_RISE: 0.06,
+    PROGRESS_FALL: 0.02,
   },
 
   /**

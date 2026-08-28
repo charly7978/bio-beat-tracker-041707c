@@ -434,7 +434,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     });
     if (stab.stabilized) acqReadyLatchRef.current = true;
     const acqStabilized = acqReadyLatchRef.current;
-    const bpmDisplay = acqStabilized ? bpmOut : 0;
+    const bpmDisplay = acqStabilized ? bpmOut : (hasUsableContact && bpmLive > 0 ? bpmLive : 0);
 
     // Sobreescribe el stage/progress del diag con el criterio REAL de convergencia
     // (la UI revela la onda con ESTO, no con el warm-up por tiempo del procesador).
@@ -467,10 +467,14 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const { vitalsDspReady, fullVitalsReady, hrDisplayReady: hrReady } = readiness;
 
     const showWaveform = hasUsableContact;
+    const displaySignal = showWaveform
+      ? (heartBeatResult.filteredValue !== 0 ? heartBeatResult.filteredValue : signalValue)
+      : 0;
 
     if (ppgMeterRef?.current) {
-      ppgMeterRef.current.pushSignal(showWaveform ? signalValue : 0, Date.now());
+      ppgMeterRef.current.pushSignal(displaySignal, Date.now());
     }
+    setHeartbeatSignal(displaySignal);
 
     if (hasUsableContact && nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
       lastHrPushRef.current = nowT;
