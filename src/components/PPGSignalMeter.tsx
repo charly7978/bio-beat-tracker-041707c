@@ -422,6 +422,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
           pressure: p.pressure, bpStatus: p.bpStatus,
           arrhythmiaStatus: p.arrhythmiaStatus, arrhythmiaCount: p.arrhythmiaCount ?? 0,
           contactState: p.contactState, acquisitionStatus: p.acquisitionStatus,
+          getVideoElement: p.getVideoElement,
           diagnostics: p.diagnostics,
         },
         now,
