@@ -103,10 +103,19 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
       ens.peakScores?.[i] ??
       scorePeakCandidate({ elConf, ensConf: ens.confidence, sqi, perfusionIndex });
 
-    // Emite el pico genuino más reciente fuera del refractario.
-    if (bestT === 0 || t > bestT || (t === bestT && weightedScore > bestScore)) {
-      bestT = t;
-      bestScore = weightedScore;
+    // Si es el primer pico del stream (lastEmittedPeakMs === 0), sincroniza con el más reciente.
+    // Una vez iniciado (lastEmittedPeakMs > 0), avanza en orden cronológico estricto (t < bestT)
+    // para no saltearse ningún latido intermedio.
+    if (lastEmittedPeakMs === 0) {
+      if (bestT === 0 || t > bestT || (t === bestT && weightedScore > bestScore)) {
+        bestT = t;
+        bestScore = weightedScore;
+      }
+    } else {
+      if (bestT === 0 || t < bestT || (t === bestT && weightedScore > bestScore)) {
+        bestT = t;
+        bestScore = weightedScore;
+      }
     }
   }
 

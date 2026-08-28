@@ -9,31 +9,10 @@ interface UseFrameLoopInput {
   processFrame: (imageData: ImageData, timestamp?: number) => void;
 }
 
-/**
- * Firma barata del contenido del frame = suma ponderada de los canales verde y
- * rojo sobre una grilla dispersa (~1 de cada 16 px). Dos canales combinados
- * reducen colisiones: un cambio en luminancia (afecta a ambos) se distingue de
- * un cambio cromático puro. Permite descartar FRAMES DUPLICADOS (el dispositivo
- * entrega ~30 fps reales pero rAF dispara ~60 → la mitad de los frames son
- * idénticos → valor repetido → onda escalonada + sample-rate mal estimado).
- */
-function frameSignature(img: ImageData): number {
-  const d = img.data;
-  const n = d.length;
-  let sumG = 0, sumR = 0;
-  for (let i = 0; i < n; i += 64) {
-    sumR += d[i];       // canal rojo
-    sumG += d[i + 1];   // canal verde
-  }
-  return sumR * 1e4 + sumG;
-}
-
 export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: UseFrameLoopInput) {
   const frameLoopRef = useRef<number | null>(null);
   const videoFrameLoopRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
-  const lastFrameSigRef = useRef<number>(-1);
-  const duplicateStreakRef = useRef<number>(0);
   const lastRafTsRef = useRef<number>(0);
 
   const startFrameLoop = useCallback(() => {
@@ -42,8 +21,6 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
     const ctx = ctxRef.current;
     if (!canvas || !ctx) return;
     isProcessingRef.current = true;
-    lastFrameSigRef.current = -1;
-    duplicateStreakRef.current = 0;
     lastRafTsRef.current = 0;
 
     const captureOneFrame = (frameTimestampMs?: number) => {
@@ -56,15 +33,7 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
       try {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        // Descarta frames DUPLICADOS (idénticos al anterior)
-        const sig = frameSignature(imageData);
-        if (sig === lastFrameSigRef.current && duplicateStreakRef.current < 90) {
-          duplicateStreakRef.current++;
-        } else {
-          duplicateStreakRef.current = 0;
-          lastFrameSigRef.current = sig;
-          processFrame(imageData, frameTimestampMs);
-        }
+        processFrame(imageData, frameTimestampMs);
       } catch {
         logWarn('useFrameLoop', 'drawImage/getImageData failed (video teardown)');
       }
