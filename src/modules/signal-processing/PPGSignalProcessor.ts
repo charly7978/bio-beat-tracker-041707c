@@ -60,6 +60,7 @@ import {
   stabilizeSample,
   resetActiveStabilizer,
 } from '../../lib/signal/activeStabilizer';
+import { BioTremorAbsorber } from './BioTremorAbsorber';
 import { bandLimitedDominantFreq } from './shared/dsp';
 import { RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
 
@@ -260,6 +261,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   // Acondicionador ACTIVO de señal (denoise edge-preserving + estabilización baseline).
   private readonly activeStabilizer = createActiveStabilizer();
+
+  // Absorbedor de micro-temblor y memoria espaciotemporal 4D de cámara
+  private readonly bioTremorAbsorber = new BioTremorAbsorber({
+    gridRows: this.TILE_ROWS,
+    gridCols: this.TILE_COLUMNS,
+    temporalMemoryDepth: 16,
+  });
 
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
@@ -623,10 +631,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       (hemoglobinScene || ensembleScene) &&
       (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT');
 
-    // Post-motion hold-off: despues de que el motion cesa, el BPF 4° orden aun
-    // tiene ringing (~0.5s). Suprimimos la salida durante ese tiempo.
-    if (motionArtifact) {
-      this.postMotionSuppression = 20; // ~670ms a 30fps
+    // Con BioTremorAbsorber (Spatio-Temporal Memory Matrix), los micro-temblores
+    // se absorben en el buffer óptico sin requerir supresión forzada a cero.
+    // Solo un movimiento brusco/violento del dispositivo aplica una breve atenuación.
+    if (this.motionScore > 1.2) {
+      this.postMotionSuppression = 2;
     } else if (this.postMotionSuppression > 0) {
       this.postMotionSuppression--;
     }
@@ -636,7 +645,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       (this.lastInstantFinger &&
         (hemoglobinScene || ensembleScene) &&
         this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85)) &&
-      !motionArtifact &&
       this.postMotionSuppression <= 0;
     const displayQuality = signalPathActive
       ? fingerUi
@@ -1310,10 +1318,34 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const rawGreen = tw > 0 ? gWs / tw : 0;
     const rawBlue = tw > 0 ? bWs / tw : 0;
 
+    // Procesamiento con BioTremorAbsorber (Manifold Espaciotemporal + Phase-Locking Sub-Píxel)
+    const tileRgbList: Array<{ r: number; g: number; b: number; count: number }> = [];
+    for (let i = 0; i < N; i++) {
+      const tm = metrics[i];
+      const tb = tiles[i];
+      tileRgbList.push({
+        r: tm && tm.valid ? tm.red : 0,
+        g: tm && tm.valid ? tm.green : 0,
+        b: tm && tm.valid ? tm.blue : 0,
+        count: tb ? tb.count : 0,
+      });
+    }
+
+    const absorbed = this.bioTremorAbsorber.processFrame(tileRgbList, {
+      r: rawRed,
+      g: rawGreen,
+      b: rawBlue,
+    });
+
+    const finalRawRed = absorbed.red > 0 ? absorbed.red : rawRed;
+    const finalRawGreen = absorbed.green > 0 ? absorbed.green : rawGreen;
+    const finalRawBlue = absorbed.blue > 0 ? absorbed.blue : rawBlue;
+    const finalCentroidMotion = Math.max(centroidMotion * 0.3, absorbed.tremorScore);
+
     return {
-      rawRed,
-      rawGreen,
-      rawBlue,
+      rawRed: finalRawRed,
+      rawGreen: finalRawGreen,
+      rawBlue: finalRawBlue,
       coverageRatio: fingerCount / validCount,
       fingerScore: fingerCount > 0 ? fingerScoreSum / fingerCount : 0,
       fingerTileCount: fingerCount,
@@ -1321,7 +1353,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       roiY: startY,
       roiW,
       roiH,
-      centroidMotion,
+      centroidMotion: finalCentroidMotion,
     };
   }
 
@@ -1753,6 +1785,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.lastSourceSwitch = 0;
     this.bandpassFilter.setSampleRate(this.estimatedSampleRate);
     this.morphBandpassFilter.setSampleRate(this.estimatedSampleRate);
+    this.bioTremorAbsorber.reset();
     Object.assign(this.acquisitionState, createAcquisitionState());
   }
 
