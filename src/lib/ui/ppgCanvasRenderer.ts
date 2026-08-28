@@ -45,6 +45,18 @@ export const COLORS = {
   BP: '#818cf8',
 };
 
+export interface BioParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  decay: number;
+  color: string;
+  glowColor: string;
+  size: number;
+}
+
 /**
  * TABLA DE CONSTANTES CONFIGURABLES PARA LAS ONDAS CARDÍACAS (PPG MONITOR)
  */
@@ -194,13 +206,168 @@ export interface PpgRenderState {
   traceRevealed: boolean;
   signalStrength: number;
   threeD?: { enabled: boolean; intensity?: number };
+  particles?: BioParticle[];
 }
 
 /**
- * Dibuja el fondo de la pantalla con viñeta de profundidad CRT / OLED y micro-scanlines.
+ * Curva fisiológica de contracción cardíaca (Sístole / Diástole en dos fases: lub-dub).
+ */
+export function getCardiacPulseScale(timeMs: number, bpm: number): number {
+  if (bpm < 30) return 1.0;
+  const cycleMs = 60000 / Math.max(30, Math.min(220, bpm));
+  const phase = (timeMs % cycleMs) / cycleMs;
+  if (phase < 0.12) {
+    // Sístole Auricular (Lub)
+    return 1.0 + Math.sin((phase / 0.12) * Math.PI) * 0.22;
+  } else if (phase >= 0.14 && phase < 0.32) {
+    // Sístole Ventricular Principal (Dub)
+    const p2 = (phase - 0.14) / 0.18;
+    return 1.0 + Math.sin(p2 * Math.PI) * 0.36;
+  }
+  // Diástole / Relajación
+  return 1.0;
+}
+
+/**
+ * Dibuja un icono de corazón vectorial holográfico con animación lub-dub en tiempo real.
+ */
+function drawHeartGlyph(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  size: number,
+  pulseScale: number,
+  color: string,
+  glowColor: string
+): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(pulseScale, pulseScale);
+
+  // Halo ambiental pulsante detrás del corazón
+  if (pulseScale > 1.05) {
+    const auraRad = size * 1.5 * (pulseScale - 1);
+    ctx.beginPath();
+    ctx.arc(0, 0, auraRad, 0, Math.PI * 2);
+    ctx.fillStyle = glowColor.replace(')', ', 0.25)').replace('rgb', 'rgba');
+    ctx.fill();
+  }
+
+  // Trazado del corazón mediante curvas Bézier cúbicas
+  ctx.beginPath();
+  const s = size * 0.5;
+  ctx.moveTo(0, s * 0.4);
+  ctx.bezierCurveTo(0, -s * 0.2, -s, -s * 0.9, -s, -s * 0.2);
+  ctx.bezierCurveTo(-s, s * 0.4, 0, s * 0.9, 0, s * 1.3);
+  ctx.bezierCurveTo(0, s * 0.9, s, s * 0.4, s, -s * 0.2);
+  ctx.bezierCurveTo(s, -s * 0.9, 0, -s * 0.2, 0, s * 0.4);
+  ctx.closePath();
+
+  ctx.fillStyle = color;
+  ctx.shadowColor = glowColor;
+  ctx.shadowBlur = 8 * pulseScale;
+  ctx.fill();
+
+  // Núcleo blanco brillante en pico de contracción
+  if (pulseScale > 1.15) {
+    ctx.beginPath();
+    ctx.arc(0, 0, s * 0.35, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+    ctx.shadowColor = '#ffffff';
+    ctx.shadowBlur = 6;
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+/**
+ * Actualiza y renderiza el sistema de partículas bio-láser (chispas ionizadas).
+ */
+export function updateAndDrawParticles(
+  ctx: CanvasRenderingContext2D,
+  state: PpgRenderState,
+  headX?: number,
+  headY?: number,
+  isArr = false,
+  isPeak = false
+): void {
+  if (!state.particles) return;
+  const pool = state.particles;
+  const revealed = state.traceRevealed;
+
+  // 1. Emisión continua de micro-chispas desde el cursor conductor
+  if (revealed && headX !== undefined && headY !== undefined && Math.random() < 0.45) {
+    if (pool.length < 90) {
+      const angle = Math.random() * Math.PI * 2;
+      const spd = 0.4 + Math.random() * 1.2;
+      pool.push({
+        x: headX,
+        y: headY,
+        vx: Math.cos(angle) * spd - 0.8, // leve inercia hacia atrás
+        vy: Math.sin(angle) * spd - 0.3, // leve flotación ascendente
+        life: 1.0,
+        decay: 0.02 + Math.random() * 0.03,
+        color: isArr ? '#f87171' : Math.random() > 0.5 ? '#67e8f9' : '#86efac',
+        glowColor: isArr ? '#ef4444' : '#00f2ff',
+        size: 1.5 + Math.random() * 1.5,
+      });
+    }
+  }
+
+  // 2. Explosión estelar radial al ocurrir un latido sistólico
+  if (revealed && isPeak && headX !== undefined && headY !== undefined) {
+    const burstCount = isArr ? 20 : 16;
+    for (let i = 0; i < burstCount; i++) {
+      if (pool.length >= 120) break;
+      const angle = (i / burstCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+      const spd = 1.5 + Math.random() * 3.2;
+      pool.push({
+        x: headX,
+        y: headY,
+        vx: Math.cos(angle) * spd,
+        vy: Math.sin(angle) * spd,
+        life: 1.0,
+        decay: 0.018 + Math.random() * 0.025,
+        color: isArr ? '#ffffff' : Math.random() > 0.4 ? '#ffffff' : '#00f2ff',
+        glowColor: isArr ? '#ef4444' : '#22c55e',
+        size: 2.0 + Math.random() * 2.2,
+      });
+    }
+  }
+
+  // 3. Actualización de física y renderizado de partículas activas
+  let activeIdx = 0;
+  for (let i = 0; i < pool.length; i++) {
+    const p = pool[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vx *= 0.95;
+    p.vy *= 0.95;
+    p.vy -= 0.02; // suave empuje de plasma bio-eléctrico
+    p.life -= p.decay;
+
+    if (p.life > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+      ctx.fillStyle = p.color;
+      ctx.shadowColor = p.glowColor;
+      ctx.shadowBlur = 6 * p.life;
+      ctx.globalAlpha = p.life;
+      ctx.fill();
+      ctx.restore();
+
+      pool[activeIdx++] = p;
+    }
+  }
+  pool.length = activeIdx;
+}
+
+/**
+ * Dibuja el fondo de la pantalla con viñeta de profundidad CRT / OLED, respiración biométrica y scanlines.
  */
 export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: number): void {
-  // 1. Fondo base con viñeta radial (profundidad clínica de monitor de paciente)
   const cx = W / 2;
   const cy = H / 2;
   const rad = Math.max(W, H) * 0.8;
@@ -211,13 +378,13 @@ export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: numb
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
 
-  // 2. Micro-Scanlines sutiles con modulación de luminancia
+  // Micro-Scanlines sutiles con modulación de luminancia
   ctx.fillStyle = COLORS.SCANLINE;
   for (let y = 0; y < H; y += 3) {
     ctx.fillRect(0, y, W, 1);
   }
 
-  // 3. Resplandor superior sutil
+  // Resplandor superior sutil
   const topGlow = ctx.createLinearGradient(0, 0, 0, 120);
   topGlow.addColorStop(0, 'rgba(6, 182, 212, 0.04)');
   topGlow.addColorStop(1, 'rgba(6, 182, 212, 0)');
@@ -236,7 +403,7 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.fillStyle = 'rgba(6, 14, 28, 0.92)';
   ctx.fillRect(header.x, header.y, header.w, header.h);
   
-  // Línea de acento superior e inferior con brillo sutil
+  // Línea de acento con brillo sutil
   const borderGrad = ctx.createLinearGradient(0, 0, header.w, 0);
   borderGrad.addColorStop(0, 'rgba(34, 197, 94, 0.2)');
   borderGrad.addColorStop(0.5, 'rgba(6, 182, 212, 0.6)');
@@ -252,7 +419,6 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.textAlign = 'left';
   
-  // Punto indicador luminoso
   const dotX = 20;
   const dotY = header.y + 20;
   ctx.save();
@@ -325,7 +491,7 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.fillText(centerText, header.w / 2, header.y + 24);
   }
 
-  // 3. Lado Derecho: Telemetría de FPS / Jitter de captura con cápsula tech
+  // 3. Lado Derecho: Telemetría de FPS / Jitter de captura
   const fpsEff = diag?.sqm?.fpsEffective ?? 30;
   const jitterMs = diag?.sqm?.timestampJitterMs ?? 0;
   ctx.font = `9px ${FONT_MONO}`;
@@ -335,13 +501,12 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 }
 
 /**
- * Dibuja la barra de métricas principales con tarjetas de datos segmentadas y brillo holográfico.
+ * Dibuja la barra de métricas principales con tarjetas de datos segmentadas, icono cardíaco reactivo y ondas animadas.
  */
 export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { metrics } = state.layout;
   const { pressure, perfusionIndex: pi, arrhythmiaStatus: arr, arrhythmiaCount: arrCnt } = state.props;
 
-  // Fondo del bloque de métricas
   ctx.fillStyle = 'rgba(6, 13, 25, 0.88)';
   ctx.fillRect(metrics.x, metrics.y, metrics.w, metrics.h);
   
@@ -375,7 +540,6 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     : dispBpm <= 120 ? COLORS.TEXT_WARN
     : COLORS.TEXT_DANGER;
 
-  // Fondo de tarjeta con micro-borde
   ctx.fillStyle = 'rgba(10, 20, 36, 0.75)';
   ctx.beginPath();
   ctx.roundRect(card1X, cardY, colW, cardH, 8);
@@ -390,28 +554,38 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.fillStyle = hrAccentGrad;
   ctx.fillRect(card1X + 4, cardY + 2, colW - 8, 2);
 
-  // Etiqueta de la tarjeta
   ctx.font = `bold 9px ${FONT_MONO}`;
   ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
   ctx.textAlign = 'left';
   ctx.fillText('FRECUENCIA CARDÍACA', card1X + 10, cardY + 18);
 
-  // Valor numérico con brillo pulsátil sincrónico
-  const heartPulse = state.props.isMonitoring && dispBpm > 30 
-    ? (Math.sin((state.now / (60000 / Math.max(60, dispBpm))) * 2 * Math.PI) + 1) / 2 
-    : 0;
+  // Escala de contracción lub-dub dinámica
+  const pulseScale = getCardiacPulseScale(state.now, dispBpm);
 
+  // Dibujar Icono de Corazón Holográfico Reactivo
+  if (dispBpm > 0) {
+    drawHeartGlyph(
+      ctx,
+      card1X + colW - 20,
+      cardY + 36,
+      14,
+      pulseScale,
+      hrColor,
+      hrColor
+    );
+  }
+
+  // Valor numérico con brillo sincrónico
   ctx.save();
   ctx.font = `bold ${colW < 130 ? '42px' : '52px'} ${FONT_MONO}`;
   ctx.fillStyle = hrColor;
   if (dispBpm > 0) {
     ctx.shadowColor = hrColor;
-    ctx.shadowBlur = 10 + heartPulse * 12;
+    ctx.shadowBlur = 8 + (pulseScale - 1.0) * 20;
   }
   ctx.fillText(dispBpm > 0 ? dispBpm.toString() : '--', card1X + 10, cardY + (colW < 130 ? 56 : 64));
   ctx.restore();
 
-  // Unidad y Estado
   ctx.font = `bold 11px ${FONT_MONO}`;
   ctx.fillStyle = 'rgba(148, 163, 184, 0.8)';
   ctx.fillText('BPM', card1X + 10, cardY + cardH - 8);
@@ -436,7 +610,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.font = `8px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'right';
-    ctx.fillText(`${s.min}-${s.max}`, card1X + colW - 8, cardY + 18);
+    ctx.fillText(`${s.min}-${s.max}`, card1X + colW - 32, cardY + 18);
   }
 
   // ==========================================
@@ -455,7 +629,6 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.strokeStyle = 'rgba(6, 182, 212, 0.25)';
   ctx.stroke();
 
-  // Barra de acento superior
   const spo2AccentGrad = ctx.createLinearGradient(card2X, 0, card2X + colW, 0);
   spo2AccentGrad.addColorStop(0, spo2Color);
   spo2AccentGrad.addColorStop(1, 'rgba(6, 182, 212, 0.1)');
@@ -466,6 +639,23 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
   ctx.textAlign = 'left';
   ctx.fillText('SATURACIÓN O₂', card2X + 10, cardY + 18);
+
+  // Micro-onda animada de flujo de oxígeno
+  if (dispSpo2 > 0) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(6, 182, 212, 0.6)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    const waveStartX = card2X + colW - 40;
+    const waveY = cardY + 26;
+    for (let wx = 0; wx <= 30; wx += 2) {
+      const wy = waveY + Math.sin((state.now / 180) + wx * 0.2) * 3;
+      if (wx === 0) ctx.moveTo(waveStartX + wx, wy);
+      else ctx.lineTo(waveStartX + wx, wy);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
 
   ctx.save();
   ctx.font = `bold ${colW < 130 ? '42px' : '52px'} ${FONT_MONO}`;
@@ -523,7 +713,6 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.strokeStyle = 'rgba(129, 140, 248, 0.25)';
   ctx.stroke();
 
-  // Barra de acento superior
   const bpAccentGrad = ctx.createLinearGradient(card3X, 0, card3X + colW, 0);
   bpAccentGrad.addColorStop(0, bpColor);
   bpAccentGrad.addColorStop(1, 'rgba(129, 140, 248, 0.1)');
@@ -576,7 +765,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.fillText(bpLabel, card3X + colW - 8, cardY + cardH - 8);
   }
 
-  // Banner superior de arritmia si se presenta alerta
+  // Banner superior con franjas animadas de peligro en arritmia
   const rhythm = buildRhythmPanel(
     arr,
     arrCnt ?? 0,
@@ -584,28 +773,53 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     state.hrv,
   );
   if (rhythm.level === 'danger' || rhythm.level === 'warn') {
+    ctx.save();
     ctx.fillStyle =
-      rhythm.level === 'danger' ? 'rgba(185, 28, 28, 0.85)' : 'rgba(180, 83, 9, 0.80)';
+      rhythm.level === 'danger' ? 'rgba(185, 28, 28, 0.88)' : 'rgba(180, 83, 9, 0.82)';
     ctx.fillRect(metrics.x + 8, metrics.y + 2, metrics.w - 16, 18);
+
+    // Rayas diagonales animadas de alerta
+    const stripeW = 16;
+    const stripeOffset = (state.now / 40) % stripeW;
+    ctx.strokeStyle = rhythm.level === 'danger' ? 'rgba(254, 202, 202, 0.15)' : 'rgba(253, 230, 138, 0.15)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    for (let sx = metrics.x + 8 - stripeW + stripeOffset; sx < metrics.x + metrics.w - 8; sx += stripeW) {
+      ctx.moveTo(sx, metrics.y + 20);
+      ctx.lineTo(sx + stripeW * 0.8, metrics.y + 2);
+    }
+    ctx.stroke();
+
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = rhythm.level === 'danger' ? '#fecaca' : '#fde68a';
     ctx.textAlign = 'center';
     ctx.fillText(`⚠ ${rhythm.title}`, metrics.w / 2, metrics.y + 14);
+    ctx.restore();
   }
 }
 
 /**
- * Dibuja la cuadrícula ECG cyber-clínica de alta precisión con retículas vectoriales L-bracket y escaneo láser.
+ * Dibuja la cuadrícula ECG con respiración lumínica y escáner táctico con retículas móviles.
  */
 export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { plot } = state.layout;
 
-  // 1. Fondo del Osciloscopio con degradado radial de profundidad
-  const grad = ctx.createLinearGradient(0, plot.y, 0, plot.y + plot.h);
-  grad.addColorStop(0, 'rgba(6, 14, 28, 0.35)');
-  grad.addColorStop(0.5, 'rgba(10, 22, 40, 0.20)');
-  grad.addColorStop(1, 'rgba(6, 14, 28, 0.35)');
-  ctx.fillStyle = grad;
+  // 1. Respiración biométrica ambiental en el fondo de la cuadrícula
+  const pulseScale = getCardiacPulseScale(state.now, state.displayBpm);
+  const breathAlpha = state.traceRevealed ? 0.05 + (pulseScale - 1.0) * 0.25 : 0.04;
+  
+  const auraGrad = ctx.createRadialGradient(
+    plot.x + plot.w / 2,
+    plot.centerY,
+    20,
+    plot.x + plot.w / 2,
+    plot.centerY,
+    plot.w * 0.55
+  );
+  auraGrad.addColorStop(0, `rgba(6, 182, 212, ${breathAlpha})`);
+  auraGrad.addColorStop(0.6, `rgba(34, 197, 94, ${breathAlpha * 0.5})`);
+  auraGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = auraGrad;
   ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
 
   const pxPerMm = Math.max(5, Math.min(10, plot.h / 25));
@@ -666,14 +880,42 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   }
   ctx.stroke();
 
-  // 6. Haz de Escaneo Láser Vertical Sutil (Movimiento suave continuo)
-  const scanX = plot.x + ((state.now / 35) % plot.w);
-  const scanGrad = ctx.createLinearGradient(scanX - 25, 0, scanX + 25, 0);
+  // 6. Escáner Láser Táctico Móvil con Retículas Superior e Inferior
+  const scanX = plot.x + ((state.now / 32) % plot.w);
+  const scanGrad = ctx.createLinearGradient(scanX - 35, 0, scanX + 35, 0);
   scanGrad.addColorStop(0, 'rgba(6, 182, 212, 0)');
-  scanGrad.addColorStop(0.5, 'rgba(6, 182, 212, 0.08)');
+  scanGrad.addColorStop(0.5, 'rgba(6, 182, 212, 0.12)');
   scanGrad.addColorStop(1, 'rgba(6, 182, 212, 0)');
   ctx.fillStyle = scanGrad;
-  ctx.fillRect(scanX - 25, plot.y, 50, plot.h);
+  ctx.fillRect(scanX - 35, plot.y, 70, plot.h);
+
+  // Línea de rayo láser
+  ctx.save();
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.6)';
+  ctx.shadowColor = '#00f2ff';
+  ctx.shadowBlur = 6;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(scanX, plot.y);
+  ctx.lineTo(scanX, plot.y + plot.h);
+  ctx.stroke();
+
+  // Punteros de retícula (▲ y ▼)
+  ctx.fillStyle = '#00f2ff';
+  ctx.beginPath();
+  ctx.moveTo(scanX, plot.y + 6);
+  ctx.lineTo(scanX - 3.5, plot.y + 1);
+  ctx.lineTo(scanX + 3.5, plot.y + 1);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(scanX, plot.y + plot.h - 6);
+  ctx.lineTo(scanX - 3.5, plot.y + plot.h - 1);
+  ctx.lineTo(scanX + 3.5, plot.y + plot.h - 1);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
 
   // 7. Línea Base Cero con Resplandor y Punteado Láser
   ctx.save();
@@ -693,7 +935,6 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.lineWidth = 1;
   ctx.strokeRect(plot.x, plot.y, plot.w, plot.h);
 
-  // Dibujar las 4 esquinas L-Bracket en Cyan/Verde
   const bLen = 14;
   ctx.strokeStyle = '#00f2ff';
   ctx.lineWidth = 2;
@@ -729,7 +970,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
     ctx.fillText(val.toFixed(0), plot.x - 6, y + 4);
   }
 
-  // 11. Título Superior del Gráfico de Grado Instrumentación
+  // 11. Título Superior del Gráfico
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(103, 232, 249, 0.85)';
   ctx.font = `bold 9px ${FONT_MONO}`;
@@ -795,7 +1036,6 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
   ctx.roundRect(gaugeX, gaugeY, gaugeW, gaugeH, 3);
   ctx.fill();
 
-  // Cursor indicador diamante luminoso
   const cursorX = gaugeX + gaugeW * targetPct;
   ctx.fillStyle = '#ffffff';
   ctx.shadowColor = labelColor;
@@ -811,8 +1051,8 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
 }
 
 /**
- * Dibuja la señal cardíaca con haz de fósforo multicapa (bloom + láser core),
- * anillos concéntricos de sonar en cada latido, cursores luminosos y marcadores fiduciales.
+ * Dibuja la señal cardíaca con haz de fósforo multicapa, partículas bio-láser,
+ * ondas sónicas de choque en cada latido y marcadores fiduciales de precisión.
  */
 export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const buffer = state.buffer;
@@ -823,9 +1063,11 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   if (p.preserveResults && !p.isFingerDetected) return;
   if (p.isPeak) state.sweepPulse = 1;
 
+  let isNewPeakEvent = false;
   if (p.isPeak) {
     const peakAge = state.now - state.lastPeakProcessedTime;
     if (peakAge > CARDIAC_WAVE_CONFIG.PEAK_DEBOUNCE_MS) {
+      isNewPeakEvent = true;
       state.lastPeakProcessedTime = state.now;
       const currentCount = p.arrhythmiaCount || 0;
       const rrArr = p.rrIntervals;
@@ -904,6 +1146,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.clip();
 
   state.sweepPulse *= CARDIAC_WAVE_CONFIG.SWEEP_PULSE_DECAY;
+
+  const headCoord = coords[coords.length - 1];
 
   if (state.threeD?.enabled) {
     drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
@@ -1009,14 +1253,12 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
         let segEnd = seg;
         while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
         
-        // Trazo exterior brillante
         drawDirectSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
         ctx.strokeStyle = isArr ? '#f87171' : '#86efac';
         ctx.lineWidth = CARDIAC_WAVE_CONFIG.LEADING_STROKE_WIDTH;
         ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
         ctx.stroke();
 
-        // Núcleo blanco de alta energía
         drawDirectSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = CARDIAC_WAVE_CONFIG.CORE_STROKE_WIDTH;
@@ -1038,36 +1280,32 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     }
 
     // 4. Anillos de Sonar Concéntricos en Latido y Cursor Conductor
-    const head = coords[coords.length - 1];
-    if (head) {
+    if (headCoord) {
       const pulse = Math.max(state.sweepPulse, 0.04);
       
-      // Anillos concéntricos expansivos de sonar (efecto radar biométrico)
-      if (state.traceRevealed && pulse > 0.12) {
-        for (let rIdx = 1; rIdx <= 2; rIdx++) {
-          const ringRad = 8 + pulse * (18 * rIdx);
-          const ringAlpha = Math.max(0, (1 - pulse) * (0.5 / rIdx));
+      if (state.traceRevealed && pulse > 0.10) {
+        for (let rIdx = 1; rIdx <= 3; rIdx++) {
+          const ringRad = 6 + pulse * (16 * rIdx);
+          const ringAlpha = Math.max(0, (1 - pulse) * (0.6 / rIdx));
           ctx.beginPath();
-          ctx.arc(head.x, head.y, ringRad, 0, Math.PI * 2);
-          ctx.strokeStyle = head.isArr ? `rgba(239, 68, 68, ${ringAlpha})` : `rgba(0, 242, 255, ${ringAlpha})`;
-          ctx.lineWidth = 1.2;
+          ctx.arc(headCoord.x, headCoord.y, ringRad, 0, Math.PI * 2);
+          ctx.strokeStyle = headCoord.isArr ? `rgba(239, 68, 68, ${ringAlpha})` : `rgba(0, 242, 255, ${ringAlpha})`;
+          ctx.lineWidth = 1.4;
           ctx.stroke();
         }
       }
 
-      // Halo conductor principal
       ctx.beginPath();
-      ctx.arc(head.x, head.y, CARDIAC_WAVE_CONFIG.HEAD_PULSE_BASE_RADIUS + pulse * 10, 0, Math.PI * 2);
+      ctx.arc(headCoord.x, headCoord.y, CARDIAC_WAVE_CONFIG.HEAD_PULSE_BASE_RADIUS + pulse * 10, 0, Math.PI * 2);
       ctx.fillStyle = state.traceRevealed
-        ? (head.isArr ? 'rgba(248, 113, 113, 0.35)' : 'rgba(0, 242, 255, 0.35)')
+        ? (headCoord.isArr ? 'rgba(248, 113, 113, 0.35)' : 'rgba(0, 242, 255, 0.35)')
         : 'rgba(148, 163, 184, 0.20)';
       ctx.fill();
 
-      // Núcleo blanco del cursor
       ctx.beginPath();
-      ctx.arc(head.x, head.y, CARDIAC_WAVE_CONFIG.HEAD_PULSE_INNER_RADIUS, 0, Math.PI * 2);
+      ctx.arc(headCoord.x, headCoord.y, CARDIAC_WAVE_CONFIG.HEAD_PULSE_INNER_RADIUS, 0, Math.PI * 2);
       ctx.fillStyle = '#ffffff';
-      ctx.shadowColor = head.isArr ? '#ef4444' : '#00f2ff';
+      ctx.shadowColor = headCoord.isArr ? '#ef4444' : '#00f2ff';
       ctx.shadowBlur = 8;
       ctx.fill();
       ctx.shadowBlur = 0;
@@ -1084,9 +1322,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
         const next = coords[i + 1].val;
         const next2 = coords[i + 2].val;
 
-        // Pico Sistólico (SYS) con insignia de diamante y línea de caída láser
+        // Pico Sistólico (SYS)
         if (v > prev && v > next && v > prev2 && v > next2 && v > midValue) {
-          // Línea láser vertical hacia la baseline
           ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.35)' : 'rgba(0, 242, 255, 0.30)';
           ctx.lineWidth = 1;
           ctx.setLineDash([2, 4]);
@@ -1096,7 +1333,6 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
           ctx.stroke();
           ctx.setLineDash([]);
 
-          // Marcador Diamante Holográfico
           const dSize = CARDIAC_WAVE_CONFIG.SYS_PEAK_RADIUS;
           ctx.beginPath();
           ctx.moveTo(coords[i].x, coords[i].y - dSize);
@@ -1110,12 +1346,10 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
           ctx.fill();
           ctx.shadowBlur = 0;
 
-          // Etiqueta numérica de magnitud
           ctx.fillStyle = isArr ? COLORS.PEAK_ARR : '#00f2ff';
           ctx.textAlign = 'center';
           ctx.fillText(v.toFixed(1), coords[i].x, coords[i].y - 12);
 
-          // Píldora HUD (SYS o ARR)
           ctx.font = `bold 7px ${FONT_MONO}`;
           ctx.fillStyle = isArr ? '#fecaca' : 'rgba(255, 255, 255, 0.85)';
           ctx.fillText(isArr ? 'ARR' : 'SYS', coords[i].x, coords[i].y - 22);
@@ -1164,7 +1398,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
         }
       }
 
-      // Intervalos IBI entre picos con conectores láser
+      // Intervalos IBI entre picos
       const rrForLabels = state.props.rrIntervals ?? [];
       const validRr = rrForLabels.filter((r) => isPhysiologicalRR(r));
       const meanIbi = validRr.length > 0 ? validRr.reduce((a, v) => a + v, 0) / validRr.length : state.ibiDisplay;
@@ -1202,7 +1436,19 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     }
   } // ── fin MODO 2D ──
 
-  // 6. Tacograma RR (IBI) con iluminación de fondo
+  // 6. Actualización y Renderizado de Chispas del Sistema de Partículas
+  if (headCoord) {
+    updateAndDrawParticles(
+      ctx,
+      state,
+      headCoord.x,
+      headCoord.y,
+      headCoord.isArr,
+      isNewPeakEvent
+    );
+  }
+
+  // 7. Tacograma RR (IBI)
   const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
   ctx.fillStyle = 'rgba(6, 14, 28, 0.90)';
   ctx.fillRect(plot.x + 2, tachoY - 4, plot.w - 4, RR_TACHO_H);
@@ -1214,7 +1460,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.textAlign = 'left';
   ctx.fillText('TACHOGRAMA RR (IBI)', plot.x + 8, tachoY + 8);
 
-  // 7. Panel de Ritmo Clínico Holográfico
+  // 8. Panel de Ritmo Clínico Holográfico
   const rhythm = buildRhythmPanel(p.arrhythmiaStatus, p.arrhythmiaCount ?? 0, p.rrIntervals ?? [], state.hrv);
   const panelH = 56;
   const panelY = plot.y + 8;
@@ -1308,7 +1554,6 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
 
   const compact = trend.h < 92;
 
-  // Fondo Glassmorphic
   ctx.fillStyle = 'rgba(6, 14, 28, 0.90)';
   ctx.beginPath();
   ctx.roundRect(trend.x, trend.y, trend.w, trend.h, 6);
@@ -1376,7 +1621,6 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
 
   const yToPx = (v: number) => innerY + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
 
-  // Banda de Normalidad Fisiológica (60 - 100 BPM)
   const drawBand = (lo: number, hi: number, color: string) => {
     const y1 = Math.max(innerY, yToPx(hi));
     const y2 = Math.min(innerY + innerH, yToPx(lo));
@@ -1449,7 +1693,6 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     isArr: point.isArr,
   }));
 
-  // Área sombreada con degradado
   ctx.beginPath();
   ctx.moveTo(coords[0].x, innerY + innerH);
   for (const c of coords) ctx.lineTo(c.x, c.y);
@@ -1461,7 +1704,6 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.fillStyle = areaGrad;
   ctx.fill();
 
-  // Curva de tendencia suavizada
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   let seg = 0;
@@ -1486,7 +1728,6 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   }
   ctx.shadowBlur = 0;
 
-  // Punto spark más reciente con resplandor pulsátil
   const lastPoint = coords[coords.length - 1];
   if (lastPoint) {
     ctx.save();

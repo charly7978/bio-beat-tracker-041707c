@@ -22,6 +22,7 @@ import {
   drawAcquisitionOverlay,
   drawTrendStrip,
   drawFooter,
+  BioParticle,
 } from '@/lib/ui/ppgCanvasRenderer';
 import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
 import { usePpg3dSettings } from '@/store/ppg3dSettings';
@@ -154,6 +155,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const beatHistoryRef = useRef<{ isArrhythmia: boolean; time: number; rr: number }[]>([]);
 
   const amplitudeStatsRef = useRef({ min: -50, max: 50, range: 100 });
+  const particlesRef = useRef<BioParticle[]>([]);
 
   const ibiDisplayRef = useRef<number>(0);
   const hrvDisplayRef = useRef<{ sdnn: number; rmssd: number; pnn50: number; cv: number }>({ sdnn: 0, rmssd: 0, pnn50: 0, cv: 0 });
@@ -444,6 +446,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         traceRevealed: traceRevealedRef.current,
         signalStrength: signalStrengthNow,
         threeD: { enabled: threeDState.enabled, intensity: threeDState.intensity },
+        particles: particlesRef.current,
       };
 
       drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);
@@ -481,6 +484,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
 
   const handleReset = useCallback(() => {
     dataBufferRef.current?.clear();
+    particlesRef.current = [];
     amplitudeStatsRef.current = { min: -50, max: 50, range: 100 };
     beatHistoryRef.current = [];
     lastArrhythmiaCountRef.current = 0;
