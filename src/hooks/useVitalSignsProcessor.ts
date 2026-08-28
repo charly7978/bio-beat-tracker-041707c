@@ -123,6 +123,7 @@ export const useVitalSignsProcessor = () => {
     startCalibration,
     forceCalibrationCompletion,
     lastValidResults,
+    setLastValidResults,
     getCalibrationProgress: useCallback(() => processorRef.current?.getCalibrationProgress() ?? 0, []),
   };
 };

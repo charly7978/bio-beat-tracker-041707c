@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2, Sliders, User, Check } from "lucide-react";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
 import { CalibrationManager } from "@/modules/vital-signs/CalibrationManager";
+import type { VitalSignsResult } from "@/modules/vital-signs/VitalSignsProcessor";
 import { supabase } from "@/integrations/supabase/client";
 import { useSignalProcessor } from "@/hooks/useSignalProcessor";
 import { useHeartBeatProcessor } from "@/hooks/useHeartBeatProcessor";
@@ -87,6 +88,7 @@ const Index = () => {
     reset: resetVitalSigns,
     fullReset: fullResetVitalSigns,
     lastValidResults,
+    setLastValidResults,
     startCalibration,
     forceCalibrationCompletion,
     getCalibrationProgress
