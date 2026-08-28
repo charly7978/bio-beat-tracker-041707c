@@ -740,7 +740,10 @@ const Index = () => {
             </div>
 
             <button 
-              onClick={session.enterFullScreen}
+              onClick={() => {
+                session.enterFullScreen();
+                session.startMonitoring();
+              }}
               className="group relative px-8 py-3.5 overflow-hidden rounded-2xl transition-all duration-300 active:scale-95 shadow-xl shadow-emerald-950/40"
             >
               <div className="absolute inset-0 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 opacity-90 group-hover:opacity-100 transition-opacity" />
