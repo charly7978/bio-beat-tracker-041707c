@@ -30,13 +30,13 @@ export function ActionButtons({
         paddingBottom: 'calc(10px + env(safe-area-inset-bottom, 0px))',
       }}
     >
-      {/* 1. Fila de Badges de Estado del Sistema */}
-      <div className="flex items-center gap-1.5 justify-center mb-1.5 pointer-events-auto">
+      {/* 1. Fila de Badges de Estado del Sistema con Brillo Holográfico */}
+      <div className="flex items-center gap-1.5 justify-center mb-2 pointer-events-auto">
         <span
-          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[8px] font-mono font-bold tracking-wider uppercase border transition-colors ${
+          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[8px] font-mono font-bold tracking-wider uppercase border transition-all duration-300 ${
             webgpuAvail === 'yes'
-              ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30 glow-cyan'
-              : 'bg-zinc-900/60 text-zinc-600 border-zinc-800/60'
+              ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40 glow-cyan shadow-[0_0_12px_rgba(6,182,212,0.35)]'
+              : 'bg-zinc-900/70 text-zinc-500 border-zinc-800/80 backdrop-blur-md'
           }`}
         >
           <Cpu className="w-2.5 h-2.5" />
@@ -44,10 +44,10 @@ export function ActionButtons({
         </span>
 
         <span
-          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[8px] font-mono font-bold tracking-wider uppercase border transition-colors ${
+          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[8px] font-mono font-bold tracking-wider uppercase border transition-all duration-300 ${
             encryptionReady
-              ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-              : 'bg-zinc-900/60 text-zinc-600 border-zinc-800/60'
+              ? 'bg-amber-500/15 text-amber-300 border-amber-500/40 glow-amber shadow-[0_0_12px_rgba(245,158,11,0.35)]'
+              : 'bg-zinc-900/70 text-zinc-500 border-zinc-800/80 backdrop-blur-md'
           }`}
         >
           <Shield className="w-2.5 h-2.5" />
@@ -55,10 +55,10 @@ export function ActionButtons({
         </span>
 
         <span
-          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[8px] font-mono font-bold tracking-wider uppercase border transition-colors ${
+          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[8px] font-mono font-bold tracking-wider uppercase border transition-all duration-300 ${
             healthAvail === 'yes'
-              ? 'bg-blue-500/10 text-blue-400 border-blue-500/30'
-              : 'bg-zinc-900/60 text-zinc-600 border-zinc-800/60'
+              ? 'bg-blue-500/15 text-blue-300 border-blue-500/40 shadow-[0_0_12px_rgba(59,130,246,0.35)]'
+              : 'bg-zinc-900/70 text-zinc-500 border-zinc-800/80 backdrop-blur-md'
           }`}
         >
           <Activity className="w-2.5 h-2.5" />
@@ -67,14 +67,14 @@ export function ActionButtons({
 
         {riskResult && (
           <span
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[8px] font-mono font-bold tracking-wider uppercase border ${
+            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[8px] font-mono font-bold tracking-wider uppercase border transition-all duration-300 ${
               riskResult === 'IMMEDIATE'
-                ? 'bg-rose-500/15 text-rose-400 border-rose-500/40 glow-rose'
+                ? 'bg-rose-500/20 text-rose-300 border-rose-500/50 glow-rose animate-pulse'
                 : riskResult === 'SOON'
-                ? 'bg-orange-500/15 text-orange-400 border-orange-500/40'
+                ? 'bg-orange-500/20 text-orange-300 border-orange-500/50'
                 : riskResult === 'MONITOR'
-                ? 'bg-amber-500/15 text-amber-400 border-amber-500/40'
-                : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40 glow-emerald'
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 glow-emerald'
             }`}
           >
             <Brain className="w-2.5 h-2.5" />
@@ -84,25 +84,25 @@ export function ActionButtons({
       </div>
 
       {/* 2. Barra de Control Principal Glassmorphic */}
-      <div className="flex items-center gap-2 max-w-sm w-full p-1.5 rounded-2xl glass-panel border border-white/15 shadow-2xl shadow-black/90 pointer-events-auto">
-        {/* Botón Principal: Iniciar / Detener */}
+      <div className="flex items-center gap-2 max-w-sm w-full p-2 rounded-2xl glass-panel border border-white/20 shadow-2xl shadow-black/95 backdrop-blur-xl pointer-events-auto">
+        {/* Botón Principal: Iniciar / Detener Medición */}
         <button
           onClick={onStartMeasurement}
-          className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-xs tracking-wider uppercase font-mono transition-all duration-200 active:scale-[0.97] shadow-lg ${
+          className={`flex-1 flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl font-bold text-xs tracking-wider uppercase font-mono transition-all duration-300 active:scale-[0.96] shadow-xl ${
             isMonitoring
-              ? 'bg-gradient-to-r from-rose-600 via-red-600 to-rose-700 text-white shadow-rose-950/60 glow-rose border border-rose-400/50'
-              : 'bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-600 text-white shadow-emerald-950/60 glow-emerald border border-emerald-400/50'
+              ? 'bg-gradient-to-r from-rose-600 via-red-600 to-rose-700 text-white shadow-rose-950/70 glow-rose border border-rose-400/60 hover:brightness-110'
+              : 'bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-600 text-white shadow-emerald-950/70 glow-emerald border border-emerald-400/60 hover:brightness-110'
           }`}
         >
           {isMonitoring ? (
             <>
-              <Square className="w-3.5 h-3.5 fill-current animate-pulse" />
-              <span>Detener Medición</span>
+              <Square className="w-4 h-4 fill-current animate-pulse text-rose-100" />
+              <span className="text-glow-rose">Detener Medición</span>
             </>
           ) : (
             <>
-              <Play className="w-3.5 h-3.5 fill-current" />
-              <span>Iniciar Medición</span>
+              <Play className="w-4 h-4 fill-current text-emerald-100" />
+              <span className="text-glow-emerald">Iniciar Medición</span>
             </>
           )}
         </button>
@@ -113,13 +113,13 @@ export function ActionButtons({
           onClick={toggle3D}
           aria-pressed={is3DEnabled}
           title={is3DEnabled ? 'Modo 3D activo · pulsar para 2D' : 'Modo 2D activo · pulsar para 3D'}
-          className={`flex items-center justify-center gap-1 py-3 px-3 rounded-xl font-bold text-[10px] font-mono tracking-wider uppercase transition-all duration-200 active:scale-[0.96] border ${
+          className={`flex items-center justify-center gap-1.5 py-3.5 px-3.5 rounded-xl font-bold text-[10px] font-mono tracking-wider uppercase transition-all duration-300 active:scale-[0.95] border ${
             is3DEnabled
-              ? 'border-cyan-400/60 bg-cyan-950/60 text-cyan-300 shadow-lg shadow-cyan-950/40 glow-cyan animate-hologram'
-              : 'border-white/10 bg-white/5 text-zinc-400 hover:text-zinc-200 hover:border-white/20'
+              ? 'border-cyan-400/70 bg-cyan-950/70 text-cyan-200 shadow-lg shadow-cyan-950/50 glow-cyan animate-hologram'
+              : 'border-white/15 bg-white/5 text-zinc-300 hover:text-white hover:border-white/30 hover:bg-white/10'
           }`}
         >
-          <Box className={`w-3.5 h-3.5 transition-transform duration-300 ${is3DEnabled ? 'rotate-12 text-cyan-300' : 'text-zinc-400'}`} />
+          <Box className={`w-4 h-4 transition-transform duration-300 ${is3DEnabled ? 'rotate-12 text-cyan-300' : 'text-zinc-400'}`} />
           <span>{is3DEnabled ? '3D' : '2D'}</span>
         </button>
 
@@ -128,9 +128,9 @@ export function ActionButtons({
           onClick={onReset}
           aria-label="Reiniciar medición"
           title="Reiniciar buffer y estadísticas"
-          className="flex items-center justify-center gap-1 py-3 px-3 rounded-xl font-bold text-[10px] font-mono tracking-wider uppercase text-zinc-300 bg-white/5 hover:bg-white/10 active:bg-white/15 active:scale-[0.96] border border-white/10 hover:border-white/20 transition-all duration-200"
+          className="flex items-center justify-center gap-1 py-3.5 px-3 rounded-xl font-bold text-[10px] font-mono tracking-wider uppercase text-zinc-300 bg-white/5 hover:bg-white/10 hover:text-white active:bg-white/15 active:scale-[0.95] border border-white/15 hover:border-white/30 transition-all duration-300"
         >
-          <RotateCcw className="w-3.5 h-3.5 text-zinc-400" />
+          <RotateCcw className="w-3.5 h-3.5 text-zinc-400 group-hover:text-white" />
           <span>Reset</span>
         </button>
       </div>
