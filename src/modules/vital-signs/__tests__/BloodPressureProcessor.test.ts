@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BloodPressureProcessor } from '../BloodPressureProcessor';
-import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import { isPhysiologicalBp } from '@/lib/vitals/pwaPhysiologicalBpEngine';
+import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
+import { isPhysiologicalBp } from '../../../lib/vitals/pwaPhysiologicalBpEngine';
 
 function syntheticPpgBuffer(cycles = 8, spc = 30, shift = 0): number[] {
   const buf: number[] = [];

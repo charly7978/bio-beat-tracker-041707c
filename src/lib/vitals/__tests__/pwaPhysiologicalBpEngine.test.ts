@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
+import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
 import {
   computePhysiologicalIndices,
   enforceHemodynamicCoherence,
