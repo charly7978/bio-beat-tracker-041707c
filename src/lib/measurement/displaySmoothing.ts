@@ -6,9 +6,9 @@ import { clamp } from '@/utils/math';
 
 /** Pesos de suavizado por vital (solo UI, no afecta guardado clínico). */
 export const DISPLAY_SMOOTH_ALPHAS = {
-  hr: 0.12,
-  spo2: 0.14,
-  bp: 0.12,
+  hr: 0.18,
+  spo2: 0.18,
+  bp: 0.18,
 } as const;
 
 function adaptiveAlpha(prev: number, next: number, baseAlpha: number): number {

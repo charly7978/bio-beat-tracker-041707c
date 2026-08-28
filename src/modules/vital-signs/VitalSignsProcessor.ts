@@ -693,31 +693,28 @@ export class VitalSignsProcessor {
         const finalSys = bpEstimate.systolic;
         const finalDia = bpEstimate.diastolic;
 
-        const bpCfg = VITAL_THRESHOLDS.BP;
         const bpReady =
           bpEstimate.confidence === 'HIGH' ||
-          (bpEstimate.confidence === 'MEDIUM' &&
-            this.stableFramesCount >= bpCfg.STABILITY_FRAMES_MEDIUM) ||
-          (bpEstimate.confidence === 'LOW' &&
-            this.stableFramesCount >= bpCfg.STABILITY_FRAMES_HIGH);
+          bpEstimate.confidence === 'MEDIUM' ||
+          (bpEstimate.confidence === 'LOW' && this.stableFramesCount >= 6) ||
+          this.validPulseCount >= 2;
+
         if (bpReady) {
           const cw = this.confidenceToWeight(bpEstimate.confidence)
-            * clamp(bpEstimate.featureQuality / 60, 0.1, 1.0);
+            * clamp(bpEstimate.featureQuality / 50, 0.2, 1.0);
 
-          const bpFirstSys = this.displaySmoothing.smoothWeightedValue(
+          this.measurements.systolicPressure = this.displaySmoothing.smoothWeightedValue(
             this.measurements.systolicPressure,
             finalSys,
             cw,
             'stable',
           );
-          this.measurements.systolicPressure = this.applyEma2('ema2Sys', bpFirstSys);
-          const bpFirstDia = this.displaySmoothing.smoothWeightedValue(
+          this.measurements.diastolicPressure = this.displaySmoothing.smoothWeightedValue(
             this.measurements.diastolicPressure,
             finalDia,
             cw,
             'stable',
           );
-          this.measurements.diastolicPressure = this.applyEma2('ema2Dia', bpFirstDia);
 
           this.bpSysWeightedSum += finalSys * cw;
           this.bpDiaWeightedSum += finalDia * cw;
