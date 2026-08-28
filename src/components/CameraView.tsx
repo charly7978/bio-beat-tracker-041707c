@@ -90,11 +90,17 @@ function classifyCameraError(err: unknown): CameraErrorType {
   return 'unknown';
 }
 
+function isConstraintSupported(name: string): boolean {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getSupportedConstraints) return true;
+  const supported = navigator.mediaDevices.getSupportedConstraints();
+  return Boolean(supported[name as keyof MediaTrackSupportedConstraints]);
+}
+
 async function stabilizeTrack(track: MediaStreamTrack): Promise<void> {
   const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
   const constraints: AdvancedConstraint[] = [];
 
-  if (caps.frameRate) {
+  if (caps.frameRate && isConstraintSupported('frameRate')) {
     const maxFps = caps.frameRate.max ?? 30;
     const targetFps = Math.min(30, maxFps);
     constraints.push({ frameRate: targetFps });
@@ -103,23 +109,20 @@ async function stabilizeTrack(track: MediaStreamTrack): Promise<void> {
   // Exposición y WB en CONTINUO durante la COLOCACIÓN del dedo: el AE/AWB deben
   // ADAPTARSE al dedo que baja, no congelarse sobre la escena vacía (flash sin
   // dedo). El bloqueo anti-deriva se DIFIERE a optimizeForFinger(), que congela
-  // exposición/WB ya sobre la escena REAL del dedo en STABLE_CONTACT (ver doc de
-  // optimizeForFinger). Congelar acá la escena vacía retrasaba la convergencia
-  // (~25-30 s) porque el frame del dedo quedaba mal expuesto hasta STABLE_CONTACT.
-  if (caps.exposureMode?.includes("continuous")) {
+  // exposición/WB ya sobre la escena REAL del dedo en STABLE_CONTACT.
+  if (caps.exposureMode?.includes("continuous") && isConstraintSupported('exposureMode')) {
     constraints.push({ exposureMode: "continuous" });
   }
 
-  if (caps.whiteBalanceMode?.includes("continuous")) {
+  if (caps.whiteBalanceMode?.includes("continuous") && isConstraintSupported('whiteBalanceMode')) {
     constraints.push({ whiteBalanceMode: "continuous" });
   }
 
   // Foco cercano fijo desde el inicio: el dedo siempre está pegado al lente, así
-  // que el foco manual a mínima distancia es estable y correcto (no introduce
-  // deriva ni "hunting"). Es lo único que conviene fijar antes del dedo.
-  if (caps.focusMode?.includes("manual")) {
+  // que el foco manual a mínima distancia es estable y correcto (no introduce deriva).
+  if (caps.focusMode?.includes("manual") && isConstraintSupported('focusMode')) {
     constraints.push({ focusMode: "manual", focusDistance: 0 });
-  } else if (caps.focusMode?.includes("continuous")) {
+  } else if (caps.focusMode?.includes("continuous") && isConstraintSupported('focusMode')) {
     constraints.push({ focusMode: "continuous" });
   }
 

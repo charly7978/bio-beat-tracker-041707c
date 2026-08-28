@@ -819,7 +819,7 @@ const Index = () => {
                 <p className="text-zinc-500 text-[9px] leading-relaxed">
                   Conexión P2P con STUN. Copia tu SDP y compártelo con el remoto.
                 </p>
-                <WebrtcCallWidget />
+                <WebrtcCallWidget vitals={router.vitalSigns} />
               </div>
             </div>
           </div>

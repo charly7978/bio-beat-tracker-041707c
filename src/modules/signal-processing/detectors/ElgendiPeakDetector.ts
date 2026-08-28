@@ -186,7 +186,24 @@ export class ElgendiPeakDetector {
       if (pk > 0) {
         const prev = peaks[pk - 1];
         const dist = best - prev;
-        if (dist < minDist) {
+
+        // Periodo refractario fisiológico adaptativo (SOTA): escala dinámicamente con
+        // el último RR válido para suprimir la muesca dícrota sin perder latidos reales.
+        let effectiveMinDist = minDist;
+        if (pk >= 2) {
+          const lastIntervalMs = (ts[prev] ?? 0) - (ts[peaks[pk - 2]] ?? 0);
+          if (
+            lastIntervalMs >= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS &&
+            lastIntervalMs <= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS
+          ) {
+            const dynamicMin = Math.round(((lastIntervalMs * 0.48) / 1000) * fs);
+            if (dynamicMin > minDist && dynamicMin < maxDist) {
+              effectiveMinDist = dynamicMin;
+            }
+          }
+        }
+
+        if (dist < effectiveMinDist) {
           if (x[best] > x[prev]) { pk--; }
           else { continue; }
         } else if (dist > maxDist) {
