@@ -456,8 +456,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       } else {
         drawECGGrid(ctx, renderState);
       }
-      drawSignal(ctx, renderState);
+      // Dibuja la lente óptica transparente del dedo en el fondo del monitor cardíaco
       drawAcquisitionOverlay(ctx, renderState);
+      // Dibuja las ondas cardíacas en primer plano por encima de la lente
+      drawSignal(ctx, renderState);
       drawTrendStrip(ctx, renderState);
       drawFooter(ctx, renderState);
 

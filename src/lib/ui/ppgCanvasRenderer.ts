@@ -1372,8 +1372,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
 /**
  * Dibuja la lente óptica biométrica de cristal zafiro transparente con el video en vivo del dedo.
- * Posición PERMANENTE Y FIJA en cy = plot.y + 58 (nunca cambia de ubicación).
- * Tratamiento de transparencia sofisticada de grado biomédico y clínico.
+ * Ubicada en el CENTRO DEL MONITOR CARDÍACO (cy = plot.centerY) POR DETRÁS DE LAS ONDAS.
+ * Tratamiento de transparencia sofisticada para una visualización cristalina de la onda y el dedo.
  */
 export function drawLiveFingerOpticalLens(
   ctx: CanvasRenderingContext2D,
@@ -1387,19 +1387,19 @@ export function drawLiveFingerOpticalLens(
   const isDetected = p.isFingerDetected;
   const diag = p.diagnostics;
   const progress = Math.max(0, Math.min(1, diag?.acquisitionProgress ?? 0));
-  const innerRad = radius * 0.84;
+  const innerRad = radius * 0.86;
 
   // 1. Halo vascular acústico exterior reactivo al pulso cardíaco fisiológico
   const pulse = Math.max(state.sweepPulse, 0.04);
-  const auraRad = radius * (1.20 + pulse * 0.30);
+  const auraRad = radius * (1.18 + pulse * 0.28);
   const aura = ctx.createRadialGradient(cx, cy, 3, cx, cy, auraRad);
   if (isDetected) {
-    aura.addColorStop(0, `rgba(6, 182, 212, ${0.16 + pulse * 0.22})`);
-    aura.addColorStop(0.55, `rgba(34, 197, 94, ${0.08 + pulse * 0.12})`);
+    aura.addColorStop(0, `rgba(6, 182, 212, ${0.14 + pulse * 0.20})`);
+    aura.addColorStop(0.55, `rgba(34, 197, 94, ${0.06 + pulse * 0.10})`);
     aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
   } else {
-    aura.addColorStop(0, 'rgba(245, 158, 11, 0.18)');
-    aura.addColorStop(0.55, 'rgba(245, 158, 11, 0.05)');
+    aura.addColorStop(0, 'rgba(245, 158, 11, 0.15)');
+    aura.addColorStop(0.55, 'rgba(245, 158, 11, 0.04)');
     aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
   }
   ctx.fillStyle = aura;
@@ -1437,7 +1437,8 @@ export function drawLiveFingerOpticalLens(
     const sx = (sw - size) / 2;
     const sy = (sh - size) / 2;
 
-    // Dibuja el feed de la cámara mostrando el dedo iluminado en tiempo real
+    // Transparencia sofisticada en el feed para que la onda cardíaca se aprecie con máxima nitidez al pasar por encima
+    ctx.globalAlpha = isDetected ? 0.65 : 0.40;
     ctx.drawImage(
       source,
       sx,
@@ -1449,23 +1450,24 @@ export function drawLiveFingerOpticalLens(
       innerRad * 2,
       innerRad * 2
     );
+    ctx.globalAlpha = 1.0;
   } else {
     // Fondo de textura óptica espacial oscura mientras se inicializa el hardware
     ctx.fillStyle = '#040c18';
     ctx.fillRect(cx - innerRad, cy - innerRad, innerRad * 2, innerRad * 2);
   }
 
-  // Capa de cristal zafiro antirreflectante con viñeta radial suave de grado clínico
+  // Capa de cristal zafiro antirreflectante translúcida
   const lensGrad = ctx.createRadialGradient(cx, cy, innerRad * 0.08, cx, cy, innerRad);
-  lensGrad.addColorStop(0, 'rgba(4, 12, 24, 0.20)');
-  lensGrad.addColorStop(0.65, 'rgba(2, 8, 18, 0.35)');
-  lensGrad.addColorStop(0.90, 'rgba(2, 6, 14, 0.55)');
-  lensGrad.addColorStop(1, 'rgba(1, 4, 10, 0.72)');
+  lensGrad.addColorStop(0, 'rgba(4, 12, 24, 0.10)');
+  lensGrad.addColorStop(0.60, 'rgba(2, 8, 18, 0.25)');
+  lensGrad.addColorStop(0.85, 'rgba(2, 6, 14, 0.45)');
+  lensGrad.addColorStop(1, 'rgba(1, 4, 10, 0.68)');
   ctx.fillStyle = lensGrad;
   ctx.fillRect(cx - innerRad, cy - innerRad, innerRad * 2, innerRad * 2);
 
   // Micro-scanlines de instrumentación de alta resolución
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.015)';
   for (let ly = cy - innerRad; ly <= cy + innerRad; ly += 2.5) {
     ctx.fillRect(cx - innerRad, ly, innerRad * 2, 1);
   }
@@ -1473,20 +1475,20 @@ export function drawLiveFingerOpticalLens(
   // Menisco de cristal físico: reflejos especulares curvados superior e inferior
   ctx.beginPath();
   ctx.arc(cx, cy, innerRad * 0.90, -Math.PI * 0.75, -Math.PI * 0.25);
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.38)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.32)';
   ctx.lineWidth = 1.2;
   ctx.stroke();
 
   ctx.beginPath();
   ctx.arc(cx, cy, innerRad * 0.90, Math.PI * 0.35, Math.PI * 0.65);
-  ctx.strokeStyle = 'rgba(103, 232, 249, 0.18)';
+  ctx.strokeStyle = 'rgba(103, 232, 249, 0.15)';
   ctx.lineWidth = 0.8;
   ctx.stroke();
 
   // Retícula micrométrica de precisión médica (+)
-  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.45)' : 'rgba(245, 158, 11, 0.50)';
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.40)' : 'rgba(245, 158, 11, 0.45)';
   ctx.lineWidth = 0.8;
-  const crossLen = 5;
+  const crossLen = 6;
   const crossGap = 3;
   ctx.beginPath();
   ctx.moveTo(cx - crossLen - crossGap, cy); ctx.lineTo(cx - crossGap, cy);
@@ -1496,13 +1498,13 @@ export function drawLiveFingerOpticalLens(
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.arc(cx, cy, 1.8, 0, Math.PI * 2);
-  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.65)' : 'rgba(245, 158, 11, 0.65)';
+  ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.60)' : 'rgba(245, 158, 11, 0.60)';
   ctx.stroke();
 
   // Escáner láser vertical continuo de barrido sereno
   const scanOffset = Math.sin(state.now * 0.0028) * (innerRad * 0.72);
-  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.70)' : 'rgba(245, 158, 11, 0.60)';
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.65)' : 'rgba(245, 158, 11, 0.55)';
   ctx.shadowColor = isDetected ? '#00f2ff' : '#f59e0b';
   ctx.shadowBlur = 4;
   ctx.lineWidth = 1.0;
@@ -1516,7 +1518,7 @@ export function drawLiveFingerOpticalLens(
 
   // 3. Bisel quirúrgico y elementos HUD exteriores
   // Doble anillo concéntrico de titanio / acero quirúrgico
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
   ctx.lineWidth = 0.9;
   ctx.beginPath();
   ctx.arc(cx, cy, innerRad + 1, 0, Math.PI * 2);
@@ -1524,7 +1526,7 @@ export function drawLiveFingerOpticalLens(
 
   if (mode === 'CALIBRATION') {
     // Anillo exterior de progreso
-    ctx.lineWidth = 2.2;
+    ctx.lineWidth = 2.4;
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.10)';
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -1559,7 +1561,7 @@ export function drawLiveFingerOpticalLens(
     ctx.lineWidth = 0.8;
     for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
       const isQuarter = a % (Math.PI / 2) === 0;
-      const tickLen = isQuarter ? 4 : 2;
+      const tickLen = isQuarter ? 5 : 3;
       const cos = Math.cos(a);
       const sin = Math.sin(a);
       ctx.beginPath();
@@ -1569,9 +1571,9 @@ export function drawLiveFingerOpticalLens(
     }
     ctx.restore();
 
-    // Badge de porcentaje / estado debajo del círculo fijo
-    const pctBadgeW = 48;
-    const pctBadgeH = 14;
+    // Badge de porcentaje / estado debajo del círculo
+    const pctBadgeW = 50;
+    const pctBadgeH = 15;
     const pctBadgeY = cy + radius + 4;
     ctx.fillStyle = 'rgba(6, 14, 28, 0.85)';
     ctx.beginPath();
@@ -1580,10 +1582,10 @@ export function drawLiveFingerOpticalLens(
     ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.35)' : 'rgba(245, 158, 11, 0.35)';
     ctx.stroke();
 
-    ctx.font = `bold 8px ${FONT_MONO}`;
+    ctx.font = `bold 8.5px ${FONT_MONO}`;
     ctx.fillStyle = isDetected ? '#00f2ff' : '#f59e0b';
     ctx.textAlign = 'center';
-    ctx.fillText(isDetected ? `${Math.round(progress * 100)}%` : 'EN ESPERA', cx, pctBadgeY + 10);
+    ctx.fillText(isDetected ? `${Math.round(progress * 100)}%` : 'EN ESPERA', cx, pctBadgeY + 11);
 
     // Mensaje clínico inferior
     let msgText = 'COLOCAR DEDO EN CÁMARA';
@@ -1603,9 +1605,9 @@ export function drawLiveFingerOpticalLens(
     }
 
     const { plot } = state.layout;
-    const badgeW = Math.min(190, plot.w - 20);
-    const badgeH = 17;
-    const badgeY = pctBadgeY + pctBadgeH + 3;
+    const badgeW = Math.min(200, plot.w - 20);
+    const badgeH = 18;
+    const badgeY = pctBadgeY + pctBadgeH + 4;
     ctx.fillStyle = 'rgba(10, 20, 36, 0.90)';
     ctx.beginPath();
     ctx.roundRect(cx - badgeW / 2, badgeY, badgeW, badgeH, 8);
@@ -1613,17 +1615,17 @@ export function drawLiveFingerOpticalLens(
     ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.30)' : 'rgba(245, 158, 11, 0.40)';
     ctx.stroke();
 
-    ctx.font = `bold 7.5px ${FONT_MONO}`;
+    ctx.font = `bold 8px ${FONT_MONO}`;
     ctx.fillStyle = msgColor;
     ctx.textAlign = 'center';
-    ctx.fillText(`${icon} ${msgText}`, cx, badgeY + 11.5);
+    ctx.fillText(`${icon} ${msgText}`, cx, badgeY + 12);
   } else {
-    // ── MODO LIVE MONITORING (Durante toda la medición continua) ──
+    // ── MODO LIVE MONITORING (Durante toda la medición continua en el fondo) ──
     ctx.save();
     ctx.beginPath();
     ctx.arc(cx, cy, innerRad + 2, 0, Math.PI * 2);
-    ctx.strokeStyle = isDetected ? `rgba(0, 242, 255, ${0.40 + pulse * 0.40})` : 'rgba(245, 158, 11, 0.45)';
-    ctx.lineWidth = 1.1;
+    ctx.strokeStyle = isDetected ? `rgba(0, 242, 255, ${0.35 + pulse * 0.35})` : 'rgba(245, 158, 11, 0.40)';
+    ctx.lineWidth = 1.0;
     if (isDetected && pulse > 0.08) {
       ctx.shadowColor = '#00f2ff';
       ctx.shadowBlur = 5 * pulse;
@@ -1635,14 +1637,14 @@ export function drawLiveFingerOpticalLens(
     ctx.translate(cx, cy);
     const rot = (state.now * 0.0008) % (Math.PI * 2);
     ctx.rotate(rot);
-    ctx.strokeStyle = 'rgba(103, 232, 249, 0.30)';
+    ctx.strokeStyle = 'rgba(103, 232, 249, 0.28)';
     ctx.lineWidth = 0.7;
     for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) {
       const cos = Math.cos(a);
       const sin = Math.sin(a);
       ctx.beginPath();
       ctx.moveTo(cos * (innerRad + 2), sin * (innerRad + 2));
-      ctx.lineTo(cos * (innerRad + 4.5), sin * (innerRad + 4.5));
+      ctx.lineTo(cos * (innerRad + 5), sin * (innerRad + 5));
       ctx.stroke();
     }
     ctx.restore();
@@ -1676,10 +1678,10 @@ export function drawLiveFingerOpticalLens(
 }
 
 /**
- * Dibuja la animación holográfica de la lente óptica en su UBICACIÓN FIJA PERMANENTE:
- *   - En fase de inicio / calibración: Muestra el dedo en vivo con progreso y telemetría.
- *   - Durante toda la medición activa: Mantiene el dedo en vivo con pulso vascular en sístole.
- *   - NUNCA CAMBIA DE UBICACIÓN (Anclado exactamente en cy = plot.y + 58).
+ * Dibuja la animación holográfica de la lente óptica en el FONDO DEL MONITOR CARDÍACO:
+ *   - En el centro del monitor (cy = plot.centerY).
+ *   - Las ondas cardíacas se dibujan POR ENCIMA en primer plano.
+ *   - El círculo del dedo se aprecia translúcido y nítido POR DETRÁS.
  */
 export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const p = state.props;
@@ -1692,10 +1694,10 @@ export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: Ppg
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
-  // UBICACIÓN FIJA PERMANENTE: Bajado armónicamente a cy = plot.y + 58
+  // UBICACIÓN CENTRAL FIJA EN EL MONITOR: cy = plot.centerY
   const cx = plot.x + plot.w / 2;
-  const cy = plot.y + 58;
-  const radius = Math.min(46, Math.max(38, Math.floor(plot.h * 0.15)));
+  const cy = plot.centerY;
+  const radius = Math.min(68, Math.max(48, Math.floor(plot.h * 0.23)));
 
   drawLiveFingerOpticalLens(
     ctx,
