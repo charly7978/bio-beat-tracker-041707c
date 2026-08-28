@@ -74,8 +74,8 @@ export const PEAK_DETECTION_DEFAULTS = {
    */
   peakAmplitudeRejectUpper: 2.6,
   minSQI: 10,
-  /** Ventana para emitir pico respecto al frame actual (ms) — ~½ RR @ 45 BPM */
-  peakEmitWindowMs: 720,
+  /** Ventana para emitir pico respecto al frame actual (ms) — cubre ciclo cardíaco completo + latencia MA */
+  peakEmitWindowMs: 1200,
   /** Mínimo de muestras en ventana para correr ensemble */
   minSamplesEnsemble: 72,
   /** Ventana de integración para detección (~180 ms de pulso sistólico típico a 30 Hz) */
