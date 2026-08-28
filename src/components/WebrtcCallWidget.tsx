@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Phone, PhoneOff, Copy, Check } from 'lucide-react';
 
 const ICE_SERVERS: RTCIceServer[] = [
@@ -22,6 +22,15 @@ export function WebrtcCallWidget() {
     setState('new');
     setLocalSdp('');
     setError('');
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+    };
   }, []);
 
   const startCall = useCallback(async () => {
@@ -78,7 +87,9 @@ export function WebrtcCallWidget() {
     navigator.clipboard.writeText(localSdp).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    }).catch(() => {});
+    }).catch((err) => {
+      setError(`No se pudo copiar: ${String(err)}`);
+    });
   }, [localSdp]);
 
   const isIdle = state === 'new' || state === 'closed';

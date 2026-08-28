@@ -6,7 +6,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { useSignalProcessor } from "@/hooks/useSignalProcessor";
 import { useHeartBeatProcessor } from "@/hooks/useHeartBeatProcessor";
 import { useVitalSignsProcessor } from "@/hooks/useVitalSignsProcessor";
-import { useSaveMeasurement } from "@/hooks/useSaveMeasurement";
+import { useSaveMeasurement, decryptLocalMeasurements } from "@/hooks/useSaveMeasurement";
+import { toast } from "@/hooks/use-toast";
+import { healthBridge } from "@/lib/capacitor/healthBridge";
 import { useHealthAnalysis } from "@/hooks/useHealthAnalysis";
 import { useFrameLoop } from "@/hooks/useFrameLoop";
 import { useSignalRouter } from "@/hooks/useSignalRouter";
@@ -202,12 +204,14 @@ const Index = () => {
   }, [lastSignal?.contactState]);
 
   // Sincronizar resultados post-medición
+  const { setVitalSigns: routerSetVitalSigns } = router;
+  const { setLocalShowResults: sessionSetLocalShowResults } = session;
   useEffect(() => {
     if (lastValidResults && !session.isMonitoring) {
-      router.setVitalSigns(lastValidResults);
-      session.setLocalShowResults(true);
+      routerSetVitalSigns(lastValidResults);
+      sessionSetLocalShowResults(true);
     }
-  }, [lastValidResults, session.isMonitoring]);
+  }, [lastValidResults, session.isMonitoring, routerSetVitalSigns, sessionSetLocalShowResults]);
 
   // UI states
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
@@ -248,7 +252,6 @@ const Index = () => {
 
   const fetchHistory = useCallback(async () => {
     try {
-      const { decryptLocalMeasurements } = await import('@/hooks/useSaveMeasurement');
       const localData = await decryptLocalMeasurements();
       const typedLocal = localData as HistoricalMeasurement[];
       const formattedLocal = typedLocal.map((m: HistoricalMeasurement) => ({
@@ -401,10 +404,8 @@ const Index = () => {
 
   // Check Health Connect availability
   useEffect(() => {
-    import('@/lib/capacitor/healthBridge').then(({ healthBridge }) => {
-      healthBridge.checkAvailability().then(avail => {
-        setHealthAvail(avail ? 'yes' : 'no');
-      }).catch(() => setHealthAvail('no'));
+    healthBridge.checkAvailability().then(avail => {
+      setHealthAvail(avail ? 'yes' : 'no');
     }).catch(() => setHealthAvail('no'));
   }, []);
 
@@ -418,14 +419,15 @@ const Index = () => {
 
   // Run risk analysis on current vitals
   useEffect(() => {
-    const vs = lastValidResults;
-    if (vs && (vs.heartRate.value || vs.spo2.value)) {
+    if (lastValidResults && (lastValidResults.heartRate.value || lastValidResults.spo2.value)) {
       import('@/lib/ml/riskAnalyzer').then(({ healthRiskAnalyzer }) => {
-        const risk = healthRiskAnalyzer.analyze(vs);
+        const risk = healthRiskAnalyzer.analyze(lastValidResults);
         setRiskResult(risk.timeline);
-      }).catch(() => {});
+      }).catch((err) => {
+        log.warn('Risk analysis evaluation failed:', err);
+      });
     }
-  }, [lastValidResults?.heartRate.value, lastValidResults?.spo2.value]);
+  }, [lastValidResults]);
 
   // Cargar datos antropométricos desde CalibrationManager al montar
   useEffect(() => {
@@ -598,17 +600,17 @@ const Index = () => {
       return;
     }
     if (currentStride > prev) {
-      import('@/hooks/use-toast').then(({ toast }) => toast({
+      toast({
         title: "⚡ Modo ahorro activado",
         description: `Rendimiento bajo detectado (stride ${currentStride}).`,
         duration: 3000,
-      }));
+      });
     } else {
-      import('@/hooks/use-toast').then(({ toast }) => toast({
+      toast({
         title: "✓ Rendimiento restaurado",
         description: `Muestreo completo (stride ${currentStride}).`,
         duration: 2500,
-      }));
+      });
     }
   }, [currentStride, session.isMonitoring, getBackpressureConfig]);
 
@@ -672,11 +674,11 @@ const Index = () => {
         overconstrained: "Usando configuración por defecto.",
         abort: "Intenta nuevamente.",
       };
-      import('@/hooks/use-toast').then(({ toast }) => toast({
+      toast({
         title: titles[errType] || "Cámara trasera no disponible",
         description: descriptions[errType] || "Verifica los permisos de cámara e intenta nuevamente.",
         duration: 6000,
-      }));
+      });
     };
     window.addEventListener('camera-error', handler);
     return () => window.removeEventListener('camera-error', handler);

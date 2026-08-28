@@ -60,7 +60,9 @@ export async function decryptLocalMeasurements(): Promise<unknown[]> {
     try {
       const fallback = JSON.parse(raw);
       if (Array.isArray(fallback)) return fallback;
-    } catch { }
+    } catch (e) {
+      log.debug('Fallback raw JSON parse failed:', e);
+    }
     return [];
   }
 }

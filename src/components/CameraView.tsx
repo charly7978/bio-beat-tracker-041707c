@@ -84,7 +84,7 @@ function classifyCameraError(err: unknown): CameraErrorType {
     if (name === 'NotAllowedError') return 'permission_denied';
     if (name === 'NotFoundError') return 'not_found';
     if (name === 'NotReadableError') return 'not_readable';
-    if (name === 'OverconstrainedError' || name === 'OverconstrainedError') return 'overconstrained';
+    if (name === 'OverconstrainedError') return 'overconstrained';
     if (name === 'AbortError') return 'abort';
   }
   return 'unknown';

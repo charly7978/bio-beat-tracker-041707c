@@ -83,16 +83,23 @@ export interface PPGSignalMeterHandle {
   clearBuffer: () => void;
 }
 
+let cachedSafeAreaBottom: number | null = null;
 function getSafeAreaBottom(): number {
   if (typeof document === 'undefined') return 0;
-  const div = document.createElement('div');
-  div.style.paddingBottom = 'env(safe-area-inset-bottom, 0px)';
-  div.style.position = 'absolute';
-  div.style.visibility = 'hidden';
-  document.body.appendChild(div);
-  const offset = parseInt(window.getComputedStyle(div).paddingBottom, 10) || 0;
-  document.body.removeChild(div);
-  return offset;
+  if (cachedSafeAreaBottom !== null) return cachedSafeAreaBottom;
+  try {
+    const div = document.createElement('div');
+    div.style.paddingBottom = 'env(safe-area-inset-bottom, 0px)';
+    div.style.position = 'absolute';
+    div.style.visibility = 'hidden';
+    document.body.appendChild(div);
+    const offset = parseInt(window.getComputedStyle(div).paddingBottom, 10) || 0;
+    document.body.removeChild(div);
+    cachedSafeAreaBottom = offset;
+    return offset;
+  } catch {
+    return 0;
+  }
 }
 
 const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProps>(({
@@ -328,13 +335,17 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   }, []);
 
   useLayoutEffect(() => {
+    const handleOrientation = () => {
+      cachedSafeAreaBottom = null;
+      recomputeLayout();
+    };
     recomputeLayout();
     const ro = new ResizeObserver(() => recomputeLayout());
     if (containerRef.current) ro.observe(containerRef.current);
-    window.addEventListener('orientationchange', recomputeLayout);
+    window.addEventListener('orientationchange', handleOrientation);
     return () => {
       ro.disconnect();
-      window.removeEventListener('orientationchange', recomputeLayout);
+      window.removeEventListener('orientationchange', handleOrientation);
     };
   }, [recomputeLayout]);
 

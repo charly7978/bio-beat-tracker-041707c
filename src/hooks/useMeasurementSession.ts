@@ -168,7 +168,7 @@ export function useMeasurementSession({
 
   useEffect(() => {
     if (isMonitoring) {
-      if (isMonitoring && monitoringStartedAtRef.current === 0) {
+      if (monitoringStartedAtRef.current === 0) {
         monitoringStartedAtRef.current = performance.now();
       }
     } else {
@@ -301,7 +301,9 @@ export function useMeasurementSession({
       });
       healthBridge.checkAvailability().then(avail => {
         if (avail) healthBridge.saveVitals(dataToSave);
-      }).catch(() => {});
+      }).catch((err) => {
+        logWarn('useMeasurementSession', 'HealthBridge save failed: ' + String(err));
+      });
     }
 
     setIsCameraOn(false);
