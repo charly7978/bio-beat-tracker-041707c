@@ -45,18 +45,6 @@ export const COLORS = {
   BP: '#818cf8',
 };
 
-export interface BioParticle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  life: number;
-  decay: number;
-  color: string;
-  glowColor: string;
-  size: number;
-}
-
 /**
  * TABLA DE CONSTANTES CONFIGURABLES PARA LAS ONDAS CARDÍACAS (PPG MONITOR)
  */
@@ -206,7 +194,6 @@ export interface PpgRenderState {
   traceRevealed: boolean;
   signalStrength: number;
   threeD?: { enabled: boolean; intensity?: number };
-  particles?: BioParticle[];
 }
 
 /**
@@ -217,19 +204,16 @@ export function getCardiacPulseScale(timeMs: number, bpm: number): number {
   const cycleMs = 60000 / Math.max(30, Math.min(220, bpm));
   const phase = (timeMs % cycleMs) / cycleMs;
   if (phase < 0.12) {
-    // Sístole Auricular (Lub)
-    return 1.0 + Math.sin((phase / 0.12) * Math.PI) * 0.22;
+    return 1.0 + Math.sin((phase / 0.12) * Math.PI) * 0.20;
   } else if (phase >= 0.14 && phase < 0.32) {
-    // Sístole Ventricular Principal (Dub)
     const p2 = (phase - 0.14) / 0.18;
-    return 1.0 + Math.sin(p2 * Math.PI) * 0.36;
+    return 1.0 + Math.sin(p2 * Math.PI) * 0.32;
   }
-  // Diástole / Relajación
   return 1.0;
 }
 
 /**
- * Dibuja un icono de corazón vectorial holográfico con animación lub-dub en tiempo real.
+ * Dibuja un icono de corazón vectorial holográfico reactivo.
  */
 function drawHeartGlyph(
   ctx: CanvasRenderingContext2D,
@@ -244,16 +228,14 @@ function drawHeartGlyph(
   ctx.translate(cx, cy);
   ctx.scale(pulseScale, pulseScale);
 
-  // Halo ambiental pulsante detrás del corazón
   if (pulseScale > 1.05) {
-    const auraRad = size * 1.5 * (pulseScale - 1);
+    const auraRad = size * 1.4 * (pulseScale - 1);
     ctx.beginPath();
     ctx.arc(0, 0, auraRad, 0, Math.PI * 2);
-    ctx.fillStyle = glowColor.replace(')', ', 0.25)').replace('rgb', 'rgba');
+    ctx.fillStyle = glowColor.replace(')', ', 0.20)').replace('rgb', 'rgba');
     ctx.fill();
   }
 
-  // Trazado del corazón mediante curvas Bézier cúbicas
   ctx.beginPath();
   const s = size * 0.5;
   ctx.moveTo(0, s * 0.4);
@@ -268,7 +250,6 @@ function drawHeartGlyph(
   ctx.shadowBlur = 8 * pulseScale;
   ctx.fill();
 
-  // Núcleo blanco brillante en pico de contracción
   if (pulseScale > 1.15) {
     ctx.beginPath();
     ctx.arc(0, 0, s * 0.35, 0, Math.PI * 2);
@@ -282,90 +263,7 @@ function drawHeartGlyph(
 }
 
 /**
- * Actualiza y renderiza el sistema de partículas bio-láser (chispas ionizadas).
- */
-export function updateAndDrawParticles(
-  ctx: CanvasRenderingContext2D,
-  state: PpgRenderState,
-  headX?: number,
-  headY?: number,
-  isArr = false,
-  isPeak = false
-): void {
-  if (!state.particles) return;
-  const pool = state.particles;
-  const revealed = state.traceRevealed;
-
-  // 1. Emisión continua de micro-chispas desde el cursor conductor
-  if (revealed && headX !== undefined && headY !== undefined && Math.random() < 0.45) {
-    if (pool.length < 90) {
-      const angle = Math.random() * Math.PI * 2;
-      const spd = 0.4 + Math.random() * 1.2;
-      pool.push({
-        x: headX,
-        y: headY,
-        vx: Math.cos(angle) * spd - 0.8, // leve inercia hacia atrás
-        vy: Math.sin(angle) * spd - 0.3, // leve flotación ascendente
-        life: 1.0,
-        decay: 0.02 + Math.random() * 0.03,
-        color: isArr ? '#f87171' : Math.random() > 0.5 ? '#67e8f9' : '#86efac',
-        glowColor: isArr ? '#ef4444' : '#00f2ff',
-        size: 1.5 + Math.random() * 1.5,
-      });
-    }
-  }
-
-  // 2. Explosión estelar radial al ocurrir un latido sistólico
-  if (revealed && isPeak && headX !== undefined && headY !== undefined) {
-    const burstCount = isArr ? 20 : 16;
-    for (let i = 0; i < burstCount; i++) {
-      if (pool.length >= 120) break;
-      const angle = (i / burstCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
-      const spd = 1.5 + Math.random() * 3.2;
-      pool.push({
-        x: headX,
-        y: headY,
-        vx: Math.cos(angle) * spd,
-        vy: Math.sin(angle) * spd,
-        life: 1.0,
-        decay: 0.018 + Math.random() * 0.025,
-        color: isArr ? '#ffffff' : Math.random() > 0.4 ? '#ffffff' : '#00f2ff',
-        glowColor: isArr ? '#ef4444' : '#22c55e',
-        size: 2.0 + Math.random() * 2.2,
-      });
-    }
-  }
-
-  // 3. Actualización de física y renderizado de partículas activas
-  let activeIdx = 0;
-  for (let i = 0; i < pool.length; i++) {
-    const p = pool[i];
-    p.x += p.vx;
-    p.y += p.vy;
-    p.vx *= 0.95;
-    p.vy *= 0.95;
-    p.vy -= 0.02; // suave empuje de plasma bio-eléctrico
-    p.life -= p.decay;
-
-    if (p.life > 0) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
-      ctx.fillStyle = p.color;
-      ctx.shadowColor = p.glowColor;
-      ctx.shadowBlur = 6 * p.life;
-      ctx.globalAlpha = p.life;
-      ctx.fill();
-      ctx.restore();
-
-      pool[activeIdx++] = p;
-    }
-  }
-  pool.length = activeIdx;
-}
-
-/**
- * Dibuja el fondo de la pantalla con viñeta de profundidad CRT / OLED, respiración biométrica y scanlines.
+ * Dibuja el fondo con viñeta de profundidad CRT/OLED y micro-scanlines sutiles.
  */
 export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: number): void {
   const cx = W / 2;
@@ -378,13 +276,11 @@ export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: numb
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
 
-  // Micro-Scanlines sutiles con modulación de luminancia
   ctx.fillStyle = COLORS.SCANLINE;
   for (let y = 0; y < H; y += 3) {
     ctx.fillRect(0, y, W, 1);
   }
 
-  // Resplandor superior sutil
   const topGlow = ctx.createLinearGradient(0, 0, 0, 120);
   topGlow.addColorStop(0, 'rgba(6, 182, 212, 0.04)');
   topGlow.addColorStop(1, 'rgba(6, 182, 212, 0)');
@@ -393,17 +289,15 @@ export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: numb
 }
 
 /**
- * Dibuja el encabezado de instrumentación médica / telemetría en tiempo real.
+ * Dibuja el encabezado de telemetría médica en tiempo real.
  */
 export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { header } = state.layout;
   const { isFingerDetected: detected, elapsedTime: elapsed, diagnostics } = state.props;
 
-  // Fondo Glassmorphic translúcido
   ctx.fillStyle = 'rgba(6, 14, 28, 0.92)';
   ctx.fillRect(header.x, header.y, header.w, header.h);
   
-  // Línea de acento con brillo sutil
   const borderGrad = ctx.createLinearGradient(0, 0, header.w, 0);
   borderGrad.addColorStop(0, 'rgba(34, 197, 94, 0.2)');
   borderGrad.addColorStop(0.5, 'rgba(6, 182, 212, 0.6)');
@@ -415,7 +309,7 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.lineTo(header.w, header.y + header.h);
   ctx.stroke();
 
-  // 1. Lado Izquierdo: Baliza de Estado del Sensor Óptico con Glow
+  // Baliza de sensor óptico
   ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.textAlign = 'left';
   
@@ -435,7 +329,7 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.fillStyle = detected ? '#4ade80' : COLORS.TEXT_DIM;
   ctx.fillText(detected ? 'SENSOR ÓPTICO ACTIVO' : 'COLOCAR DEDO EN SENSOR', dotX + 12, header.y + 24);
 
-  // 2. Centro: Diagnóstico de Adquisición o Cronómetro de Sesión con cápsula HUD
+  // Cápsula central
   const d = new Date(state.now);
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
@@ -491,7 +385,7 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.fillText(centerText, header.w / 2, header.y + 24);
   }
 
-  // 3. Lado Derecho: Telemetría de FPS / Jitter de captura
+  // Telemetría derecha
   const fpsEff = diag?.sqm?.fpsEffective ?? 30;
   const jitterMs = diag?.sqm?.timestampJitterMs ?? 0;
   ctx.font = `9px ${FONT_MONO}`;
@@ -501,7 +395,7 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 }
 
 /**
- * Dibuja la barra de métricas principales con tarjetas de datos segmentadas, icono cardíaco reactivo y ondas animadas.
+ * Dibuja la barra de métricas principales con tarjetas segmentadas y visualizadores reactivos.
  */
 export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { metrics } = state.layout;
@@ -529,9 +423,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   const dispSys = state.displaySys;
   const dispDia = state.displayDia;
 
-  // ==========================================
   // TARJETA 1: FRECUENCIA CARDÍACA (BPM)
-  // ==========================================
   const card1X = padX;
   const hrColor = dispBpm <= 0 ? COLORS.TEXT_DIM
     : dispBpm < 50 ? COLORS.TEXT_DANGER
@@ -547,7 +439,6 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.strokeStyle = 'rgba(34, 197, 94, 0.25)';
   ctx.stroke();
 
-  // Barra de acento superior luminosa
   const hrAccentGrad = ctx.createLinearGradient(card1X, 0, card1X + colW, 0);
   hrAccentGrad.addColorStop(0, hrColor);
   hrAccentGrad.addColorStop(1, 'rgba(34, 197, 94, 0.1)');
@@ -559,10 +450,8 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.textAlign = 'left';
   ctx.fillText('FRECUENCIA CARDÍACA', card1X + 10, cardY + 18);
 
-  // Escala de contracción lub-dub dinámica
   const pulseScale = getCardiacPulseScale(state.now, dispBpm);
 
-  // Dibujar Icono de Corazón Holográfico Reactivo
   if (dispBpm > 0) {
     drawHeartGlyph(
       ctx,
@@ -575,13 +464,12 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     );
   }
 
-  // Valor numérico con brillo sincrónico
   ctx.save();
   ctx.font = `bold ${colW < 130 ? '42px' : '52px'} ${FONT_MONO}`;
   ctx.fillStyle = hrColor;
   if (dispBpm > 0) {
     ctx.shadowColor = hrColor;
-    ctx.shadowBlur = 8 + (pulseScale - 1.0) * 20;
+    ctx.shadowBlur = 8 + (pulseScale - 1.0) * 18;
   }
   ctx.fillText(dispBpm > 0 ? dispBpm.toString() : '--', card1X + 10, cardY + (colW < 130 ? 56 : 64));
   ctx.restore();
@@ -613,9 +501,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.fillText(`${s.min}-${s.max}`, card1X + colW - 32, cardY + 18);
   }
 
-  // ==========================================
   // TARJETA 2: SATURACIÓN DE OXÍGENO (SpO2)
-  // ==========================================
   const card2X = card1X + colW + gap;
   const spo2Color = dispSpo2 <= 0 ? COLORS.TEXT_DIM
     : dispSpo2 >= 95 ? '#06b6d4'
@@ -639,23 +525,6 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
   ctx.textAlign = 'left';
   ctx.fillText('SATURACIÓN O₂', card2X + 10, cardY + 18);
-
-  // Micro-onda animada de flujo de oxígeno
-  if (dispSpo2 > 0) {
-    ctx.save();
-    ctx.strokeStyle = 'rgba(6, 182, 212, 0.6)';
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    const waveStartX = card2X + colW - 40;
-    const waveY = cardY + 26;
-    for (let wx = 0; wx <= 30; wx += 2) {
-      const wy = waveY + Math.sin((state.now / 180) + wx * 0.2) * 3;
-      if (wx === 0) ctx.moveTo(waveStartX + wx, wy);
-      else ctx.lineTo(waveStartX + wx, wy);
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
 
   ctx.save();
   ctx.font = `bold ${colW < 130 ? '42px' : '52px'} ${FONT_MONO}`;
@@ -691,9 +560,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.fillText(`PI ${(pi * 100).toFixed(2)}%`, card2X + 10, cardY + cardH - 8);
   }
 
-  // ==========================================
   // TARJETA 3: PRESIÓN ARTERIAL (BP)
-  // ==========================================
   const card3X = card2X + colW + gap;
   const sys = dispSys > 0 ? dispSys : pressure?.systolic || 0;
   const dia = dispDia > 0 ? dispDia : pressure?.diastolic || 0;
@@ -765,7 +632,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.fillText(bpLabel, card3X + colW - 8, cardY + cardH - 8);
   }
 
-  // Banner superior con franjas animadas de peligro en arritmia
+  // Alerta de ritmo
   const rhythm = buildRhythmPanel(
     arr,
     arrCnt ?? 0,
@@ -778,7 +645,6 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
       rhythm.level === 'danger' ? 'rgba(185, 28, 28, 0.88)' : 'rgba(180, 83, 9, 0.82)';
     ctx.fillRect(metrics.x + 8, metrics.y + 2, metrics.w - 16, 18);
 
-    // Rayas diagonales animadas de alerta
     const stripeW = 16;
     const stripeOffset = (state.now / 40) % stripeW;
     ctx.strokeStyle = rhythm.level === 'danger' ? 'rgba(254, 202, 202, 0.15)' : 'rgba(253, 230, 138, 0.15)';
@@ -799,12 +665,11 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
 }
 
 /**
- * Dibuja la cuadrícula ECG con respiración lumínica y escáner táctico con retículas móviles.
+ * Dibuja la cuadrícula ECG cyber-clínica de alta precisión en 2D con escáner táctico.
  */
 export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { plot } = state.layout;
 
-  // 1. Respiración biométrica ambiental en el fondo de la cuadrícula
   const pulseScale = getCardiacPulseScale(state.now, state.displayBpm);
   const breathAlpha = state.traceRevealed ? 0.05 + (pulseScale - 1.0) * 0.25 : 0.04;
   
@@ -826,7 +691,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   const minor = pxPerMm;
   const major = pxPerMm * 5;
 
-  // 2. Grilla Menor (1mm)
+  // Grilla Menor
   ctx.strokeStyle = COLORS.GRID_MINOR;
   ctx.lineWidth = 0.5;
   ctx.beginPath();
@@ -840,7 +705,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   }
   ctx.stroke();
 
-  // 3. Grilla Mayor (5mm)
+  // Grilla Mayor
   ctx.strokeStyle = COLORS.GRID_MAJOR;
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -854,7 +719,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   }
   ctx.stroke();
 
-  // 4. Marcadores de Cruces en Intersecciones Mayores (+)
+  // Cruces en intersecciones mayores (+)
   ctx.strokeStyle = COLORS.GRID_CROSS;
   ctx.lineWidth = 0.8;
   const crossSize = 2.5;
@@ -869,7 +734,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   }
   ctx.stroke();
 
-  // 5. Divisiones de Segundo (25mm)
+  // Divisiones de segundo
   const oneSec = 25 * pxPerMm;
   ctx.strokeStyle = COLORS.GRID_SEC;
   ctx.lineWidth = 1.2;
@@ -880,7 +745,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   }
   ctx.stroke();
 
-  // 6. Escáner Láser Táctico Móvil con Retículas Superior e Inferior
+  // Escáner láser táctico
   const scanX = plot.x + ((state.now / 32) % plot.w);
   const scanGrad = ctx.createLinearGradient(scanX - 35, 0, scanX + 35, 0);
   scanGrad.addColorStop(0, 'rgba(6, 182, 212, 0)');
@@ -889,7 +754,6 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.fillStyle = scanGrad;
   ctx.fillRect(scanX - 35, plot.y, 70, plot.h);
 
-  // Línea de rayo láser
   ctx.save();
   ctx.strokeStyle = 'rgba(0, 242, 255, 0.6)';
   ctx.shadowColor = '#00f2ff';
@@ -900,7 +764,6 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.lineTo(scanX, plot.y + plot.h);
   ctx.stroke();
 
-  // Punteros de retícula (▲ y ▼)
   ctx.fillStyle = '#00f2ff';
   ctx.beginPath();
   ctx.moveTo(scanX, plot.y + 6);
@@ -917,7 +780,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.fill();
   ctx.restore();
 
-  // 7. Línea Base Cero con Resplandor y Punteado Láser
+  // Línea Base Cero
   ctx.save();
   ctx.strokeStyle = COLORS.BASELINE;
   ctx.shadowColor = '#22c55e';
@@ -930,7 +793,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.stroke();
   ctx.restore();
 
-  // 8. Borde del Contenedor con Esquinas L-Bracket Holográficas
+  // Borde y esquinas L-bracket
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
   ctx.lineWidth = 1;
   ctx.strokeRect(plot.x, plot.y, plot.w, plot.h);
@@ -939,17 +802,13 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.strokeStyle = '#00f2ff';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  // Top-Left
   ctx.moveTo(plot.x, plot.y + bLen); ctx.lineTo(plot.x, plot.y); ctx.lineTo(plot.x + bLen, plot.y);
-  // Top-Right
   ctx.moveTo(plot.x + plot.w - bLen, plot.y); ctx.lineTo(plot.x + plot.w, plot.y); ctx.lineTo(plot.x + plot.w, plot.y + bLen);
-  // Bottom-Left
   ctx.moveTo(plot.x, plot.y + plot.h - bLen); ctx.lineTo(plot.x, plot.y + plot.h); ctx.lineTo(plot.x + bLen, plot.y + plot.h);
-  // Bottom-Right
   ctx.moveTo(plot.x + plot.w - bLen, plot.y + plot.h); ctx.lineTo(plot.x + plot.w, plot.y + plot.h); ctx.lineTo(plot.x + plot.w, plot.y + plot.h - bLen);
   ctx.stroke();
 
-  // 9. Referencias de Tiempo en el Eje Inferior
+  // Ejes
   const seconds = Math.floor(WINDOW_MS / 1000);
   ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = '#ffffff';
@@ -959,7 +818,6 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
     ctx.fillText(`-${s}s`, x, plot.y + plot.h + 14);
   }
 
-  // 10. Referencias de Amplitud en el Eje Izquierdo
   const stats = state.amplitudeStats;
   ctx.fillStyle = '#ffffff';
   ctx.font = `bold 10px ${FONT_MONO}`;
@@ -970,7 +828,6 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
     ctx.fillText(val.toFixed(0), plot.x - 6, y + 4);
   }
 
-  // 11. Título Superior del Gráfico
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(103, 232, 249, 0.85)';
   ctx.font = `bold 9px ${FONT_MONO}`;
@@ -980,7 +837,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
 }
 
 /**
- * Dibuja el medidor de presión dactilar con visualización de nivel en tiempo real.
+ * Dibuja el medidor de presión dactilar.
  */
 export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const p = state.props;
@@ -1051,8 +908,8 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
 }
 
 /**
- * Dibuja la señal cardíaca con haz de fósforo multicapa, partículas bio-láser,
- * ondas sónicas de choque en cada latido y marcadores fiduciales de precisión.
+ * Dibuja la señal cardíaca con haz de fósforo multicapa (bloom + láser core),
+ * anillos de sonar en cada latido y marcadores fiduciales de instrumentación.
  */
 export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const buffer = state.buffer;
@@ -1063,11 +920,9 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   if (p.preserveResults && !p.isFingerDetected) return;
   if (p.isPeak) state.sweepPulse = 1;
 
-  let isNewPeakEvent = false;
   if (p.isPeak) {
     const peakAge = state.now - state.lastPeakProcessedTime;
     if (peakAge > CARDIAC_WAVE_CONFIG.PEAK_DEBOUNCE_MS) {
-      isNewPeakEvent = true;
       state.lastPeakProcessedTime = state.now;
       const currentCount = p.arrhythmiaCount || 0;
       const rrArr = p.rrIntervals;
@@ -1230,7 +1085,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     }
 
     if (state.traceRevealed) {
-      // Capa 2: Halo de Emisión Difusa (Bloom Atmosférico)
+      // Capa 2: Halo de Emisión Difusa (Bloom)
       ctx.shadowColor = COLORS.SIGNAL_GLOW;
       ctx.shadowBlur = CARDIAC_WAVE_CONFIG.SHADOW_BLUR_BASE;
       seg = Math.max(recentCut, 0);
@@ -1245,7 +1100,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
         seg = segEnd;
       }
 
-      // Capa 3: Núcleo Láser Ultra-Brillante en la Cabeza Conductora (Electric Beam Core)
+      // Capa 3: Núcleo Láser Ultra-Brillante
       ctx.shadowBlur = CARDIAC_WAVE_CONFIG.SHADOW_BLUR_LEADING;
       seg = Math.max(leadingCut, 0);
       while (seg < totalLen - 1) {
@@ -1436,19 +1291,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     }
   } // ── fin MODO 2D ──
 
-  // 6. Actualización y Renderizado de Chispas del Sistema de Partículas
-  if (headCoord) {
-    updateAndDrawParticles(
-      ctx,
-      state,
-      headCoord.x,
-      headCoord.y,
-      headCoord.isArr,
-      isNewPeakEvent
-    );
-  }
-
-  // 7. Tacograma RR (IBI)
+  // Tacograma RR
   const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
   ctx.fillStyle = 'rgba(6, 14, 28, 0.90)';
   ctx.fillRect(plot.x + 2, tachoY - 4, plot.w - 4, RR_TACHO_H);
@@ -1460,7 +1303,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.textAlign = 'left';
   ctx.fillText('TACHOGRAMA RR (IBI)', plot.x + 8, tachoY + 8);
 
-  // 8. Panel de Ritmo Clínico Holográfico
+  // Panel de Ritmo
   const rhythm = buildRhythmPanel(p.arrhythmiaStatus, p.arrhythmiaCount ?? 0, p.rrIntervals ?? [], state.hrv);
   const panelH = 56;
   const panelY = plot.y + 8;
@@ -1482,7 +1325,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.fillStyle = '#94a3b8';
   ctx.fillText(rhythm.guidance, plot.x + 16, panelY + 44);
 
-  // Baliza de Grabación (REC)
+  // Baliza de Grabación
   if (p.isMonitoring) {
     ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
     ctx.shadowColor = '#ef4444';
@@ -1511,7 +1354,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 }
 
 /**
- * Dibuja la barra de progreso holográfica durante la fase de adquisición / estabilización.
+ * Dibuja la barra de progreso de adquisición / estabilización.
  */
 export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const p = state.props;
@@ -1546,7 +1389,7 @@ export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: Ppg
 }
 
 /**
- * Dibuja la tira de tendencia histórica de 60s con área sombreada, zona de normalidad y punto spark.
+ * Dibuja la tira de tendencia histórica de 60s.
  */
 export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { trend } = state.layout;
@@ -1769,7 +1612,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
 }
 
 /**
- * Dibuja el pie de página con métricas avanzadas de HRV, alarmas y tira de latidos recientes.
+ * Dibuja el pie de página con métricas avanzadas de HRV y alarmas.
  */
 export function drawFooter(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { footer } = state.layout;
