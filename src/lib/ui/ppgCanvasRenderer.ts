@@ -1371,8 +1371,9 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 }
 
 /**
- * Dibuja la lente óptica biométrica de cristal transparente con el video en vivo del dedo.
- * Posición PERMANENTE Y FIJA en el tercio superior central (sin saltos de ubicación nunca).
+ * Dibuja la lente óptica biométrica de cristal zafiro transparente con el video en vivo del dedo.
+ * Posición PERMANENTE Y FIJA en cy = plot.y + 58 (nunca cambia de ubicación).
+ * Tratamiento de transparencia sofisticada de grado biomédico y clínico.
  */
 export function drawLiveFingerOpticalLens(
   ctx: CanvasRenderingContext2D,
@@ -1386,19 +1387,19 @@ export function drawLiveFingerOpticalLens(
   const isDetected = p.isFingerDetected;
   const diag = p.diagnostics;
   const progress = Math.max(0, Math.min(1, diag?.acquisitionProgress ?? 0));
-  const innerRad = radius * 0.82;
+  const innerRad = radius * 0.84;
 
-  // 1. Halo vascular bioluminiscente exterior reactivo al latido fisiológico
+  // 1. Halo vascular acústico exterior reactivo al pulso cardíaco fisiológico
   const pulse = Math.max(state.sweepPulse, 0.04);
-  const auraRad = radius * (1.25 + pulse * 0.35);
-  const aura = ctx.createRadialGradient(cx, cy, 4, cx, cy, auraRad);
+  const auraRad = radius * (1.20 + pulse * 0.30);
+  const aura = ctx.createRadialGradient(cx, cy, 3, cx, cy, auraRad);
   if (isDetected) {
-    aura.addColorStop(0, `rgba(6, 182, 212, ${0.22 + pulse * 0.30})`);
-    aura.addColorStop(0.55, `rgba(34, 197, 94, ${0.10 + pulse * 0.15})`);
+    aura.addColorStop(0, `rgba(6, 182, 212, ${0.16 + pulse * 0.22})`);
+    aura.addColorStop(0.55, `rgba(34, 197, 94, ${0.08 + pulse * 0.12})`);
     aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
   } else {
-    aura.addColorStop(0, 'rgba(245, 158, 11, 0.22)');
-    aura.addColorStop(0.55, 'rgba(245, 158, 11, 0.06)');
+    aura.addColorStop(0, 'rgba(245, 158, 11, 0.18)');
+    aura.addColorStop(0.55, 'rgba(245, 158, 11, 0.05)');
     aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
   }
   ctx.fillStyle = aura;
@@ -1406,7 +1407,7 @@ export function drawLiveFingerOpticalLens(
   ctx.arc(cx, cy, auraRad, 0, Math.PI * 2);
   ctx.fill();
 
-  // 2. Video en vivo del dedo dentro de la lente (Clip circular)
+  // 2. Transmisión de la cámara en vivo dentro de la lente de zafiro (Clip circular)
   const source = typeof p.getVideoElement === 'function' ? p.getVideoElement() : null;
   let hasValidFrame = false;
   let sw = 0;
@@ -1432,11 +1433,11 @@ export function drawLiveFingerOpticalLens(
   ctx.clip();
 
   if (hasValidFrame && source) {
-    const size = Math.min(sw, sh);
+    const size = Math.min(sw, sw > 0 ? sh : sw);
     const sx = (sw - size) / 2;
     const sy = (sh - size) / 2;
 
-    // Proyecta el feed de la cámara mostrando el dedo en tiempo real
+    // Dibuja el feed de la cámara mostrando el dedo iluminado en tiempo real
     ctx.drawImage(
       source,
       sx,
@@ -1449,43 +1450,43 @@ export function drawLiveFingerOpticalLens(
       innerRad * 2
     );
   } else {
-    // Textura óptica espacial mientras inicia el stream
-    ctx.fillStyle = '#06101e';
+    // Fondo de textura óptica espacial oscura mientras se inicializa el hardware
+    ctx.fillStyle = '#040c18';
     ctx.fillRect(cx - innerRad, cy - innerRad, innerRad * 2, innerRad * 2);
   }
 
-  // Capa de cristal antirreflectante con viñeta radial (Lente biométrica)
-  const lensGrad = ctx.createRadialGradient(cx, cy, innerRad * 0.10, cx, cy, innerRad);
-  lensGrad.addColorStop(0, 'rgba(6, 182, 212, 0.03)');
-  lensGrad.addColorStop(0.60, 'rgba(34, 197, 94, 0.10)');
-  lensGrad.addColorStop(0.88, 'rgba(6, 182, 212, 0.22)');
-  lensGrad.addColorStop(1, 'rgba(2, 6, 14, 0.65)');
+  // Capa de cristal zafiro antirreflectante con viñeta radial suave de grado clínico
+  const lensGrad = ctx.createRadialGradient(cx, cy, innerRad * 0.08, cx, cy, innerRad);
+  lensGrad.addColorStop(0, 'rgba(4, 12, 24, 0.20)');
+  lensGrad.addColorStop(0.65, 'rgba(2, 8, 18, 0.35)');
+  lensGrad.addColorStop(0.90, 'rgba(2, 6, 14, 0.55)');
+  lensGrad.addColorStop(1, 'rgba(1, 4, 10, 0.72)');
   ctx.fillStyle = lensGrad;
   ctx.fillRect(cx - innerRad, cy - innerRad, innerRad * 2, innerRad * 2);
 
-  // Micro-scanlines de alta definición
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
-  for (let ly = cy - innerRad; ly <= cy + innerRad; ly += 3) {
+  // Micro-scanlines de instrumentación de alta resolución
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
+  for (let ly = cy - innerRad; ly <= cy + innerRad; ly += 2.5) {
     ctx.fillRect(cx - innerRad, ly, innerRad * 2, 1);
   }
 
-  // Reflejo especular superior curvado (Efecto cristal de lente)
+  // Menisco de cristal físico: reflejos especulares curvados superior e inferior
   ctx.beginPath();
-  ctx.arc(cx, cy, innerRad * 0.88, -Math.PI * 0.78, -Math.PI * 0.22);
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
-  ctx.lineWidth = 1.6;
+  ctx.arc(cx, cy, innerRad * 0.90, -Math.PI * 0.75, -Math.PI * 0.25);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.38)';
+  ctx.lineWidth = 1.2;
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.arc(cx, cy, innerRad * 0.88, Math.PI * 0.35, Math.PI * 0.65);
-  ctx.strokeStyle = 'rgba(103, 232, 249, 0.22)';
-  ctx.lineWidth = 1.0;
+  ctx.arc(cx, cy, innerRad * 0.90, Math.PI * 0.35, Math.PI * 0.65);
+  ctx.strokeStyle = 'rgba(103, 232, 249, 0.18)';
+  ctx.lineWidth = 0.8;
   ctx.stroke();
 
-  // Retícula táctica de alineación central (+)
-  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.55)' : 'rgba(245, 158, 11, 0.60)';
-  ctx.lineWidth = 1.0;
-  const crossLen = 6;
+  // Retícula micrométrica de precisión médica (+)
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.45)' : 'rgba(245, 158, 11, 0.50)';
+  ctx.lineWidth = 0.8;
+  const crossLen = 5;
   const crossGap = 3;
   ctx.beginPath();
   ctx.moveTo(cx - crossLen - crossGap, cy); ctx.lineTo(cx - crossGap, cy);
@@ -1495,29 +1496,36 @@ export function drawLiveFingerOpticalLens(
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.arc(cx, cy, 2, 0, Math.PI * 2);
-  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.75)' : 'rgba(245, 158, 11, 0.75)';
+  ctx.arc(cx, cy, 1.8, 0, Math.PI * 2);
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.65)' : 'rgba(245, 158, 11, 0.65)';
   ctx.stroke();
 
-  // Escáner láser vertical continuo sobre el dedo
-  const scanOffset = Math.sin(state.now * 0.0035) * (innerRad * 0.75);
-  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.85)' : 'rgba(245, 158, 11, 0.75)';
+  // Escáner láser vertical continuo de barrido sereno
+  const scanOffset = Math.sin(state.now * 0.0028) * (innerRad * 0.72);
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.70)' : 'rgba(245, 158, 11, 0.60)';
   ctx.shadowColor = isDetected ? '#00f2ff' : '#f59e0b';
-  ctx.shadowBlur = 6;
-  ctx.lineWidth = 1.2;
+  ctx.shadowBlur = 4;
+  ctx.lineWidth = 1.0;
   ctx.beginPath();
-  ctx.moveTo(cx - innerRad * 0.80, cy + scanOffset);
-  ctx.lineTo(cx + innerRad * 0.80, cy + scanOffset);
+  ctx.moveTo(cx - innerRad * 0.75, cy + scanOffset);
+  ctx.lineTo(cx + innerRad * 0.75, cy + scanOffset);
   ctx.stroke();
   ctx.shadowBlur = 0;
 
-  ctx.restore(); // Fin del clip circular de video
+  ctx.restore(); // Fin del clip circular
 
-  // 3. Elementos HUD exteriores anclados a la posición fija
+  // 3. Bisel quirúrgico y elementos HUD exteriores
+  // Doble anillo concéntrico de titanio / acero quirúrgico
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+  ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  ctx.arc(cx, cy, innerRad + 1, 0, Math.PI * 2);
+  ctx.stroke();
+
   if (mode === 'CALIBRATION') {
     // Anillo exterior de progreso
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.10)';
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
     ctx.stroke();
@@ -1526,58 +1534,58 @@ export function drawLiveFingerOpticalLens(
       const progAngle = progress * Math.PI * 2;
       ctx.strokeStyle = '#00f2ff';
       ctx.shadowColor = '#00f2ff';
-      ctx.shadowBlur = 8;
+      ctx.shadowBlur = 6;
       ctx.beginPath();
       ctx.arc(cx, cy, radius, -Math.PI / 2, -Math.PI / 2 + progAngle);
       ctx.stroke();
       ctx.shadowBlur = 0;
     } else {
       const waitPulse = 0.5 + Math.sin(state.now * 0.005) * 0.5;
-      ctx.strokeStyle = `rgba(245, 158, 11, ${0.4 + waitPulse * 0.5})`;
+      ctx.strokeStyle = `rgba(245, 158, 11, ${0.35 + waitPulse * 0.45})`;
       ctx.shadowColor = '#f59e0b';
-      ctx.shadowBlur = 6 * waitPulse;
+      ctx.shadowBlur = 5 * waitPulse;
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.stroke();
       ctx.shadowBlur = 0;
     }
 
-    // Retícula circular giratoria táctica
+    // Micro-marcas giratorias discretas
     ctx.save();
     ctx.translate(cx, cy);
-    const rot = (state.now * 0.0012) % (Math.PI * 2);
+    const rot = (state.now * 0.0010) % (Math.PI * 2);
     ctx.rotate(rot);
-    ctx.strokeStyle = isDetected ? 'rgba(103, 232, 249, 0.45)' : 'rgba(245, 158, 11, 0.45)';
+    ctx.strokeStyle = isDetected ? 'rgba(103, 232, 249, 0.40)' : 'rgba(245, 158, 11, 0.40)';
     ctx.lineWidth = 0.8;
-    for (let a = 0; a < Math.PI * 2; a += Math.PI / 8) {
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
       const isQuarter = a % (Math.PI / 2) === 0;
-      const tickLen = isQuarter ? 5 : 3;
+      const tickLen = isQuarter ? 4 : 2;
       const cos = Math.cos(a);
       const sin = Math.sin(a);
       ctx.beginPath();
-      ctx.moveTo(cos * (innerRad + 1), sin * (innerRad + 1));
-      ctx.lineTo(cos * (innerRad + 1 + tickLen), sin * (innerRad + 1 + tickLen));
+      ctx.moveTo(cos * (innerRad + 2), sin * (innerRad + 2));
+      ctx.lineTo(cos * (innerRad + 2 + tickLen), sin * (innerRad + 2 + tickLen));
       ctx.stroke();
     }
     ctx.restore();
 
-    // Badge de progreso / estado debajo del círculo fijo
-    const pctBadgeW = 50;
-    const pctBadgeH = 15;
+    // Badge de porcentaje / estado debajo del círculo fijo
+    const pctBadgeW = 48;
+    const pctBadgeH = 14;
     const pctBadgeY = cy + radius + 4;
     ctx.fillStyle = 'rgba(6, 14, 28, 0.85)';
     ctx.beginPath();
-    ctx.roundRect(cx - pctBadgeW / 2, pctBadgeY, pctBadgeW, pctBadgeH, 7);
+    ctx.roundRect(cx - pctBadgeW / 2, pctBadgeY, pctBadgeW, pctBadgeH, 6);
     ctx.fill();
-    ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.40)' : 'rgba(245, 158, 11, 0.40)';
+    ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.35)' : 'rgba(245, 158, 11, 0.35)';
     ctx.stroke();
 
-    ctx.font = `bold 8.5px ${FONT_MONO}`;
+    ctx.font = `bold 8px ${FONT_MONO}`;
     ctx.fillStyle = isDetected ? '#00f2ff' : '#f59e0b';
     ctx.textAlign = 'center';
-    ctx.fillText(isDetected ? `${Math.round(progress * 100)}%` : 'EN ESPERA', cx, pctBadgeY + 11);
+    ctx.fillText(isDetected ? `${Math.round(progress * 100)}%` : 'EN ESPERA', cx, pctBadgeY + 10);
 
-    // Mensaje de telemetría inferior
+    // Mensaje clínico inferior
     let msgText = 'COLOCAR DEDO EN CÁMARA';
     let msgColor = '#f59e0b';
     let icon = '👆';
@@ -1595,68 +1603,67 @@ export function drawLiveFingerOpticalLens(
     }
 
     const { plot } = state.layout;
-    const badgeW = Math.min(200, plot.w - 20);
-    const badgeH = 18;
-    const badgeY = pctBadgeY + pctBadgeH + 4;
+    const badgeW = Math.min(190, plot.w - 20);
+    const badgeH = 17;
+    const badgeY = pctBadgeY + pctBadgeH + 3;
     ctx.fillStyle = 'rgba(10, 20, 36, 0.90)';
     ctx.beginPath();
-    ctx.roundRect(cx - badgeW / 2, badgeY, badgeW, badgeH, 9);
+    ctx.roundRect(cx - badgeW / 2, badgeY, badgeW, badgeH, 8);
     ctx.fill();
-    ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.35)' : 'rgba(245, 158, 11, 0.45)';
+    ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.30)' : 'rgba(245, 158, 11, 0.40)';
     ctx.stroke();
 
-    ctx.font = `bold 8px ${FONT_MONO}`;
+    ctx.font = `bold 7.5px ${FONT_MONO}`;
     ctx.fillStyle = msgColor;
     ctx.textAlign = 'center';
-    ctx.fillText(`${icon} ${msgText}`, cx, badgeY + 12);
+    ctx.fillText(`${icon} ${msgText}`, cx, badgeY + 11.5);
   } else {
     // ── MODO LIVE MONITORING (Durante toda la medición continua) ──
-    // Anillo exterior con resplandor en latido
     ctx.save();
     ctx.beginPath();
     ctx.arc(cx, cy, innerRad + 2, 0, Math.PI * 2);
-    ctx.strokeStyle = isDetected ? `rgba(0, 242, 255, ${0.45 + pulse * 0.45})` : 'rgba(245, 158, 11, 0.50)';
-    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = isDetected ? `rgba(0, 242, 255, ${0.40 + pulse * 0.40})` : 'rgba(245, 158, 11, 0.45)';
+    ctx.lineWidth = 1.1;
     if (isDetected && pulse > 0.08) {
       ctx.shadowColor = '#00f2ff';
-      ctx.shadowBlur = 6 * pulse;
+      ctx.shadowBlur = 5 * pulse;
     }
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    // Micro-marcas giratorias de radar
+    // Micro-marcas discretas de radar
     ctx.translate(cx, cy);
-    const rot = (state.now * 0.0010) % (Math.PI * 2);
+    const rot = (state.now * 0.0008) % (Math.PI * 2);
     ctx.rotate(rot);
-    ctx.strokeStyle = 'rgba(103, 232, 249, 0.35)';
-    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = 'rgba(103, 232, 249, 0.30)';
+    ctx.lineWidth = 0.7;
     for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) {
       const cos = Math.cos(a);
       const sin = Math.sin(a);
       ctx.beginPath();
       ctx.moveTo(cos * (innerRad + 2), sin * (innerRad + 2));
-      ctx.lineTo(cos * (innerRad + 5), sin * (innerRad + 5));
+      ctx.lineTo(cos * (innerRad + 4.5), sin * (innerRad + 4.5));
       ctx.stroke();
     }
     ctx.restore();
 
-    // Badge inferior compacto fijo
-    const liveBadgeW = 74;
+    // Badge inferior compacto y sobrio
+    const liveBadgeW = 76;
     const liveBadgeH = 13;
-    const liveBadgeY = cy + innerRad + 3;
+    const liveBadgeY = cy + innerRad + 4;
     ctx.fillStyle = 'rgba(6, 14, 28, 0.85)';
     ctx.beginPath();
-    ctx.roundRect(cx - liveBadgeW / 2, liveBadgeY, liveBadgeW, liveBadgeH, 6.5);
+    ctx.roundRect(cx - liveBadgeW / 2, liveBadgeY, liveBadgeW, liveBadgeH, 6);
     ctx.fill();
-    ctx.strokeStyle = isDetected ? 'rgba(34, 197, 94, 0.40)' : 'rgba(245, 158, 11, 0.40)';
+    ctx.strokeStyle = isDetected ? 'rgba(34, 197, 94, 0.35)' : 'rgba(245, 158, 11, 0.35)';
     ctx.stroke();
 
     ctx.beginPath();
-    ctx.arc(cx - liveBadgeW / 2 + 7, liveBadgeY + 6.5, 2.2, 0, Math.PI * 2);
+    ctx.arc(cx - liveBadgeW / 2 + 7, liveBadgeY + 6.5, 2.0, 0, Math.PI * 2);
     ctx.fillStyle = isDetected ? '#22c55e' : '#f59e0b';
     if (isDetected) {
       ctx.shadowColor = '#22c55e';
-      ctx.shadowBlur = 4;
+      ctx.shadowBlur = 3;
     }
     ctx.fill();
     ctx.shadowBlur = 0;
@@ -1672,7 +1679,7 @@ export function drawLiveFingerOpticalLens(
  * Dibuja la animación holográfica de la lente óptica en su UBICACIÓN FIJA PERMANENTE:
  *   - En fase de inicio / calibración: Muestra el dedo en vivo con progreso y telemetría.
  *   - Durante toda la medición activa: Mantiene el dedo en vivo con pulso vascular en sístole.
- *   - NUNCA CAMBIA DE UBICACIÓN (Anclado exactamente en plot.y + 44).
+ *   - NUNCA CAMBIA DE UBICACIÓN (Anclado exactamente en cy = plot.y + 58).
  */
 export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const p = state.props;
@@ -1685,10 +1692,10 @@ export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: Ppg
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
-  // UBICACIÓN FIJA PERMANENTE: Exactamente en el mismo lugar en todas las fases
+  // UBICACIÓN FIJA PERMANENTE: Bajado armónicamente a cy = plot.y + 58
   const cx = plot.x + plot.w / 2;
-  const cy = plot.y + 44;
-  const radius = Math.min(42, Math.max(34, Math.floor(plot.h * 0.14)));
+  const cy = plot.y + 58;
+  const radius = Math.min(46, Math.max(38, Math.floor(plot.h * 0.15)));
 
   drawLiveFingerOpticalLens(
     ctx,
