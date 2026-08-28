@@ -890,20 +890,20 @@ function drawUnifiedTelemetryCapsule(ctx: CanvasRenderingContext2D, state: PpgRe
   ctx.fillStyle = '#94a3b8';
   ctx.fillText(contactText, capsuleX + capsuleW - 10, capsuleY + 33);
 
-  // Fila 3: Medidor de Presión Dactilar integrado
+  // Fila 3: Medidor de Apoyo Dactilar (Contacto sobre la lente)
   const diag = p.diagnostics;
   const pressure = diag?.fingerPressure || 'IDEAL';
   let targetPct = 0.5;
   let pColor = COLORS.SIGNAL;
-  let pLabel = 'PRESIÓN: IDEAL';
+  let pLabel = 'APOYO DACTILAR: IDEAL';
   if (pressure === 'LIGHT') {
     targetPct = 0.2;
     pColor = COLORS.TEXT_WARN;
-    pLabel = 'PRESIÓN: SUAVE';
+    pLabel = 'APOYO DACTILAR: SUAVE';
   } else if (pressure === 'HEAVY') {
     targetPct = 0.8;
     pColor = COLORS.TEXT_DANGER;
-    pLabel = 'PRESIÓN: FUERTE';
+    pLabel = 'APOYO DACTILAR: FUERTE';
   }
 
   ctx.textAlign = 'left';

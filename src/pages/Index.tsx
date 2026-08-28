@@ -486,14 +486,19 @@ const Index = () => {
       
       const lastBP = lastValidResults?.bloodPressure.value;
       if (lastBP) {
-        const sbpOffset = sysVal - lastBP.systolic;
-        const dbpOffset = diaVal - lastBP.diastolic;
+        const activeBp = calib.getActiveProfile('BP');
+        const prevSbpOff = activeBp?.coefficients?.sbpOffset ?? activeBp?.coefficients?.systolicOffset ?? 0;
+        const prevDbpOff = activeBp?.coefficients?.dbpOffset ?? activeBp?.coefficients?.diastolicOffset ?? 0;
+        const rawSys = lastBP.systolic - prevSbpOff;
+        const rawDia = lastBP.diastolic - prevDbpOff;
+        const sbpOffset = sysVal - rawSys;
+        const dbpOffset = diaVal - rawDia;
         
         calib.addProfile({
           id: `bp_${Date.now()}`,
           type: 'BP',
           deviceId: 'camera_ppg',
-          modelName: 'PWA Engine v4',
+          modelName: 'Bio-PWA 2026 Engine',
           coefficients: { sbpOffset, dbpOffset },
           referenceValues: { systolic: sysVal, diastolic: diaVal },
           createdAt: Date.now(),
@@ -512,7 +517,10 @@ const Index = () => {
 
       const lastSpo2 = lastValidResults?.spo2.value;
       if (lastSpo2) {
-        const spo2Offset = spo2Val - lastSpo2;
+        const activeSpo2 = calib.getActiveProfile('SPO2');
+        const prevSpo2Off = activeSpo2?.coefficients?.spo2Offset ?? 0;
+        const rawSpo2 = lastSpo2 - prevSpo2Off;
+        const spo2Offset = spo2Val - rawSpo2;
         
         calib.addProfile({
           id: `spo2_${Date.now()}`,
@@ -535,38 +543,39 @@ const Index = () => {
       setRefDia("");
       setRefSpo2("");
       
-      // Forzar renderizado y recargar los valores en pantalla
+      // Forzar renderizado y recargar los valores en pantalla y en lastValidResults
       if (lastValidResults) {
-        const updatedBP = calib.applyBloodPressureCalibration(
-          lastValidResults.bloodPressure.value?.systolic ?? 120,
-          lastValidResults.bloodPressure.value?.diastolic ?? 80
-        );
-        const activeSpo2 = calib.getActiveProfile('SPO2');
-        const spo2Off = activeSpo2 ? (activeSpo2.coefficients.spo2Offset ?? 0) : 0;
-        const updatedSpo2 = lastValidResults.spo2.value 
-          ? Math.min(99, Math.max(88, lastValidResults.spo2.value + spo2Off))
-          : 98;
+        const updatedBP = sysVal && diaVal
+          ? { systolic: sysVal, diastolic: diaVal }
+          : (lastValidResults.bloodPressure.value ?? { systolic: 120, diastolic: 80 });
           
-        router.setVitalSigns((prev) => ({
-          ...prev,
+        const updatedSpo2 = spo2Val
+          ? spo2Val
+          : (lastValidResults.spo2.value ?? 98);
+          
+        const newVitals: VitalSignsResult = {
+          ...lastValidResults,
           bloodPressure: {
-            ...prev.bloodPressure,
-            value: { systolic: updatedBP.systolic, diastolic: updatedBP.diastolic },
+            ...lastValidResults.bloodPressure,
+            value: updatedBP,
             status: 'VALID',
             calibration: calib.getCalibrationInfo('BP')
           },
           spo2: {
-            ...prev.spo2,
+            ...lastValidResults.spo2,
             value: updatedSpo2,
             status: 'VALID',
             calibration: calib.getCalibrationInfo('SPO2')
           }
-        }));
+        };
+
+        setLastValidResults(newVitals);
+        router.setVitalSigns(newVitals);
       }
     } else {
       alert("Introduce valores de referencia para calibrar.");
     }
-  }, [refSys, refDia, refSpo2, lastValidResults, router]);
+  }, [refSys, refDia, refSpo2, lastValidResults, router, setLastValidResults]);
 
   usePerfTelemetry({
     enabled: false,

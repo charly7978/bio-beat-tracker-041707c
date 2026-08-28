@@ -16,7 +16,7 @@
  *      - Ratios a, b, c, d, e, b/a (compliancia), d/a (resistencia) y Aging Index (AGI).
  *   4) Fusión Adaptativa Ponderada por Calidad (Quality-Weighted Bayesian Fusion):
  *      - Combinación óptima entre el modelo físico Windkessel y el regresor neuronal profundo.
- *      - Estratificación antropométrica (Edad, Sexo, Altura, BMI) y calibración clínica.
+ *      - Estratificación antropométrica (Edad, Sexo, Altura, BMI) y calibración clínica determinista.
  */
 
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
@@ -300,29 +300,14 @@ export function estimatePhysiologicalBp(
   ];
 
   const mlp = runMlpBpModel(normInputs);
-  let sbpMlp = mlp.sbp;
-  let dbpMlp = mlp.dbp;
-
-  // Calibración activa sobre el MLP si existe perfil clínico
-  if (calibrationOffsets) {
-    const sbpGain = 1.0 + (calibrationOffsets.sbpOffset / 120.0);
-    const dbpGain = 1.0 + (calibrationOffsets.dbpOffset / 80.0);
-    sbpMlp *= sbpGain;
-    dbpMlp *= dbpGain;
-  }
+  const sbpMlp = mlp.sbp;
+  const dbpMlp = mlp.dbp;
 
   // ── PASO 2: Modelo Hemodinámico Físico No Lineal (Windkessel-PDA) ──
   const indices = computePhysiologicalIndices(f, ctx, profile);
-  let resistanceIndex = indices.resistanceIndex;
-  let complianceIndex = indices.complianceIndex;
+  const resistanceIndex = indices.resistanceIndex;
+  const complianceIndex = indices.complianceIndex;
   const reflectionIndex = indices.reflectionIndex;
-
-  if (calibrationOffsets) {
-    const rAdjust = calibrationOffsets.sbpOffset * 0.0015;
-    const cAdjust = -calibrationOffsets.dbpOffset * 0.0025;
-    resistanceIndex = clamp(resistanceIndex + rAdjust, 0, 1);
-    complianceIndex = clamp(complianceIndex + cAdjust, 0.05, 1);
-  }
 
   const mapPhys = VITAL_THRESHOLDS.BP.MAP_MIN + resistanceIndex * (VITAL_THRESHOLDS.BP.MAP_MAX - VITAL_THRESHOLDS.BP.MAP_MIN);
   const ppPhys = VITAL_THRESHOLDS.BP.PP_MIN +
@@ -348,7 +333,13 @@ export function estimatePhysiologicalBp(
     dbp *= genderFactorDbp;
   }
 
-  // ── PASO 4: Enforzamiento de Coherencia Hemodinámica Fisiológica ──
+  // ── PASO 4: Aplicación Limpia y Directa de Offsets de Calibración Médica ──
+  if (calibrationOffsets) {
+    sbp += (calibrationOffsets.sbpOffset ?? 0);
+    dbp += (calibrationOffsets.dbpOffset ?? 0);
+  }
+
+  // ── PASO 5: Enforzamiento de Coherencia Hemodinámica Fisiológica ──
   const coherent = enforceHemodynamicCoherence(sbp, dbp);
   sbp = coherent.sbp;
   dbp = coherent.dbp;

@@ -690,14 +690,8 @@ export class VitalSignsProcessor {
       this.lastBPFeatureQuality = bpEstimate.featureQuality;
 
       if (bpEstimate.systolic > 0 && bpEstimate.confidence !== 'INSUFFICIENT') {
-        const calib = CalibrationManager.getInstance();
-        const adjusted = calib.applyBloodPressureCalibration(
-          bpEstimate.systolic,
-          bpEstimate.diastolic,
-        );
-
-        const finalSys = adjusted.systolic;
-        const finalDia = adjusted.diastolic;
+        const finalSys = bpEstimate.systolic;
+        const finalDia = bpEstimate.diastolic;
 
         const bpCfg = VITAL_THRESHOLDS.BP;
         const bpReady =
