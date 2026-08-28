@@ -1686,6 +1686,7 @@ export function drawLiveFingerOpticalLens(
 export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const p = state.props;
   if (p.preserveResults) return;
+  if (state.threeD?.enabled) return; // En modo 3D se renderiza directamente acostada en el piso dentro de drawGrid3D
 
   const { plot } = state.layout;
 

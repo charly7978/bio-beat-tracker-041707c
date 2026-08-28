@@ -162,7 +162,10 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.stroke();
   ctx.shadowBlur = 0;
 
-  // 4. Parámetros de la grilla ensanchada
+  // 4. Lente óptica biométrica ACOSTADA EN EL PISO EN PERSPECTIVA 3D (Detrás de las líneas de la grilla)
+  drawFloorOpticalLens3D(ctx, state, proj);
+
+  // 5. Parámetros de la grilla ensanchada
   const TARGET_COLS = 19;
   const WIDE_FACTOR = 1.45;
   const cellPx = (proj.plotW * WIDE_FACTOR) / TARGET_COLS;
@@ -174,7 +177,7 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   const travelSpeed = 0.00022;
   const zOffset = (state.now * travelSpeed) % dZ;
 
-  // 5. Filas de profundidad (Z constante) con desvanecimiento smoothstep en los extremos
+  // 6. Filas de profundidad (Z constante) con desvanecimiento smoothstep en los extremos
   for (let z = proj.zNear + (dZ - zOffset); z <= proj.zFar + dZ; z += dZ) {
     if (z < proj.zNear || z > proj.zFar) continue;
     const a = proj.floorPoint(-halfX, z);
@@ -293,6 +296,243 @@ function drawGridReferences3D(
     const p = proj.floorPoint(xWorld, proj.zNear);
     ctx.fillText(`-${sBack}s`, p.x, proj.nearY + 14);
   }
+}
+
+/**
+ * Dibuja la lente óptica biométrica ACOSTADA EN EL PISO EN PERSPECTIVA 3D.
+ * Se ubica en el plano de suelo (h = 0) a profundidad Z_center = 2.45,
+ * proyectando el video en vivo del dedo sobre el suelo en perspectiva 3D,
+ * con transparencia sofisticada de zafiro, retícula táctica y anillos concéntricos en perspectiva.
+ * Se renderiza DETRÁS de la grilla 3D y DETRÁS de la onda cardíaca.
+ */
+export function drawFloorOpticalLens3D(
+  ctx: CanvasRenderingContext2D,
+  state: PpgRenderState,
+  proj: Projector
+): void {
+  const p = state.props;
+  if (p.preserveResults) return;
+
+  const isDetected = p.isFingerDetected;
+  const diag = p.diagnostics;
+  const progress = Math.max(0, Math.min(1, diag?.acquisitionProgress ?? 0));
+
+  // Coordenadas en perspectiva de suelo 3D
+  const centerZ = 2.45;
+  const cPoint = proj.floorPoint(0, centerZ);
+  const cx = cPoint.x; // Punto central X en perspectiva (vpX)
+  const cy = cPoint.y; // Punto central Y en el plano de suelo
+
+  const worldRadius = proj.plotW * 0.32;
+  const rx = worldRadius * cPoint.scale; // Radio horizontal en pantalla
+  const tiltRatio = 0.30; // Relación de inclinación elíptica en perspectiva de suelo
+  const ry = Math.max(14, rx * tiltRatio); // Radio vertical en pantalla
+  const innerRx = rx * 0.86;
+  const innerRy = ry * 0.86;
+
+  // 1. Halo acústico vascular bioluminiscente en el piso (Elipse 3D reactiva al latido)
+  const pulse = Math.max(state.sweepPulse, 0.04);
+  const auraRx = rx * (1.22 + pulse * 0.32);
+  const auraRy = ry * (1.22 + pulse * 0.32);
+  const aura = ctx.createRadialGradient(cx, cy, 3, cx, cy, auraRx);
+  if (isDetected) {
+    aura.addColorStop(0, `rgba(6, 182, 212, ${0.20 + pulse * 0.25})`);
+    aura.addColorStop(0.55, `rgba(34, 197, 94, ${0.08 + pulse * 0.12})`);
+    aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  } else {
+    aura.addColorStop(0, 'rgba(245, 158, 11, 0.18)');
+    aura.addColorStop(0.55, 'rgba(245, 158, 11, 0.05)');
+    aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  }
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, auraRx, auraRy, 0, 0, Math.PI * 2);
+  ctx.fillStyle = aura;
+  ctx.fill();
+  ctx.restore();
+
+  // 2. Video en vivo del dedo ACOSTADO EN PERSPECTIVA 3D sobre el piso
+  const source = typeof p.getVideoElement === 'function' ? p.getVideoElement() : null;
+  let hasValidFrame = false;
+  let sw = 0;
+  let sh = 0;
+
+  if (source instanceof HTMLVideoElement) {
+    if (source.videoWidth > 0 && source.videoHeight > 0) {
+      hasValidFrame = true;
+      sw = source.videoWidth;
+      sh = source.videoHeight;
+    }
+  } else if (source instanceof HTMLCanvasElement) {
+    if (source.width > 0 && source.height > 0) {
+      hasValidFrame = true;
+      sw = source.width;
+      sh = source.height;
+    }
+  }
+
+  ctx.save();
+  // Clip elíptico en perspectiva de suelo
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, innerRx, innerRy, 0, 0, Math.PI * 2);
+  ctx.clip();
+
+  if (hasValidFrame && source) {
+    const size = Math.min(sw, sw > 0 ? sh : sw);
+    const sx = (sw - size) / 2;
+    const sy = (sh - size) / 2;
+
+    // Aplica transformación afín de inclinación de perspectiva al video
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(1.0, tiltRatio);
+    ctx.translate(-cx, -cy);
+
+    ctx.globalAlpha = isDetected ? 0.70 : 0.45;
+    ctx.drawImage(
+      source,
+      sx,
+      sy,
+      size,
+      size,
+      cx - innerRx,
+      cy - innerRx,
+      innerRx * 2,
+      innerRx * 2
+    );
+    ctx.restore();
+    ctx.globalAlpha = 1.0;
+  } else {
+    ctx.fillStyle = '#030814';
+    ctx.fillRect(cx - innerRx, cy - innerRy, innerRx * 2, innerRy * 2);
+  }
+
+  // Capa de cristal zafiro translúcida sobre el piso 3D
+  const lensGrad = ctx.createRadialGradient(cx, cy, innerRx * 0.08, cx, cy, innerRx);
+  lensGrad.addColorStop(0, 'rgba(4, 12, 24, 0.12)');
+  lensGrad.addColorStop(0.60, 'rgba(2, 8, 18, 0.28)');
+  lensGrad.addColorStop(0.85, 'rgba(2, 6, 14, 0.50)');
+  lensGrad.addColorStop(1, 'rgba(1, 4, 10, 0.72)');
+  ctx.fillStyle = lensGrad;
+  ctx.fillRect(cx - innerRx, cy - innerRy, innerRx * 2, innerRy * 2);
+
+  // Micro-scanlines en el piso en perspectiva
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.015)';
+  for (let ly = cy - innerRy; ly <= cy + innerRy; ly += 2.5) {
+    ctx.fillRect(cx - innerRx, ly, innerRx * 2, 1);
+  }
+
+  // Reflejo especular elíptico de cristal
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, innerRx * 0.90, innerRy * 0.90, 0, -Math.PI * 0.75, -Math.PI * 0.25);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, innerRx * 0.90, innerRy * 0.90, 0, Math.PI * 0.35, Math.PI * 0.65);
+  ctx.strokeStyle = 'rgba(103, 232, 249, 0.18)';
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+
+  // Retícula táctica 3D acostada (+)
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.45)' : 'rgba(245, 158, 11, 0.50)';
+  ctx.lineWidth = 0.8;
+  const crossLenX = 8;
+  const crossLenY = crossLenX * tiltRatio;
+  ctx.beginPath();
+  ctx.moveTo(cx - crossLenX, cy); ctx.lineTo(cx + crossLenX, cy);
+  ctx.moveTo(cx, cy - crossLenY); ctx.lineTo(cx, cy + crossLenY);
+  ctx.stroke();
+
+  // Escáner láser 3D que barre el piso en el eje de profundidad Z
+  const scanZOffset = Math.sin(state.now * 0.0028) * (innerRy * 0.75);
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.70)' : 'rgba(245, 158, 11, 0.60)';
+  ctx.shadowColor = '#00f2ff';
+  ctx.shadowBlur = 4;
+  ctx.lineWidth = 1.0;
+  ctx.beginPath();
+  ctx.moveTo(cx - innerRx * 0.80, cy + scanZOffset);
+  ctx.lineTo(cx + innerRx * 0.80, cy + scanZOffset);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  ctx.restore(); // Fin del clip elíptico 3D
+
+  // 3. Bisel elíptico 3D concéntrico de titanio en el plano de suelo
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)';
+  ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, innerRx + 1, innerRy + 1 * tiltRatio, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Anillo exterior elíptico
+  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.40)' : 'rgba(245, 158, 11, 0.40)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // En calibración: Arco de progreso elíptico en el piso (0% - 100%)
+  if (!state.traceRevealed) {
+    if (isDetected) {
+      const progAngle = progress * Math.PI * 2;
+      ctx.strokeStyle = '#00f2ff';
+      ctx.shadowColor = '#00f2ff';
+      ctx.shadowBlur = 6;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx, ry, 0, -Math.PI / 2, -Math.PI / 2 + progAngle);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+  }
+
+  // Micro-marcas elípticas de radar en el piso
+  const rot = (state.now * 0.0008) % (Math.PI * 2);
+  ctx.strokeStyle = 'rgba(103, 232, 249, 0.30)';
+  ctx.lineWidth = 0.8;
+  for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
+    const cos = Math.cos(a + rot);
+    const sin = Math.sin(a + rot);
+    const p1x = cx + cos * (innerRx + 2);
+    const p1y = cy + sin * (innerRy + 2 * tiltRatio);
+    const p2x = cx + cos * (innerRx + 5);
+    const p2y = cy + sin * (innerRy + 5 * tiltRatio);
+    ctx.beginPath();
+    ctx.moveTo(p1x, p1y);
+    ctx.lineTo(p2x, p2y);
+    ctx.stroke();
+  }
+
+  // Badge clínico sutil proyectado en la base del piso
+  const badgeW = 76;
+  const badgeH = 13;
+  const badgeY = cy + ry + 4;
+  ctx.fillStyle = 'rgba(6, 14, 28, 0.85)';
+  ctx.beginPath();
+  ctx.roundRect(cx - badgeW / 2, badgeY, badgeW, badgeH, 6);
+  ctx.fill();
+  ctx.strokeStyle = isDetected ? 'rgba(34, 197, 94, 0.35)' : 'rgba(245, 158, 11, 0.35)';
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(cx - badgeW / 2 + 7, badgeY + 6.5, 2.0, 0, Math.PI * 2);
+  ctx.fillStyle = isDetected ? '#22c55e' : '#f59e0b';
+  if (isDetected) {
+    ctx.shadowColor = '#22c55e';
+    ctx.shadowBlur = 3;
+  }
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  ctx.font = `bold 7px ${FONT}`;
+  ctx.fillStyle = isDetected ? '#86efac' : '#fde68a';
+  ctx.textAlign = 'center';
+  ctx.fillText('3D SENSOR ROI', cx + 4, badgeY + 9.5);
+
+  ctx.restore();
 }
 
 /**
