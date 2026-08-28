@@ -3,16 +3,14 @@
  *
  * Render en CANVAS 2D PURO con proyección en perspectiva matemática (ley pinhole 1/z).
  * Elementos clave:
- *   1) GRILLA-PISO animada en perspectiva con flujo infinito en Z (Z-travel continuo),
- *      resplandor atmosférico en el horizonte y ondas de choque elípticas en el piso al latir.
+ *   1) GRILLA-PISO 3D fluida y ensanchada (Z-travel continuo sin tirones con smoothstep),
+ *      resplandor atmosférico en el horizonte y ondas de choque elípticas en el piso.
  *   2) ONDA CARDÍACA 3D como CINTA CURVADA (Smooth Splines):
  *      - Cresta frontal suavizada mediante curvas cuadráticas continuas.
  *      - Cara superior de cinta volumétrica con grosor en profundidad (Z-Back).
  *      - Pared vertical con gradiente translúcido hacia el piso.
  *      - Sombra proyectada difusa en el plano de la grilla.
  *      - Marcadores fiduciales flotantes con columnas láser y anillos de impacto en el piso.
- *
- * Reusa 100% las coordenadas honestas de la señal cardíaca.
  */
 import { WINDOW_MS, type PpgRenderState } from './ppgCanvasRenderer';
 
@@ -53,7 +51,7 @@ export interface Projector {
 
 // Calibración de cámara virtual en perspectiva
 const Z_NEAR = 1.0;
-const Z_FAR = 5.4;
+const Z_FAR = 5.6;
 const HORIZON_FRAC = 0.08;
 const NEAR_MARGIN_PX = 32;
 const MAX_LIFT_FRAC = 0.65;
@@ -69,6 +67,11 @@ const C = {
   horizon: '103, 232, 249',
   gridMinor: '255, 255, 255',
 };
+
+function smoothstep(min: number, max: number, value: number): number {
+  const x = Math.max(0, Math.min(1, (value - min) / (max - min)));
+  return x * x * (3 - 2 * x);
+}
 
 export function makeProjector(state: PpgRenderState): Projector {
   const { plot } = state.layout;
@@ -112,7 +115,7 @@ export function makeProjector(state: PpgRenderState): Projector {
 }
 
 /**
- * Dibuja la GRILLA-PISO en perspectiva con avance continuo en Z (Z-Travel),
+ * Dibuja la GRILLA-PISO en perspectiva fluida y ensanchada (Z-Travel continuo sin tirones con smoothstep),
  * resplandor en el horizonte y ondas de choque de impacto fisiológico en el piso.
  */
 export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
@@ -124,7 +127,7 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
-  // 1. Fondo espacial profundo con gradiente de oclusión
+  // 1. Fondo espacial profundo con viñeta
   const bgGrad = ctx.createLinearGradient(0, plot.y, 0, plot.y + plot.h);
   bgGrad.addColorStop(0, '#02050e');
   bgGrad.addColorStop(0.45, '#050b18');
@@ -132,7 +135,7 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.fillStyle = bgGrad;
   ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
 
-  // 2. Resplandor atmosférico en el horizonte (Aurora / Flare biométrico)
+  // 2. Resplandor atmosférico en el horizonte (Aurora biométrica)
   const pulseScale = state.sweepPulse ? Math.max(state.sweepPulse, 0.05) : 0.05;
   const horizonGlow = ctx.createRadialGradient(
     proj.vpX,
@@ -140,16 +143,16 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     4,
     proj.vpX,
     proj.horizonY,
-    plot.w * (0.55 + pulseScale * 0.2)
+    plot.w * (0.60 + pulseScale * 0.25)
   );
-  horizonGlow.addColorStop(0, `rgba(6, 182, 212, ${0.28 + pulseScale * 0.15})`);
-  horizonGlow.addColorStop(0.35, `rgba(34, 197, 94, ${0.12 + pulseScale * 0.08})`);
+  horizonGlow.addColorStop(0, `rgba(6, 182, 212, ${0.30 + pulseScale * 0.15})`);
+  horizonGlow.addColorStop(0.35, `rgba(34, 197, 94, ${0.14 + pulseScale * 0.08})`);
   horizonGlow.addColorStop(1, 'rgba(0, 0, 0, 0)');
   ctx.fillStyle = horizonGlow;
-  ctx.fillRect(plot.x, plot.y, plot.w, proj.horizonY + 70);
+  ctx.fillRect(plot.x, plot.y, plot.w, proj.horizonY + 80);
 
   // 3. Línea de horizonte brillante con resplandor láser
-  ctx.strokeStyle = `rgba(${C.horizon}, 0.65)`;
+  ctx.strokeStyle = `rgba(${C.horizon}, 0.70)`;
   ctx.shadowColor = '#00f2ff';
   ctx.shadowBlur = 8;
   ctx.lineWidth = 1.2;
@@ -159,37 +162,36 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.stroke();
   ctx.shadowBlur = 0;
 
-  // 4. Parámetros de la grilla en perspectiva
-  const TARGET_COLS = 11;
-  const cellPx = proj.plotW / TARGET_COLS;
+  // 4. Parámetros de la grilla ensanchada
+  const TARGET_COLS = 19;
+  const WIDE_FACTOR = 1.45;
+  const cellPx = (proj.plotW * WIDE_FACTOR) / TARGET_COLS;
   const halfCols = Math.ceil(TARGET_COLS / 2);
   const halfX = halfCols * cellPx;
-  const dZ = cellPx / proj.floorSpanY;
+  const dZ = 0.26;
 
-  // Avance continuo en el eje Z (Z-Travel fluido)
-  const travelSpeed = 0.00035;
+  // Avance continuo en el eje Z (Z-Travel sereno y suave)
+  const travelSpeed = 0.00022;
   const zOffset = (state.now * travelSpeed) % dZ;
 
-  // 5. Filas de profundidad (Z constante) con movimiento hacia adelante
-  let rowIdx = 0;
-  let prevRowY = Number.POSITIVE_INFINITY;
-  for (let z = proj.zNear + (dZ - zOffset) % dZ; z <= proj.zFar + 1e-6; z += dZ, rowIdx++) {
+  // 5. Filas de profundidad (Z constante) con desvanecimiento smoothstep en los extremos
+  for (let z = proj.zNear + (dZ - zOffset); z <= proj.zFar + dZ; z += dZ) {
+    if (z < proj.zNear || z > proj.zFar) continue;
     const a = proj.floorPoint(-halfX, z);
-    if (prevRowY - a.y < 1.5) break;
     const b = proj.floorPoint(halfX, z);
-    const isMajor = rowIdx % 4 === 0;
-    const fade = 0.20 + 0.80 * a.scale;
-    const alpha = (isMajor ? 0.55 : 0.22) * fade;
 
-    ctx.strokeStyle = isMajor
-      ? `rgba(${C.horizon}, ${alpha.toFixed(3)})`
-      : `rgba(${C.gridMinor}, ${alpha.toFixed(3)})`;
-    ctx.lineWidth = isMajor ? 1.2 : 0.6;
+    // Entrada y salida suave sin saltos ópticos
+    const nearFade = smoothstep(proj.zNear, proj.zNear + 0.35, z);
+    const farFade = smoothstep(proj.zFar, proj.zFar - 1.1, z);
+    const alpha = 0.38 * nearFade * farFade;
+    if (alpha <= 0.01) continue;
+
+    ctx.strokeStyle = `rgba(${C.horizon}, ${alpha.toFixed(3)})`;
+    ctx.lineWidth = 0.8;
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
-    prevRowY = a.y;
   }
 
   // 6. Columnas longitudinales (X constante que convergen al punto de fuga)
@@ -197,12 +199,16 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     const xw = k * cellPx;
     const near = proj.floorPoint(xw, proj.zNear);
     const far = proj.floorPoint(xw, proj.zFar);
-    const isMajor = k % 4 === 0;
+    const isCenter = k === 0;
+    const isMajor = k % 3 === 0;
+
     const g = ctx.createLinearGradient(near.x, near.y, far.x, far.y);
-    g.addColorStop(0, `rgba(${isMajor ? C.horizon : C.gridMinor}, ${isMajor ? 0.60 : 0.28})`);
-    g.addColorStop(1, `rgba(${isMajor ? C.horizon : C.gridMinor}, 0.02)`);
+    g.addColorStop(0, `rgba(${isCenter ? C.cyan : isMajor ? C.horizon : C.gridMinor}, ${isCenter ? 0.65 : isMajor ? 0.40 : 0.18})`);
+    g.addColorStop(0.7, `rgba(${isCenter ? C.cyan : isMajor ? C.horizon : C.gridMinor}, 0.08)`);
+    g.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
     ctx.strokeStyle = g;
-    ctx.lineWidth = isMajor ? 1.2 : 0.6;
+    ctx.lineWidth = isCenter ? 1.4 : isMajor ? 1.0 : 0.6;
     ctx.beginPath();
     ctx.moveTo(near.x, near.y);
     ctx.lineTo(far.x, far.y);
@@ -211,9 +217,9 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
   // 7. Onda de Choque Elíptica en el Piso (Floor Shockwave en latido)
   if (state.traceRevealed && state.sweepPulse > 0.06) {
-    const shockProg = 1 - state.sweepPulse; // 0..1
+    const shockProg = 1 - state.sweepPulse;
     const shockZ = proj.zNear + shockProg * (proj.zFar - proj.zNear) * 0.72;
-    const shockRadX = (proj.plotW * 0.48) * (0.15 + 0.85 * shockProg);
+    const shockRadX = (proj.plotW * 0.52) * (0.15 + 0.85 * shockProg);
     const shockCenter = proj.floorPoint(0, shockZ);
     const shockLeft = proj.floorPoint(-shockRadX, shockZ);
     const shockRight = proj.floorPoint(shockRadX, shockZ);
@@ -326,7 +332,6 @@ export function drawWaveRibbon3D(
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
 
-  // Helper para trazar camino suavizado con curvas cuadráticas
   const traceSmoothPath = (pts: ProjPoint[], from = 0, to = pts.length - 1) => {
     if (to <= from) return;
     ctx.moveTo(pts[from].x, pts[from].y);
@@ -415,7 +420,7 @@ export function drawWaveRibbon3D(
     ctx.stroke();
   }
 
-  // 5) Cresta frontal (Onda cardíaca honesta con haz de fósforo y láser)
+  // 5) Cresta frontal
   const drawCrestSeg = (from: number, to: number, arr: boolean) => {
     ctx.beginPath();
     traceSmoothPath(Pf, from, to);
@@ -426,7 +431,6 @@ export function drawWaveRibbon3D(
       ctx.lineWidth = 2.4;
       ctx.stroke();
 
-      // Núcleo blanco eléctrico ultra-nítido
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 1.0;
       ctx.shadowBlur = 3;
@@ -466,7 +470,6 @@ export function drawWaveRibbon3D(
 
       // Pico sistólico (SYS)
       if (v > prev && v > next && v > prev2 && v > next2 && v > geom.midValue) {
-        // Columna láser vertical punteada
         ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.45)' : 'rgba(0, 242, 255, 0.40)';
         ctx.lineWidth = 1;
         ctx.setLineDash([2, 4]);
@@ -476,7 +479,6 @@ export function drawWaveRibbon3D(
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Anillo de impacto elíptico en el piso en perspectiva
         const impactRadX = 6 * p.scale;
         const impactRadY = impactRadX * 0.35;
         ctx.beginPath();
@@ -485,7 +487,6 @@ export function drawWaveRibbon3D(
         ctx.lineWidth = 1.2;
         ctx.stroke();
 
-        // Diamante flotante en la cresta
         const r = 3.2 + p.scale * 1.8;
         ctx.beginPath();
         ctx.moveTo(p.x, p.y - r);

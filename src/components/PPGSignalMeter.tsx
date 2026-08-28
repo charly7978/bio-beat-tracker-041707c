@@ -17,7 +17,6 @@ import {
   drawHeader,
   drawMetricsBar,
   drawECGGrid,
-  drawPressureGauge,
   drawSignal,
   drawAcquisitionOverlay,
   drawTrendStrip,
@@ -451,7 +450,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       drawMetricsBar(ctx, renderState);
       if (threeDState.enabled) {
         drawGrid3D(ctx, renderState);
-        drawPressureGauge(ctx, renderState);
       } else {
         drawECGGrid(ctx, renderState);
       }

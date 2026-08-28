@@ -832,75 +832,111 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.fillStyle = 'rgba(103, 232, 249, 0.85)';
   ctx.font = `bold 9px ${FONT_MONO}`;
   ctx.fillText('25 mm/s · 0.5–12 Hz · HIGH-FIDELITY PPG · BIO-RADAR', plot.x + 8, plot.y - 8);
-
-  drawPressureGauge(ctx, state);
 }
 
 /**
- * Dibuja el medidor de presión dactilar.
+ * Dibuja la cápsula HUD unificada de telemetría en la esquina superior derecha (Zero Overlap).
  */
-export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
-  const p = state.props;
-  if (!p.isFingerDetected) return;
-
+function drawUnifiedTelemetryCapsule(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { plot } = state.layout;
-  const diag = p.diagnostics;
-  const pressure = diag?.fingerPressure || 'LIGHT';
+  const p = state.props;
 
-  const gaugeW = 120;
-  const gaugeH = 8;
-  const gaugeX = plot.x + plot.w - gaugeW - 16;
-  const gaugeY = plot.y + 24;
+  const capsuleW = 138;
+  const capsuleH = 72;
+  const capsuleX = plot.x + plot.w - capsuleW - 8;
+  const capsuleY = plot.y + 8;
 
   ctx.save();
+  // Fondo de tarjeta de cristal
+  ctx.fillStyle = 'rgba(6, 14, 28, 0.90)';
+  ctx.beginPath();
+  ctx.roundRect(capsuleX, capsuleY, capsuleW, capsuleH, 6);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.30)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Fila 1: Indicador de Grabación / Estado + SQI
+  const isRec = p.isMonitoring;
+  ctx.beginPath();
+  ctx.arc(capsuleX + 12, capsuleY + 14, 3.5, 0, Math.PI * 2);
+  ctx.fillStyle = isRec ? '#ef4444' : 'rgba(148, 163, 184, 0.4)';
+  if (isRec) {
+    ctx.shadowColor = '#ef4444';
+    ctx.shadowBlur = 6;
+  }
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
   ctx.font = `bold 9px ${FONT_MONO}`;
   ctx.textAlign = 'left';
-  
-  let labelText = 'PRESIÓN: IDEAL';
-  let labelColor = COLORS.SIGNAL;
-  let targetPct = 0.5;
+  ctx.fillStyle = isRec ? '#fca5a5' : 'rgba(148, 163, 184, 0.7)';
+  ctx.fillText(isRec ? 'REC' : 'STANDBY', capsuleX + 20, capsuleY + 17);
 
+  ctx.textAlign = 'right';
+  const sqiVal = Math.round(p.quality);
+  ctx.fillStyle = sqiVal >= 70 ? '#4ade80' : sqiVal >= 40 ? '#f59e0b' : '#ef4444';
+  ctx.fillText(`SQI ${sqiVal}%`, capsuleX + capsuleW - 10, capsuleY + 17);
+
+  // Fila 2: Índice de Perfusión (PI) + Contacto
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#67e8f9';
+  ctx.font = `8px ${FONT_MONO}`;
+  ctx.fillText(`PI ${(p.perfusionIndex ?? 0).toFixed(3)}`, capsuleX + 10, capsuleY + 33);
+
+  ctx.textAlign = 'right';
+  const contactText = formatContactState(p.contactState);
+  ctx.fillStyle = '#94a3b8';
+  ctx.fillText(contactText, capsuleX + capsuleW - 10, capsuleY + 33);
+
+  // Fila 3: Medidor de Presión Dactilar integrado
+  const diag = p.diagnostics;
+  const pressure = diag?.fingerPressure || 'IDEAL';
+  let targetPct = 0.5;
+  let pColor = COLORS.SIGNAL;
+  let pLabel = 'PRESIÓN: IDEAL';
   if (pressure === 'LIGHT') {
-    labelText = 'PRESIÓN: SUAVE';
-    labelColor = COLORS.TEXT_WARN;
     targetPct = 0.2;
+    pColor = COLORS.TEXT_WARN;
+    pLabel = 'PRESIÓN: SUAVE';
   } else if (pressure === 'HEAVY') {
-    labelText = 'PRESIÓN: EXCESIVA';
-    labelColor = COLORS.TEXT_DANGER;
     targetPct = 0.8;
+    pColor = COLORS.TEXT_DANGER;
+    pLabel = 'PRESIÓN: FUERTE';
   }
 
-  ctx.fillStyle = labelColor;
-  ctx.fillText(labelText, gaugeX, gaugeY - 8);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = pColor;
+  ctx.font = `7px ${FONT_MONO}`;
+  ctx.fillText(pLabel, capsuleX + 10, capsuleY + 47);
 
-  const grad = ctx.createLinearGradient(gaugeX, 0, gaugeX + gaugeW, 0);
+  const barW = capsuleW - 20;
+  const barH = 5;
+  const barX = capsuleX + 10;
+  const barY = capsuleY + 52;
+
+  const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
   grad.addColorStop(0, '#f59e0b');
   grad.addColorStop(0.35, '#f59e0b');
-  grad.addColorStop(0.45, '#22c55e');
-  grad.addColorStop(0.55, '#22c55e');
+  grad.addColorStop(0.48, '#22c55e');
+  grad.addColorStop(0.52, '#22c55e');
   grad.addColorStop(0.65, '#ef4444');
   grad.addColorStop(1, '#ef4444');
 
-  ctx.fillStyle = 'rgba(10, 20, 36, 0.85)';
-  ctx.beginPath();
-  ctx.roundRect(gaugeX - 4, gaugeY - 4, gaugeW + 8, gaugeH + 8, 4);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-  ctx.stroke();
-  
   ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.roundRect(gaugeX, gaugeY, gaugeW, gaugeH, 3);
+  ctx.roundRect(barX, barY, barW, barH, 2.5);
   ctx.fill();
 
-  const cursorX = gaugeX + gaugeW * targetPct;
+  // Cursor diamante indicador
+  const curX = barX + barW * targetPct;
   ctx.fillStyle = '#ffffff';
-  ctx.shadowColor = labelColor;
+  ctx.shadowColor = pColor;
   ctx.shadowBlur = 6;
   ctx.beginPath();
-  ctx.moveTo(cursorX, gaugeY - 2);
-  ctx.lineTo(cursorX - 5, gaugeY - 8);
-  ctx.lineTo(cursorX + 5, gaugeY - 8);
+  ctx.moveTo(curX, barY + barH + 1);
+  ctx.lineTo(curX - 3.5, barY + barH + 5);
+  ctx.lineTo(curX + 3.5, barY + barH + 5);
   ctx.closePath();
   ctx.fill();
 
@@ -1303,58 +1339,39 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.textAlign = 'left';
   ctx.fillText('TACHOGRAMA RR (IBI)', plot.x + 8, tachoY + 8);
 
-  // Panel de Ritmo
+  // Panel de Ritmo en la esquina superior izquierda (Ancho controlado para evitar colisión)
   const rhythm = buildRhythmPanel(p.arrhythmiaStatus, p.arrhythmiaCount ?? 0, p.rrIntervals ?? [], state.hrv);
   const panelH = 56;
   const panelY = plot.y + 8;
+  const panelW = Math.min(Math.max(160, plot.w - 165), 240);
+
   ctx.fillStyle = 'rgba(6, 14, 28, 0.90)';
   ctx.strokeStyle = rhythm.level === 'danger' ? 'rgba(239, 68, 68, 0.65)' : rhythm.level === 'warn' ? 'rgba(245, 158, 11, 0.55)' : 'rgba(34, 197, 94, 0.45)';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.roundRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH, 6);
+  ctx.roundRect(plot.x + 8, panelY, panelW, panelH, 6);
   ctx.fill();
   ctx.stroke();
 
   ctx.textAlign = 'left';
-  ctx.font = `bold 11px ${FONT_MONO}`;
+  ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = levelColor(rhythm.level);
-  ctx.fillText(rhythm.title, plot.x + 16, panelY + 16);
-  ctx.font = `9px ${FONT_MONO}`;
+  ctx.fillText(rhythm.title, plot.x + 14, panelY + 16);
+  ctx.font = `8.5px ${FONT_MONO}`;
   ctx.fillStyle = '#cbd5e1';
-  ctx.fillText(rhythm.detail, plot.x + 16, panelY + 30);
+  ctx.fillText(rhythm.detail, plot.x + 14, panelY + 30);
   ctx.fillStyle = '#94a3b8';
-  ctx.fillText(rhythm.guidance, plot.x + 16, panelY + 44);
+  ctx.fillText(rhythm.guidance, plot.x + 14, panelY + 44);
 
-  // Baliza de Grabación
-  if (p.isMonitoring) {
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
-    ctx.shadowColor = '#ef4444';
-    ctx.shadowBlur = 6;
-    ctx.beginPath();
-    ctx.arc(plot.x + plot.w - 42, plot.y + 18, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.fillStyle = '#fca5a5';
-    ctx.textAlign = 'right';
-    ctx.fillText('REC', plot.x + plot.w - 12, plot.y + 22);
-  }
-
-  ctx.font = `bold 9px ${FONT_MONO}`;
-  ctx.textAlign = 'right';
-  ctx.fillStyle = '#4ade80';
-  ctx.fillText(`SQI ${Math.round(p.quality)}%`, plot.x + plot.w - 12, plot.y + 38);
-  ctx.fillStyle = '#67e8f9';
-  ctx.fillText(`PI ${(p.perfusionIndex ?? 0).toFixed(3)}`, plot.x + plot.w - 12, plot.y + 52);
-  const contact = formatContactState(p.contactState);
-  ctx.fillStyle = '#94a3b8';
-  ctx.fillText(contact, plot.x + plot.w - 12, plot.y + 66);
+  // Cápsula HUD de Telemetría unificada en la esquina superior derecha (Zero Overlap)
+  drawUnifiedTelemetryCapsule(ctx, state);
 
   ctx.restore();
 }
 
 /**
- * Dibuja la barra de progreso de adquisición / estabilización.
+ * Dibuja la animación holográfica de inicio de medición: apertura de iris biométrico,
+ * radar de calibración giratorio, escáner láser y visualización de acoplamiento óptico.
  */
 export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const p = state.props;
@@ -1364,27 +1381,107 @@ export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: Ppg
 
   const { plot } = state.layout;
   const progress = Math.max(0, Math.min(1, diag?.acquisitionProgress ?? 0));
-  const barX = plot.x + 12;
-  const barW = plot.w - 24;
-  const barH = 5;
-  const barY = plot.y + 6;
+  const cx = plot.x + plot.w / 2;
+  const cy = plot.centerY;
 
   ctx.save();
-  ctx.fillStyle = 'rgba(148, 163, 184, 0.20)';
   ctx.beginPath();
-  ctx.roundRect(barX, barY, barW, barH, 2.5);
+  ctx.rect(plot.x, plot.y, plot.w, plot.h);
+  ctx.clip();
+
+  // 1. Halo central de acoplamiento biométrico
+  const irisRad = Math.min(75, plot.h * 0.28);
+  const aura = ctx.createRadialGradient(cx, cy, 5, cx, cy, irisRad * 1.5);
+  aura.addColorStop(0, 'rgba(6, 182, 212, 0.22)');
+  aura.addColorStop(0.5, 'rgba(34, 197, 94, 0.08)');
+  aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = aura;
+  ctx.beginPath();
+  ctx.arc(cx, cy, irisRad * 1.5, 0, Math.PI * 2);
   ctx.fill();
 
-  const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-  grad.addColorStop(0, '#22c55e');
-  grad.addColorStop(0.5, '#06b6d4');
-  grad.addColorStop(1, '#00f2ff');
-  ctx.fillStyle = grad;
+  // 2. Anillo de progreso circular exterior con marcas de radar
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, irisRad, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Arco de progreso activo con brillo
+  const progAngle = progress * Math.PI * 2;
+  ctx.strokeStyle = '#00f2ff';
+  ctx.shadowColor = '#00f2ff';
+  ctx.shadowBlur = 10;
+  ctx.beginPath();
+  ctx.arc(cx, cy, irisRad, -Math.PI / 2, -Math.PI / 2 + progAngle);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // 3. Retícula circular giratoria interior con marcas de grado
+  ctx.save();
+  ctx.translate(cx, cy);
+  const rot = (state.now * 0.0012) % (Math.PI * 2);
+  ctx.rotate(rot);
+  ctx.strokeStyle = 'rgba(103, 232, 249, 0.40)';
+  ctx.lineWidth = 1;
+  const innerRad = irisRad * 0.72;
+  for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
+    const cos = Math.cos(a);
+    const sin = Math.sin(a);
+    ctx.beginPath();
+    ctx.moveTo(cos * (innerRad - 5), sin * (innerRad - 5));
+    ctx.lineTo(cos * innerRad, sin * innerRad);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // 4. Anillo pulsátil interior
+  const pulseRad = innerRad * (0.85 + Math.sin(state.now * 0.006) * 0.08);
+  ctx.strokeStyle = 'rgba(34, 197, 94, 0.65)';
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(cx, cy, pulseRad, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // 5. Escáner láser vertical de calibración
+  const scanOffset = Math.sin(state.now * 0.004) * (irisRad * 0.6);
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.75)';
   ctx.shadowColor = '#00f2ff';
   ctx.shadowBlur = 6;
+  ctx.lineWidth = 1.2;
   ctx.beginPath();
-  ctx.roundRect(barX, barY, Math.max(barH, barW * progress), barH, 2.5);
+  ctx.moveTo(cx - innerRad * 0.6, cy + scanOffset);
+  ctx.lineTo(cx + innerRad * 0.6, cy + scanOffset);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // 6. Lectura central de porcentaje
+  ctx.font = `bold 16px ${FONT_MONO}`;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${Math.round(progress * 100)}%`, cx, cy + 6);
+
+  // 7. Mensaje de estado de inicialización en cápsula inferior
+  const msgText = progress < 0.35
+    ? 'ACOPLANDO SENSOR ÓPTICO'
+    : progress < 0.75
+    ? 'CALIBRANDO BIOMARCADORES'
+    : 'SINCRONIZANDO ONDA PPG';
+
+  const badgeW = 200;
+  const badgeH = 20;
+  const badgeY = cy + irisRad + 14;
+  ctx.fillStyle = 'rgba(10, 20, 36, 0.85)';
+  ctx.beginPath();
+  ctx.roundRect(cx - badgeW / 2, badgeY, badgeW, badgeH, 10);
   ctx.fill();
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.30)';
+  ctx.stroke();
+
+  ctx.font = `bold 9px ${FONT_MONO}`;
+  ctx.fillStyle = '#67e8f9';
+  ctx.fillText(`⚡ ${msgText}`, cx, badgeY + 14);
+
   ctx.restore();
 }
 
