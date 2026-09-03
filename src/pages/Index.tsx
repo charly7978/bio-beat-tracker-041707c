@@ -71,6 +71,7 @@ const Index = () => {
     currentStride,
     setSignalCallback,
     setCameraRuntimeHints,
+    resetProcessor,
   } = useSignalProcessor();
 
   const {
