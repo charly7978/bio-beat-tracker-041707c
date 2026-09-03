@@ -35,6 +35,8 @@ interface UseMeasurementSessionInput {
     };
   }) => Promise<boolean>;
   setCameraRuntimeHints: (diag: Record<string, unknown> | null | undefined) => void;
+  /** Reset duro del procesador PPG (fin/inicio de sesión y cambio de cámara). */
+  resetProcessor: () => void;
   syncCameraHints: () => void;
   resetFingerContactSession: () => void;
   resetSessionRefs: () => void;
@@ -68,6 +70,7 @@ export function useMeasurementSession({
   resetHeartBeat,
   saveMeasurement,
   setCameraRuntimeHints: _setCameraRuntimeHints,
+  resetProcessor,
   syncCameraHints,
   resetFingerContactSession,
   resetSessionRefs,
@@ -102,6 +105,8 @@ export function useMeasurementSession({
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
   const monitoringStartedAtRef = useRef<number>(0);
+  /** Identidad de la cámara activa: cambiarla obliga a un reset del pipeline. */
+  const activeCameraKeyRef = useRef<string | null>(null);
 
   // Fullscreen
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -215,6 +220,10 @@ export function useMeasurementSession({
     arrhythmiaBeatsRef.current = 0;
     // arrhythmia se resetea desde VitalSignsProcessor; no hay propiedad plana
 
+    // Reset duro ANTES de arrancar: la sesión nueva no hereda baselines,
+    // banda adaptativa, hints de cámara ni estadísticas de la anterior.
+    activeCameraKeyRef.current = null;
+    resetProcessor();
     startProcessing();
     setIsCameraOn(true);
     setIsMonitoring(true);
@@ -232,11 +241,20 @@ export function useMeasurementSession({
     startCalibration();
     resetFingerContactSession();
     setHeartBeatRuntimeHints(inferCameraRuntimeHints());
-  }, [isMonitoring, enterFullScreen, startProcessing, startCalibration, requestWakeLock, sanityProfileId, setHeartBeatRuntimeHints, totalBeatsRef, arrhythmiaBeatsRef, resetFingerContactSession]);
+  }, [isMonitoring, enterFullScreen, startProcessing, startCalibration, requestWakeLock, sanityProfileId, setHeartBeatRuntimeHints, totalBeatsRef, arrhythmiaBeatsRef, resetFingerContactSession, resetProcessor]);
 
   // === CUANDO LA CÁMARA ESTÁ LISTA ===
   const handleStreamReady = useCallback((stream: MediaStream) => {
     setCameraStream(stream);
+    // Cambio de cámara/track (o re-negociación del stream) ⇒ el pipeline queda
+    // caracterizado para otro sensor: reset duro para no arrastrar estado.
+    const track = stream.getVideoTracks()[0];
+    const settings = track?.getSettings?.();
+    const cameraKey = `${settings?.deviceId ?? track?.id ?? 'unknown'}|${settings?.width ?? 0}x${settings?.height ?? 0}`;
+    if (activeCameraKeyRef.current !== null && activeCameraKeyRef.current !== cameraKey) {
+      resetProcessor();
+    }
+    activeCameraKeyRef.current = cameraKey;
     syncCameraHints();
     const video = cameraRef.current?.getVideoElement();
     if (video && video.readyState >= 2 && video.videoWidth > 0) {
@@ -250,7 +268,7 @@ export function useMeasurementSession({
       };
       video.addEventListener('canplay', onCanPlay, { once: true });
     }
-  }, [cameraRef, startFrameLoop, syncCameraHints]);
+  }, [cameraRef, startFrameLoop, syncCameraHints, resetProcessor]);
 
   // === FINALIZAR MEDICIÓN ===
   const finalizeMeasurement = useCallback(async () => {

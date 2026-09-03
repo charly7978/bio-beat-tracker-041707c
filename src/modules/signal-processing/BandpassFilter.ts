@@ -31,6 +31,7 @@ export class BandpassFilter {
 
   private sampleRate: number;
   private highCutFreq: number;
+  private lowCutFreq = 0.5;
   private initialized = false;
 
   constructor(sampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE, highCutFreq: number = 4.5) {
@@ -67,9 +68,8 @@ export class BandpassFilter {
   private computeCoefficients(): void {
     const fs = this.sampleRate;
 
-    // === PASA-ALTOS a 0.5Hz (estándar clínico para HR) ===
-    const fcHp = 0.5;
-    this.computeHPF(fcHp, fs);
+    // === PASA-ALTOS (adaptativo alrededor del corte clínico 0.5 Hz) ===
+    this.computeHPF(this.lowCutFreq, fs);
 
     // === PASA-BAJOS configurable ===
     this.computeLPF(this.highCutFreq, fs);
@@ -180,6 +180,30 @@ export class BandpassFilter {
       { x: [0, 0, 0], y: [0, 0, 0] },
       { x: [0, 0, 0], y: [0, 0, 0] },
     ];
+  }
+
+  /**
+   * Ajuste ADAPTATIVO de la banda sin resetear el estado del filtro.
+   * Solo recalcula coeficientes si el cambio es significativo (>3%), evitando
+   * transitorios y coste inútil en el hot path. Devuelve true si recalculó.
+   */
+  setBand(lowCutHz: number, highCutHz: number): boolean {
+    if (!isFinite(lowCutHz) || !isFinite(highCutHz)) return false;
+    const nyq = this.sampleRate * 0.5;
+    const low = Math.min(Math.max(lowCutHz, 0.15), Math.max(0.2, nyq * 0.5));
+    const high = Math.min(Math.max(highCutHz, low * 1.8), nyq * 0.92);
+    const relLow = Math.abs(low - this.lowCutFreq) / Math.max(1e-6, this.lowCutFreq);
+    const relHigh = Math.abs(high - this.highCutFreq) / Math.max(1e-6, this.highCutFreq);
+    if (relLow < 0.03 && relHigh < 0.03) return false;
+    this.lowCutFreq = low;
+    this.highCutFreq = high;
+    // Recalcular SIN reset: el estado IIR sigue siendo válido y evita el salto.
+    this.computeCoefficients();
+    return true;
+  }
+
+  getBand(): { low: number; high: number } {
+    return { low: this.lowCutFreq, high: this.highCutFreq };
   }
 
   setSampleRate(rate: number): void {

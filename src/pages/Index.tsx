@@ -71,6 +71,7 @@ const Index = () => {
     currentStride,
     setSignalCallback,
     setCameraRuntimeHints,
+    resetProcessor,
   } = useSignalProcessor();
 
   const {
@@ -148,6 +149,7 @@ const Index = () => {
     resetHeartBeat,
     saveMeasurement,
     setCameraRuntimeHints,
+    resetProcessor,
     syncCameraHints,
     resetFingerContactSession: router.resetFingerContactSession,
     resetSessionRefs: router.resetSessionRefs,
