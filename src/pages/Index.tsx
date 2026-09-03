@@ -148,6 +148,7 @@ const Index = () => {
     resetHeartBeat,
     saveMeasurement,
     setCameraRuntimeHints,
+    resetProcessor,
     syncCameraHints,
     resetFingerContactSession: router.resetFingerContactSession,
     resetSessionRefs: router.resetSessionRefs,
