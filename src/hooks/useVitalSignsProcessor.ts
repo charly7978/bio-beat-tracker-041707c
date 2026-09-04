@@ -124,6 +124,7 @@ export const useVitalSignsProcessor = () => {
     forceCalibrationCompletion,
     lastValidResults,
     setLastValidResults,
+    syncAnthropometric: useCallback(() => processorRef.current?.syncAnthropometric(), []),
     getCalibrationProgress: useCallback(() => processorRef.current?.getCalibrationProgress() ?? 0, []),
   };
 };

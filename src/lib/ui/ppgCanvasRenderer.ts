@@ -90,6 +90,20 @@ export const AMP_ATTACK = CARDIAC_WAVE_CONFIG.AMP_ATTACK;
 export const AMP_RELEASE = CARDIAC_WAVE_CONFIG.AMP_RELEASE;
 export const RR_TACHO_H = 36;
 
+export interface WaveCoord {
+  x: number;
+  y: number;
+  isArr: boolean;
+  val: number;
+}
+const COORD_POOL_CAPACITY = 1024;
+const RENDER_COORD_POOL: WaveCoord[] = Array.from({ length: COORD_POOL_CAPACITY }, () => ({
+  x: 0,
+  y: 0,
+  isArr: false,
+  val: 0,
+}));
+
 export interface PpgLayout {
   width: number;
   height: number;
@@ -982,15 +996,9 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     }
   }
 
-  const points = buffer.getPoints();
-  if (points.length > 30) {
-    const recentStart = Math.max(0, points.length - 150);
-    let mn = Infinity, mx = -Infinity;
-    for (let i = recentStart; i < points.length; i++) {
-      const v = points[i].value;
-      if (v < mn) mn = v;
-      if (v > mx) mx = v;
-    }
+  const pointsCount = buffer.getPointsCount();
+  if (pointsCount > 30) {
+    const { min: mn, max: mx } = buffer.getRecentExtrema(150);
     const range = Math.max(24, mx - mn);
     const stats = state.amplitudeStats;
     const targetMin = mn - range * 0.1;
@@ -1003,7 +1011,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   }
 
   const stats = state.amplitudeStats;
-  if (points.length < 2) return;
+  if (pointsCount < 2) return;
   const safeRange = stats.range > 1 ? stats.range : 1;
   const wavePadTop = CARDIAC_WAVE_CONFIG.WAVE_PAD_TOP;
   const wavePadBot = CARDIAC_WAVE_CONFIG.WAVE_PAD_BOTTOM;
@@ -1014,23 +1022,29 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ? (state.signalStrength < 0 ? 0 : state.signalStrength > 1 ? 1 : state.signalStrength)
     : 0.5;
   const midValue = (stats.max + stats.min) / 2;
-  const coords: { x: number; y: number; isArr: boolean; val: number }[] = [];
-  for (let i = 0; i < points.length; i++) {
-    const pt = points[i];
+
+  let coordCount = 0;
+  buffer.forEachChronologicalInWindow(state.now, WINDOW_MS + VISUAL_DELAY_MS, (pt) => {
+    if (coordCount >= COORD_POOL_CAPACITY) return;
     const age = state.now - pt.time - VISUAL_DELAY_MS;
-    if (age > WINDOW_MS) continue;
+    if (age < 0 || age > WINDOW_MS) return;
     const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
-    if (x < plot.x || x > plot.x + plot.w) continue;
+    if (x < plot.x || x > plot.x + plot.w) return;
     const honestValue = midValue + (pt.value - midValue) * strength;
-    
+
     const pct = Math.max(0, Math.min(1, (honestValue - stats.min) / safeRange));
     const transformedPct = Math.pow(pct, CARDIAC_WAVE_CONFIG.WAVE_SHARPNESS_EXPONENT);
     const y = plot.y + wavePadTop + (1 - transformedPct) * waveH;
-    
-    coords.push({ x, y, isArr: pt.isArrhythmia, val: pt.value });
-  }
 
-  if (coords.length < 2) return;
+    const c = RENDER_COORD_POOL[coordCount++];
+    c.x = x;
+    c.y = y;
+    c.isArr = pt.isArrhythmia;
+    c.val = pt.value;
+  });
+
+  if (coordCount < 2) return;
+  const coords = RENDER_COORD_POOL.slice(0, coordCount);
 
   ctx.save();
   ctx.beginPath();

@@ -52,6 +52,7 @@ export const useSignalProcessor = () => {
 
   // Single-instance lifecycle guard.
   const initializationState = useRef<'IDLE' | 'INITIALIZING' | 'READY' | 'ERROR'>('IDLE');
+  const pendingStartRef = useRef(false);
 
   useEffect(() => {
     if (initializationState.current !== 'IDLE') {
@@ -72,6 +73,12 @@ export const useSignalProcessor = () => {
 
         if (type === 'initialized') {
           initializationState.current = 'READY';
+          if (pendingStartRef.current && !isProcessingRef.current && workerRef.current) {
+            isProcessingRef.current = true;
+            setIsProcessing(true);
+            workerRef.current.postMessage({ type: 'start' });
+            log.info('PPG Web Worker inicializado y arrancado por solicitud pendiente');
+          }
         } else if (type === 'signalReady') {
           if (initializationState.current !== 'READY') return;
           const { signal, rgbStats, backpressureState } = data;
@@ -186,16 +193,18 @@ export const useSignalProcessor = () => {
   }, [isProcessing]);
 
   const startProcessing = useCallback(() => {
+    pendingStartRef.current = true;
     if (!workerRef.current || initializationState.current !== 'READY') {
+      log.info('startProcessing solicitado mientras worker inicializa — encolado');
       return;
     }
-    if (isProcessing) {
+    if (isProcessingRef.current) {
       return;
     }
     isProcessingRef.current = true;
     setIsProcessing(true);
     workerRef.current.postMessage({ type: 'start' });
-  }, [isProcessing]);
+  }, []);
 
   /** Reset duro del procesador (fin de sesión o cambio de cámara). */
   const resetProcessor = useCallback(() => {
@@ -209,12 +218,12 @@ export const useSignalProcessor = () => {
   }, []);
 
   const stopProcessing = useCallback(() => {
-    if (!workerRef.current) {
-      return;
-    }
+    pendingStartRef.current = false;
     isProcessingRef.current = false;
-    workerRef.current.postMessage({ type: 'stop' });
     setIsProcessing(false);
+    if (workerRef.current) {
+      workerRef.current.postMessage({ type: 'stop' });
+    }
     setLastSignal(null);
     lastUiPushRef.current = 0;
     lastUiContactRef.current = { finger: false, contact: 'NO_CONTACT' };

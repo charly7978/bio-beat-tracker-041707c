@@ -91,6 +91,7 @@ const Index = () => {
     setLastValidResults,
     startCalibration,
     forceCalibrationCompletion,
+    syncAnthropometric,
     getCalibrationProgress
   } = useVitalSignsProcessor();
   
@@ -473,9 +474,13 @@ const Index = () => {
       isMale: gender === 'male',
     };
     CalibrationManager.getInstance().setAnthropometric(profile);
+    syncAnthropometric();
     
-    alert("Perfil fisiológico guardado y aplicado correctamente.");
-  }, [age, height, weight, gender]);
+    toast({
+      title: "Perfil Guardado",
+      description: "Parámetros antropométricos aplicados al motor hemodinámico.",
+    });
+  }, [age, height, weight, gender, syncAnthropometric]);
 
   const handleCalibrateReference = useCallback(() => {
     const sysVal = parseInt(refSys, 10);
@@ -1099,6 +1104,32 @@ const Index = () => {
                         </div>
                       </div>
                     </div>
+
+                    {/* Tarjeta de Validación Clínica (MeasurementWindowValidator) */}
+                    {session.validationVerdict && (
+                      <div className={`glass-card rounded-2xl p-3 border ${session.validationVerdict.accepted ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'} space-y-1.5 shadow-lg`}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            {session.validationVerdict.accepted ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                            ) : (
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                            )}
+                            <span className={`text-[10px] font-bold font-mono tracking-wider uppercase ${session.validationVerdict.accepted ? 'text-emerald-400' : 'text-amber-400'}`}>
+                              {session.validationVerdict.accepted ? 'VENTANA CLÍNICA VALIDADA' : 'CALIDAD DE SEÑAL SUBÓPTIMA'}
+                            </span>
+                          </div>
+                          <span className="text-[9px] font-mono text-zinc-400">
+                            SQI {Math.round(session.validationVerdict.qualitySummary.sqiMedian)}% · {Math.round(session.validationVerdict.qualitySummary.fpsMedian)} FPS
+                          </span>
+                        </div>
+                        {!session.validationVerdict.accepted && session.validationVerdict.rejectionReasons.length > 0 && (
+                          <p className="text-[9px] font-mono text-amber-300/80 leading-tight">
+                            {session.validationVerdict.rejectionReasons[0]}
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                     {/* Botón Análisis AI */}
                     <button

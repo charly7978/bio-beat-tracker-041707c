@@ -143,7 +143,7 @@ export class VitalSignsProcessor {
     this.syncAnthropometric();
   }
 
-  private syncAnthropometric(): void {
+  public syncAnthropometric(): void {
     const cal = CalibrationManager.getInstance();
     const anthrop = cal.getAnthropometric();
     if (anthrop) {
@@ -153,6 +153,7 @@ export class VitalSignsProcessor {
 
   /** Calentamiento in-sesión (muestras internas), no crea perfiles en `CalibrationManager`. */
   startCalibration(): void {
+    this.syncAnthropometric();
     this.isCalibrating = true;
     this.calibrationSamples = 0;
     this.validPulseCount = 0;

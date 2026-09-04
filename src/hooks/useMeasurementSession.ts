@@ -9,9 +9,13 @@ import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import {
   setActiveProfile as setAuditProfile,
 } from '@/lib/sanity/sanityAuditLog';
-import type { CameraViewHandle } from '@/components/CameraView';
-import type { ValidationFrame } from '@/lib/acquisition/MeasurementWindowValidator';
+import {
+  MeasurementWindowValidator,
+  type ValidationFrame,
+  type ValidationVerdict,
+} from '@/lib/acquisition/MeasurementWindowValidator';
 import { healthBridge } from '@/lib/capacitor/healthBridge';
+import type { CameraViewHandle } from '@/components/CameraView';
 
 interface UseMeasurementSessionInput {
   cameraRef: React.RefObject<CameraViewHandle>;
@@ -98,7 +102,7 @@ export function useMeasurementSession({
     normalPercent: number;
   } | null>(null);
   const [showResults, setLocalShowResults] = useState(false);
-  const [validationVerdict, setValidationVerdict] = useState<import('@/lib/acquisition/MeasurementWindowValidator').ValidationVerdict | null>(null);
+  const [validationVerdict, setValidationVerdict] = useState<ValidationVerdict | null>(null);
 
   const validationBufferRef = useRef<ValidationFrame[]>([]);
   const measurementTimerRef = useRef<number | null>(null);
@@ -180,6 +184,24 @@ export function useMeasurementSession({
       monitoringStartedAtRef.current = 0;
     }
   }, [isMonitoring]);
+
+  // Acumular fotogramas en el buffer de validación clínica durante la sesión
+  useEffect(() => {
+    if (!isMonitoring || !lastSignal) return;
+    const diag = lastSignal.diagnostics as Record<string, unknown> | undefined;
+    const sqm = diag?.sqm as Record<string, number> | undefined;
+    const hasContact = !!lastSignal.fingerDetected && lastSignal.contactState !== 'NO_CONTACT';
+    const frame: ValidationFrame = {
+      sqi: lastSignal.quality || 0,
+      pi: lastSignal.perfusionIndex || 0,
+      fps: sqm?.fpsEffective ?? 30,
+      jitter: sqm?.timestampJitterMs ?? 0,
+      motion: sqm?.motionScore ?? (lastSignal.motionArtifact ? 1 : 0),
+      isClipping: (sqm?.saturationRatio ?? 0) > 0.15,
+      hasContact,
+    };
+    validationBufferRef.current.push(frame);
+  }, [lastSignal, isMonitoring]);
 
   // Fullscreen
   const enterFullScreen = useCallback(async () => {
@@ -284,6 +306,10 @@ export function useMeasurementSession({
     }
 
     stopProcessing();
+
+    // Validación clínica profunda de la ventana de medición acumulada
+    const verdict = MeasurementWindowValidator.validate(validationBufferRef.current);
+    setValidationVerdict(verdict);
 
     if (vitalSignsRef.current.isCalibrating) {
       forceCalibrationCompletion();

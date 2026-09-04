@@ -75,8 +75,8 @@ self.onmessage = async (event: MessageEvent) => {
           rotationRate: { alpha: number; beta: number; gamma: number } | null;
         };
         
-        // Simular DeviceMotionEvent compatible con el procesador
-        const mockEvent = {
+        // Inyectar evento de movimiento del hardware en el procesador
+        const motionPayload = {
           accelerationIncludingGravity,
           rotationRate
         } as unknown as DeviceMotionEvent;
@@ -86,7 +86,7 @@ self.onmessage = async (event: MessageEvent) => {
           handleMotionEvent?: (e: DeviceMotionEvent) => void;
         };
         if (typeof pWithMotion.handleMotionEvent === 'function') {
-          pWithMotion.handleMotionEvent(mockEvent);
+          pWithMotion.handleMotionEvent(motionPayload);
         }
         break;
       }
