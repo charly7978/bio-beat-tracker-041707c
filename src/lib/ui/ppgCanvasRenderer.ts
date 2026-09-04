@@ -893,37 +893,47 @@ function drawUnifiedTelemetryCapsule(ctx: CanvasRenderingContext2D, state: PpgRe
   ctx.fillStyle = sqiVal >= 70 ? '#4ade80' : sqiVal >= 40 ? '#f59e0b' : '#ef4444';
   ctx.fillText(`SQI ${sqiVal}%`, capsuleX + capsuleW - 10, capsuleY + 17);
 
-  // Fila 2: Índice de Perfusión (PI) + Contacto
+  // Fila 2: Índice de Perfusión (PI) + Variabilidad Beat-to-Beat (ΔRR)
   ctx.textAlign = 'left';
   ctx.fillStyle = '#67e8f9';
   ctx.font = `8px ${FONT_MONO}`;
-  ctx.fillText(`PI ${(p.perfusionIndex ?? 0).toFixed(3)}`, capsuleX + 10, capsuleY + 33);
+  ctx.fillText(`PI ${(p.perfusionIndex ?? 0).toFixed(3)}`, capsuleX + 10, capsuleY + 32);
 
+  const rrList = p.rrIntervals ?? [];
+  let deltaRrStr = '--';
+  if (rrList.length >= 2) {
+    const d = Math.abs(rrList[rrList.length - 1] - rrList[rrList.length - 2]);
+    deltaRrStr = `±${Math.round(d)}ms`;
+  }
   ctx.textAlign = 'right';
-  const contactText = formatContactState(p.contactState);
-  ctx.fillStyle = '#94a3b8';
-  ctx.fillText(contactText, capsuleX + capsuleW - 10, capsuleY + 33);
+  ctx.fillStyle = '#93c5fd';
+  ctx.fillText(`ΔRR ${deltaRrStr}`, capsuleX + capsuleW - 10, capsuleY + 32);
 
   // Fila 3: Medidor de Apoyo Dactilar (Contacto sobre la lente)
   const diag = p.diagnostics;
   const pressure = diag?.fingerPressure || 'IDEAL';
   let targetPct = 0.5;
   let pColor = COLORS.SIGNAL;
-  let pLabel = 'APOYO DACTILAR: IDEAL';
+  let pLabel = 'APOYO: IDEAL';
   if (pressure === 'LIGHT') {
     targetPct = 0.2;
     pColor = COLORS.TEXT_WARN;
-    pLabel = 'APOYO DACTILAR: SUAVE';
+    pLabel = 'APOYO: SUAVE';
   } else if (pressure === 'HEAVY') {
     targetPct = 0.8;
     pColor = COLORS.TEXT_DANGER;
-    pLabel = 'APOYO DACTILAR: FUERTE';
+    pLabel = 'APOYO: FUERTE';
   }
 
   ctx.textAlign = 'left';
   ctx.fillStyle = pColor;
   ctx.font = `7px ${FONT_MONO}`;
-  ctx.fillText(pLabel, capsuleX + 10, capsuleY + 47);
+  ctx.fillText(pLabel, capsuleX + 10, capsuleY + 46);
+
+  ctx.textAlign = 'right';
+  const contactText = formatContactState(p.contactState);
+  ctx.fillStyle = '#94a3b8';
+  ctx.fillText(contactText, capsuleX + capsuleW - 10, capsuleY + 46);
 
   const barW = capsuleW - 20;
   const barH = 5;
@@ -1306,9 +1316,35 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
           ctx.font = `bold 8px ${FONT_MONO}`;
         }
 
-        // Muesca Dícrota (DIC)
+        // Onda de Reflexión / Marea (Tidal Wave - T) (Elgendi 2012)
+        // Hombro en la pendiente descendente sistólica antes de la muesca dícrota
         const d1_curr = v - prev;
         const d1_next = next - v;
+        const d2_curr = d1_next - d1_curr;
+        const isTidalShoulder =
+          d1_curr < -0.12 &&
+          d2_curr > 0.28 &&
+          v > midValue + 0.12 * Math.abs(midValue || 1) &&
+          prev < prev2 &&
+          !(v > prev && v > next);
+
+        if (isTidalShoulder && state.props.quality > 65) {
+          ctx.beginPath();
+          ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.DIC_NOTCH_RADIUS, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(52, 211, 153, 0.90)';
+          ctx.shadowColor = '#10b981';
+          ctx.shadowBlur = 5;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+
+          ctx.font = `bold 7px ${FONT_MONO}`;
+          ctx.fillStyle = '#6ee7b7';
+          ctx.textAlign = 'center';
+          ctx.fillText('T', coords[i].x, coords[i].y - 8);
+          ctx.font = `bold 8px ${FONT_MONO}`;
+        }
+
+        // Muesca Dícrota (DIC)
         if (d1_curr < 0 && d1_next > d1_curr && d1_next < 0 && v > midValue) {
           ctx.beginPath();
           ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.DIC_NOTCH_RADIUS, 0, Math.PI * 2);
@@ -1525,6 +1561,27 @@ export function drawLiveFingerOpticalLens(
   ctx.lineWidth = 0.8;
   ctx.stroke();
 
+  // 3 Arcos espectrales periféricos de absorción óptica tisular (660nm Rojo, 525nm Verde, 470nm Azul)
+  const specR = innerRad * 0.94;
+  ctx.lineWidth = 1.6;
+  // Arco Rojo 660nm (Arterial pulsátil) - Sector superior izquierdo
+  ctx.strokeStyle = 'rgba(239, 68, 68, 0.45)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, specR, -Math.PI * 0.85, -Math.PI * 0.55);
+  ctx.stroke();
+
+  // Arco Verde 525nm (Microvascular capilar superficial) - Sector superior derecho
+  ctx.strokeStyle = 'rgba(34, 197, 94, 0.45)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, specR, -Math.PI * 0.45, -Math.PI * 0.15);
+  ctx.stroke();
+
+  // Arco Azul 470nm (Absorción de referencia) - Sector inferior
+  ctx.strokeStyle = 'rgba(6, 182, 212, 0.40)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, specR, Math.PI * 0.25, Math.PI * 0.75);
+  ctx.stroke();
+
   // Retícula micrométrica de precisión médica (+)
   ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.40)' : 'rgba(245, 158, 11, 0.45)';
   ctx.lineWidth = 0.8;
@@ -1542,17 +1599,42 @@ export function drawLiveFingerOpticalLens(
   ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.60)' : 'rgba(245, 158, 11, 0.60)';
   ctx.stroke();
 
-  // Escáner láser vertical continuo de barrido sereno
+  // Escáner láser vertical continuo de barrido quirúrgico
   const scanOffset = Math.sin(state.now * 0.0028) * (innerRad * 0.72);
-  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.65)' : 'rgba(245, 158, 11, 0.55)';
+  const scanY = cy + scanOffset;
+  const trailHalfH = 7;
+
+  // Estela Gaussiana luminiscente del láser de barrido óptico
+  const laserTrail = ctx.createLinearGradient(0, scanY - trailHalfH, 0, scanY + trailHalfH);
+  laserTrail.addColorStop(0, 'rgba(0, 242, 255, 0)');
+  laserTrail.addColorStop(0.5, isDetected ? 'rgba(0, 242, 255, 0.22)' : 'rgba(245, 158, 11, 0.16)');
+  laserTrail.addColorStop(1, 'rgba(0, 242, 255, 0)');
+  ctx.fillStyle = laserTrail;
+  ctx.fillRect(cx - innerRad * 0.78, scanY - trailHalfH, innerRad * 1.56, trailHalfH * 2);
+
+  // Haz láser quirúrgico principal con bloom
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.85)' : 'rgba(245, 158, 11, 0.75)';
   ctx.shadowColor = isDetected ? '#00f2ff' : '#f59e0b';
-  ctx.shadowBlur = 4;
+  ctx.shadowBlur = 5;
   ctx.lineWidth = 1.0;
   ctx.beginPath();
-  ctx.moveTo(cx - innerRad * 0.75, cy + scanOffset);
-  ctx.lineTo(cx + innerRad * 0.75, cy + scanOffset);
+  ctx.moveTo(cx - innerRad * 0.78, scanY);
+  ctx.lineTo(cx + innerRad * 0.78, scanY);
   ctx.stroke();
   ctx.shadowBlur = 0;
+
+  // Marcas axiales de calibración micrométrica sobre el haz láser móvil
+  ctx.strokeStyle = isDetected ? 'rgba(255, 255, 255, 0.75)' : 'rgba(255, 255, 255, 0.55)';
+  ctx.lineWidth = 0.8;
+  const laserTicks = [-0.6, -0.3, 0, 0.3, 0.6];
+  for (let k = 0; k < laserTicks.length; k++) {
+    const tx = cx + innerRad * laserTicks[k];
+    const th = k === 2 ? 3.5 : 2.0;
+    ctx.beginPath();
+    ctx.moveTo(tx, scanY - th);
+    ctx.lineTo(tx, scanY + th);
+    ctx.stroke();
+  }
 
   ctx.restore(); // Fin del clip circular
 
@@ -1673,18 +1755,20 @@ export function drawLiveFingerOpticalLens(
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    // Micro-marcas discretas de radar
+    // Dial colimador de 24 divisiones con marcas de azimut cardinal
     ctx.translate(cx, cy);
     const rot = (state.now * 0.0008) % (Math.PI * 2);
     ctx.rotate(rot);
-    ctx.strokeStyle = 'rgba(103, 232, 249, 0.28)';
-    ctx.lineWidth = 0.7;
-    for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) {
+    ctx.strokeStyle = isDetected ? 'rgba(103, 232, 249, 0.35)' : 'rgba(245, 158, 11, 0.35)';
+    ctx.lineWidth = 0.8;
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 12) {
+      const isCardinal = a % (Math.PI / 2) === 0;
+      const tickLen = isCardinal ? 5.5 : 3.0;
       const cos = Math.cos(a);
       const sin = Math.sin(a);
       ctx.beginPath();
       ctx.moveTo(cos * (innerRad + 2), sin * (innerRad + 2));
-      ctx.lineTo(cos * (innerRad + 5), sin * (innerRad + 5));
+      ctx.lineTo(cos * (innerRad + 2 + tickLen), sin * (innerRad + 2 + tickLen));
       ctx.stroke();
     }
     ctx.restore();

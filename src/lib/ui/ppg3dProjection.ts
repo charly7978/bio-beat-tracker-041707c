@@ -458,6 +458,28 @@ export function drawFloorOpticalLens3D(
   ctx.lineWidth = 0.8;
   ctx.stroke();
 
+  // 3 Arcos espectrales periféricos de absorción óptica tisular (660nm Rojo arterial, 525nm Verde capilar, 470nm Azul)
+  const specRx = innerRx * 0.94;
+  const specRy = innerRy * 0.94;
+  ctx.lineWidth = 1.4;
+  // Arco Rojo 660nm (Arterial pulsátil) - Sector superior izquierdo
+  ctx.strokeStyle = 'rgba(239, 68, 68, 0.45)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, specRx, specRy, 0, -Math.PI * 0.85, -Math.PI * 0.55);
+  ctx.stroke();
+
+  // Arco Verde 525nm (Microvascular capilar superficial) - Sector superior derecho
+  ctx.strokeStyle = 'rgba(34, 197, 94, 0.45)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, specRx, specRy, 0, -Math.PI * 0.45, -Math.PI * 0.15);
+  ctx.stroke();
+
+  // Arco Azul 470nm (Absorción de referencia) - Sector inferior
+  ctx.strokeStyle = 'rgba(6, 182, 212, 0.40)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, specRx, specRy, 0, Math.PI * 0.25, Math.PI * 0.75);
+  ctx.stroke();
+
   // Retícula táctica 3D acostada (+)
   ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.45)' : 'rgba(245, 158, 11, 0.50)';
   ctx.lineWidth = 0.8;
@@ -468,17 +490,42 @@ export function drawFloorOpticalLens3D(
   ctx.moveTo(cx, cy - crossLenY); ctx.lineTo(cx, cy + crossLenY);
   ctx.stroke();
 
-  // Escáner láser 3D que barre el piso en el eje de profundidad Z
-  const scanZOffset = Math.sin(state.now * 0.0028) * (innerRy * 0.75);
-  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.70)' : 'rgba(245, 158, 11, 0.60)';
-  ctx.shadowColor = '#00f2ff';
-  ctx.shadowBlur = 4;
+  // Escáner láser 3D de grado quirúrgico que barre el piso en el eje de profundidad Z
+  const scanZOffset = Math.sin(state.now * 0.0028) * (innerRy * 0.72);
+  const scanBeamY = cy + scanZOffset;
+  const ribbonDepth = 6 * tiltRatio;
+
+  // Estela Gaussiana luminiscente del láser en el piso en perspectiva
+  const trailGrad = ctx.createLinearGradient(0, scanBeamY - ribbonDepth, 0, scanBeamY + ribbonDepth);
+  trailGrad.addColorStop(0, 'rgba(0, 242, 255, 0)');
+  trailGrad.addColorStop(0.5, isDetected ? 'rgba(0, 242, 255, 0.22)' : 'rgba(245, 158, 11, 0.16)');
+  trailGrad.addColorStop(1, 'rgba(0, 242, 255, 0)');
+  ctx.fillStyle = trailGrad;
+  ctx.fillRect(cx - innerRx * 0.76, scanBeamY - ribbonDepth, innerRx * 1.52, ribbonDepth * 2);
+
+  // Haz láser quirúrgico principal con bloom
+  ctx.strokeStyle = isDetected ? 'rgba(0, 242, 255, 0.85)' : 'rgba(245, 158, 11, 0.75)';
+  ctx.shadowColor = isDetected ? '#00f2ff' : '#f59e0b';
+  ctx.shadowBlur = 5;
   ctx.lineWidth = 1.0;
   ctx.beginPath();
-  ctx.moveTo(cx - innerRx * 0.80, cy + scanZOffset);
-  ctx.lineTo(cx + innerRx * 0.80, cy + scanZOffset);
+  ctx.moveTo(cx - innerRx * 0.78, scanBeamY);
+  ctx.lineTo(cx + innerRx * 0.78, scanBeamY);
   ctx.stroke();
   ctx.shadowBlur = 0;
+
+  // Marcas axiales de calibración micrométrica sobre el haz láser móvil
+  ctx.strokeStyle = isDetected ? 'rgba(255, 255, 255, 0.75)' : 'rgba(255, 255, 255, 0.55)';
+  ctx.lineWidth = 0.8;
+  const tickFractions = [-0.6, -0.3, 0, 0.3, 0.6];
+  for (let k = 0; k < tickFractions.length; k++) {
+    const tx = cx + innerRx * tickFractions[k];
+    const th = (k === 2 ? 3.5 : 2.0) * tiltRatio;
+    ctx.beginPath();
+    ctx.moveTo(tx, scanBeamY - th);
+    ctx.lineTo(tx, scanBeamY + th);
+    ctx.stroke();
+  }
 
   ctx.restore(); // Fin del clip elíptico 3D
 
@@ -512,17 +559,19 @@ export function drawFloorOpticalLens3D(
     }
   }
 
-  // Micro-marcas elípticas de radar en el piso
+  // Dial colimador de 24 divisiones con marcas de azimut cardinal en el piso
   const rot = (state.now * 0.0008) % (Math.PI * 2);
-  ctx.strokeStyle = 'rgba(103, 232, 249, 0.30)';
+  ctx.strokeStyle = 'rgba(103, 232, 249, 0.32)';
   ctx.lineWidth = 0.8;
-  for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
+  for (let a = 0; a < Math.PI * 2; a += Math.PI / 12) {
+    const isCardinal = a % (Math.PI / 2) === 0;
+    const tickLen = isCardinal ? 5.5 : 3.0;
     const cos = Math.cos(a + rot);
     const sin = Math.sin(a + rot);
     const p1x = cx + cos * (innerRx + 2);
     const p1y = cy + sin * (innerRy + 2 * tiltRatio);
-    const p2x = cx + cos * (innerRx + 5);
-    const p2y = cy + sin * (innerRy + 5 * tiltRatio);
+    const p2x = cx + cos * (innerRx + 2 + tickLen);
+    const p2y = cy + sin * (innerRy + (2 + tickLen) * tiltRatio);
     ctx.beginPath();
     ctx.moveTo(p1x, p1y);
     ctx.lineTo(p2x, p2y);
@@ -846,9 +895,33 @@ export function drawWaveRibbon3D(
         ctx.fillText('DIA', px, py + 24);
       }
 
-      // Muesca dícrota (DIC)
+      // Onda de Reflexión / Marea (Tidal Wave - T) (Elgendi 2012)
+      // Hombro o inflexión en la pendiente descendente sistólica antes de la escotadura dícrota
       const d1Curr = v - prev;
       const d1Next = next - v;
+      const d2Curr = d1Next - d1Curr;
+      const isTidalShoulder =
+        d1Curr < -0.12 &&
+        d2Curr > 0.28 &&
+        v > geom.midValue + 0.12 * Math.abs(geom.midValue || 1) &&
+        prev < prev2 &&
+        !(v > prev && v > next);
+
+      if (isTidalShoulder && quality > 65) {
+        ctx.beginPath();
+        ctx.arc(px, py, 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(52, 211, 153, 0.85)';
+        ctx.shadowColor = '#10b981';
+        ctx.shadowBlur = 4;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.font = `bold 7px ${FONT}`;
+        ctx.fillStyle = '#6ee7b7';
+        ctx.fillText('T', px, py - 7);
+      }
+
+      // Muesca dícrota (DIC)
       if (d1Curr < 0 && d1Next > d1Curr && d1Next < 0 && v > geom.midValue) {
         ctx.beginPath();
         ctx.arc(px, py, 2.2, 0, Math.PI * 2);
