@@ -272,7 +272,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     value, quality, isFingerDetected, arrhythmiaStatus, preserveResults,
     isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime,
     perfusionIndex, pressure, bpStatus, arrhythmiaCount, isMonitoring,
-    contactState, acquisitionStatus, diagnostics,
+    contactState, acquisitionStatus, diagnostics, getVideoElement,
   ]);
 
 

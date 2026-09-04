@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2, Sliders, User, Check } from "lucide-react";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
 import { CalibrationManager } from "@/modules/vital-signs/CalibrationManager";
@@ -19,7 +19,6 @@ import { PoincarePlot } from "@/components/PoincarePlot";
 import { WebrtcCallWidget } from "@/components/WebrtcCallWidget";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
-import { isNative } from "@/lib/device/platform";
 import type { ContactState } from "@/types/signal";
 import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
 import { triggerCalibrationCompleteHaptic } from "@/utils/haptics";
@@ -55,7 +54,7 @@ const Index = () => {
     c.width = 320;
     c.height = 240;
     canvasRef.current = c;
-    ctxRef.current = c.getContext('2d', { willReadFrequently: !isNative(), alpha: false });
+    ctxRef.current = c.getContext('2d', { willReadFrequently: true, alpha: false });
   }
 
   // Hooks de procesamiento
@@ -107,24 +106,29 @@ const Index = () => {
     setHeartBeatRuntimeHints(cameraHintsRef.current);
   }, [setCameraRuntimeHints, setHeartBeatRuntimeHints]);
 
+  const processHeartBeatApi = useMemo(() => ({
+    processSignal: processHeartBeat,
+    setFingerPlacementMode: (mode: import('@/types/signal').FingerPlacementMode) => { setHeartBeatPlacementMode(mode); },
+    setRuntimeHints: setHeartBeatRuntimeHints,
+    reacquirePeaks: reacquireHeartPeaks,
+    reset: resetHeartBeat,
+  }), [processHeartBeat, setHeartBeatPlacementMode, setHeartBeatRuntimeHints, reacquireHeartPeaks, resetHeartBeat]);
+
+  const processVitalSignsApi = useMemo(() => ({
+    processSignal: processVitalSigns,
+    setPlacementMode: setVitalsPlacementMode,
+    setRGBData,
+    getRGBStats,
+  }), [processVitalSigns, setVitalsPlacementMode, setRGBData, getRGBStats]);
+
   // Signal router (encapsula todo el routing de señal, throttling, latch, sanity)
   const router = useSignalRouter({
-    processHeartBeat: {
-      processSignal: processHeartBeat,
-      setFingerPlacementMode: (mode) => { setHeartBeatPlacementMode(mode); },
-      setRuntimeHints: setHeartBeatRuntimeHints,
-      reacquirePeaks: reacquireHeartPeaks,
-      reset: resetHeartBeat,
-    },
-    processVitalSigns: {
-      processSignal: processVitalSigns,
-      setPlacementMode: setVitalsPlacementMode,
-      setRGBData,
-      getRGBStats,
-    },
+    processHeartBeat: processHeartBeatApi,
+    processVitalSigns: processVitalSignsApi,
     cameraHintsRef,
     ppgMeterRef,
   });
+
 
   // Frame loop
   const { startFrameLoop, stopFrameLoop } = useFrameLoop({

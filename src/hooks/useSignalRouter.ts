@@ -113,6 +113,12 @@ const {
 } = VITAL_THRESHOLDS.ROUTER;
 
 export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHintsRef, ppgMeterRef }: UseSignalRouterInput) {
+  // Refs estables para evitar regeneración y desmontaje de callbacks de alta frecuencia
+  const heartBeatApiRef = useRef(processHeartBeat);
+  heartBeatApiRef.current = processHeartBeat;
+  const vitalSignsApiRef = useRef(processVitalSigns);
+  vitalSignsApiRef.current = processVitalSigns;
+
   // Estados de salida
   const [vitalSigns, setVitalSigns] = useState<VitalSignsResult>(createDefaultVitalSignsResult);
   const [heartbeatSignal, setHeartbeatSignal] = useState(0);
@@ -128,6 +134,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const lastArrhythmiaCountForBeatsRef = useRef(0);
   const arrhythmiaDetectedRef = useRef(false);
   const lastArrhythmiaData = useRef<{ timestamp: number; rmssd: number; rrVariation: number } | null>(null);
+
 
   const motionArtifactFramesRef = useRef(0);
   const saturationFramesRef = useRef(0);
@@ -227,7 +234,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   }, []);
 
   const resetFingerContactSession = useCallback(() => {
-    processHeartBeat.reset();
+    heartBeatApiRef.current.reset();
     measurementLatchRef.current = createMeasurementSessionLatch();
     lastGoodBpmRef.current = 0;
     lastBpmSeenAtRef.current = 0;
@@ -254,7 +261,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastDiagPushRef.current = 0;
     ppgMeterRef?.current?.clearBuffer();
 
-  }, [processHeartBeat, ppgMeterRef]);
+  }, [ppgMeterRef]);
 
 
   const resetSessionRefs = useCallback(() => {
@@ -292,8 +299,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       (diag && typeof diag === 'object' && typeof diag.placementMode === 'string'
         ? (diag.placementMode as FingerPlacementMode)
         : 'hybrid');
-    processHeartBeat.setFingerPlacementMode(placementMode);
-    processVitalSigns.setPlacementMode(placementMode);
+    heartBeatApiRef.current.setFingerPlacementMode(placementMode);
+    vitalSignsApiRef.current.setPlacementMode(placementMode);
     const fingerConfirmed = !!lastSignal.fingerDetected;
     const nowT = performance.now();
     const hasUsableContact =
@@ -354,7 +361,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       lastHbInputRef.current = 0;
     }
 
-    const heartBeatResult = processHeartBeat.processSignal(
+    const heartBeatResult = heartBeatApiRef.current.processSignal(
       hbInput,
       contactState,
       nowT,
@@ -553,14 +560,14 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
           hasUsableContact &&
           unstableFrameCounter.current === STALE_PEAK_REACQUIRE_FRAMES
         ) {
-          processHeartBeat.reacquirePeaks(nowT);
+          heartBeatApiRef.current.reacquirePeaks(nowT);
         }
         const STALE_FINGER_NO_BPM = VITAL_THRESHOLDS.CONTACT.STALE_NO_BPM_FRAMES;
         if (
           hasUsableContact &&
           unstableFrameCounter.current === STALE_FINGER_NO_BPM
         ) {
-          processHeartBeat.reacquirePeaks(nowT);
+          heartBeatApiRef.current.reacquirePeaks(nowT);
           setVitalSigns(prev => ({
             ...prev,
             spo2: { ...prev.spo2, value: 0, status: 'NO_VALID_SIGNAL' },
@@ -670,10 +677,10 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const dspDue = vitalSignsFrameCounter.current >= VITALS_PROCESS_EVERY_N_FRAMES;
     if (dspDue) {
       vitalSignsFrameCounter.current = 0;
-      const rgbStats = processVitalSigns.getRGBStats();
+      const rgbStats = vitalSignsApiRef.current.getRGBStats();
 
       if (rgbStats.redDC > 0 && rgbStats.greenDC > 0) {
-        processVitalSigns.setRGBData({
+        vitalSignsApiRef.current.setRGBData({
           redAC: rgbStats.redAC,
           redDC: rgbStats.redDC,
           greenAC: rgbStats.greenAC,
@@ -720,7 +727,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
       const effectiveBpm = bpmOut || lastGoodBpmRef.current;
 
-      const vitals = processVitalSigns.processSignal(
+      const vitals = vitalSignsApiRef.current.processSignal(
         lastSignal.filteredValue,
         rawSqi || lastSignal.quality || 0,
         effectiveBpm,
@@ -768,8 +775,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       }
     }
   }, [
-    processHeartBeat,
-    processVitalSigns,
     cameraHintsRef,
     resetFingerContactSession,
     applyLiveDisplaySmooth,

@@ -140,6 +140,7 @@ async function applyTorchDependentParams(track: MediaStreamTrack, torchOn: boole
   const constraints: AdvancedConstraint[] = [];
 
   if (torchOn) {
+    constraints.push({ torch: true });
     if (caps.iso) {
       const minISO = caps.iso.min ?? 50;
       const maxISO = caps.iso.max ?? 400;
@@ -176,16 +177,36 @@ async function applyTorchDependentParams(track: MediaStreamTrack, torchOn: boole
   }
 }
 
+
+async function getBestEnvironmentCameraDeviceId(): Promise<string | undefined> {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) {
+    return undefined;
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter(d => d.kind === 'videoinput');
+    if (videoDevices.length <= 1) return undefined;
+
+    const backCameras = videoDevices.filter(d =>
+      /back|rear|environment|trasera|posterior|0/i.test(d.label) ||
+      (!/front|user|delantera|selfie|1/i.test(d.label) && !/macro|wide/i.test(d.label))
+    );
+    return backCameras[0]?.deviceId ?? videoDevices[0]?.deviceId;
+  } catch {
+    return undefined;
+  }
+}
+
 const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
-  { onStreamReady, isMonitoring},
+  { onStreamReady, isMonitoring },
   ref
 ) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-
   const streamRef = useRef<MediaStream | null>(null);
-
   const isStartingRef = useRef(false);
-
+  const torchActiveRef = useRef(false);
+  const onStreamReadyRef = useRef(onStreamReady);
+  onStreamReadyRef.current = onStreamReady;
 
   useImperativeHandle(ref, () => ({
     getVideoElement: () => videoRef.current,
@@ -237,6 +258,11 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
           const constraints: AdvancedConstraint[] = [];
 
+          // Preservar SIEMPRE el flash si estaba activo o soportado para evitar el bucle de desconexión
+          if (torchActiveRef.current || caps.torch) {
+            constraints.push({ torch: true });
+          }
+
           if (caps.focusMode?.includes("manual")) {
             const near = typeof caps.focusDistance?.min === "number" ? caps.focusDistance.min : 0;
             constraints.push({ focusMode: "manual", focusDistance: near });
@@ -282,6 +308,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
     const mountedRef = { current: true };
 
     const stopCamera = async () => {
+      torchActiveRef.current = false;
       const stream = streamRef.current;
       if (stream) {
         for (const track of stream.getVideoTracks()) {
@@ -303,6 +330,11 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
     };
 
     const activateTorch = async (track: MediaStreamTrack): Promise<boolean> => {
+      const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
+      if (caps.torch === false) {
+        log.warn("Torch capability is explicitly false on this track");
+        return false;
+      }
       const attempts = [
         { advanced: [{ torch: true } as TorchCapableConstraint] },
         { torch: true } as TorchCapableConstraint,
@@ -313,15 +345,20 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         try {
           await track.applyConstraints(constraints);
           const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-          if (settings.torch === true) return true;
+          if (settings.torch === true) {
+            torchActiveRef.current = true;
+            return true;
+          }
         } catch { log.debug('Torch attempt failed — trying next syntax'); }
       }
       // Último intento: sin verificar settings, confiar en que applyConstraints funcionó
       try {
         await track.applyConstraints({ advanced: [{ torch: true } as TorchCapableConstraint] });
+        torchActiveRef.current = true;
         return true;
       } catch { log.debug('Torch not available on this device'); }
       log.warn("Torch no disponible en este dispositivo");
+      torchActiveRef.current = false;
       return false;
     };
 
@@ -356,15 +393,19 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
       }
 
       try {
-        // 2. Cámara Trasera (Dedo + PPG)
+        // 2. Cámara Trasera con preferencia a sensor principal con flash
+        const preferredDeviceId = await getBestEnvironmentCameraDeviceId();
+        const videoConstraints: MediaTrackConstraints = {
+          facingMode: preferredDeviceId ? undefined : { ideal: "environment" },
+          deviceId: preferredDeviceId ? { ideal: preferredDeviceId } : undefined,
+          width: { ideal: 640, max: 960 },
+          height: { ideal: 480, max: 720 },
+          frameRate: { ideal: 30, min: 15, max: 30 },
+        };
+
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 640, max: 960 },
-            height: { ideal: 480, max: 720 },
-            frameRate: { ideal: 30, min: 15, max: 30 },
-          },
+          video: videoConstraints,
         });
 
         if (!mountedRef.current) {
@@ -395,8 +436,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
         log.info(`Cámara trasera lista ${videoRef.current?.videoWidth ?? "?"}x${videoRef.current?.videoHeight ?? "?"}`);
 
-        onStreamReady?.(stream);
-
+        onStreamReadyRef.current?.(stream);
 
       } catch (err) {
         const errType = classifyCameraError(err);
@@ -419,7 +459,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
               const track = fallbackStream.getVideoTracks()[0];
               if (track) await stabilizeTrack(track);
               log.info("Cámara iniciada con constraints relajados");
-              onStreamReady?.(fallbackStream);
+              onStreamReadyRef.current?.(fallbackStream);
               isStartingRef.current = false;
               return;
             }
@@ -446,7 +486,8 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
       mountedRef.current = false;
       stopCamera();
     };
-  }, [isMonitoring, onStreamReady]);
+  }, [isMonitoring]);
+
 
   return (
     <>
