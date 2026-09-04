@@ -1068,7 +1068,17 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       if (endIdx <= startIdx) return;
       ctx.beginPath();
       ctx.moveTo(coords[startIdx].x, waveBaseY);
-      for (let k = startIdx; k < endIdx; k++) ctx.lineTo(coords[k].x, coords[k].y);
+      ctx.lineTo(coords[startIdx].x, coords[startIdx].y);
+      if (endIdx - startIdx >= 3) {
+        for (let k = startIdx; k < endIdx - 1; k++) {
+          const xc = (coords[k].x + coords[k + 1].x) / 2;
+          const yc = (coords[k].y + coords[k + 1].y) / 2;
+          ctx.quadraticCurveTo(coords[k].x, coords[k].y, xc, yc);
+        }
+        ctx.lineTo(coords[endIdx - 1].x, coords[endIdx - 1].y);
+      } else {
+        for (let k = startIdx + 1; k < endIdx; k++) ctx.lineTo(coords[k].x, coords[k].y);
+      }
       ctx.lineTo(coords[endIdx - 1].x, waveBaseY);
       ctx.closePath();
       const fillGrad = ctx.createLinearGradient(0, plot.y + wavePadTop, 0, waveBaseY);
@@ -1093,13 +1103,23 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       fi = fj;
     }
 
-    // 3. Trazado Multicapa del Haz de Fósforo
+    // 3. Trazado Multicapa del Haz de Fósforo con Suavizado Spline Sub-píxel
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    const drawDirectSegment = (startIdx: number, endIdx: number) => {
+    const drawSmoothSegment = (startIdx: number, endIdx: number) => {
+      if (endIdx <= startIdx) return;
       ctx.beginPath();
       ctx.moveTo(coords[startIdx].x, coords[startIdx].y);
-      for (let k = startIdx + 1; k < endIdx; k++) ctx.lineTo(coords[k].x, coords[k].y);
+      if (endIdx - startIdx < 3) {
+        for (let k = startIdx + 1; k < endIdx; k++) ctx.lineTo(coords[k].x, coords[k].y);
+        return;
+      }
+      for (let k = startIdx; k < endIdx - 1; k++) {
+        const xc = (coords[k].x + coords[k + 1].x) / 2;
+        const yc = (coords[k].y + coords[k + 1].y) / 2;
+        ctx.quadraticCurveTo(coords[k].x, coords[k].y, xc, yc);
+      }
+      ctx.lineTo(coords[endIdx - 1].x, coords[endIdx - 1].y);
     };
 
     const totalLen = coords.length;
@@ -1112,7 +1132,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       const isArr = coords[seg].isArr;
       let segEnd = seg;
       while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
-      drawDirectSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
+      drawSmoothSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
       ctx.strokeStyle = state.traceRevealed
         ? (isArr ? 'rgba(239, 68, 68, 0.50)' : 'rgba(34, 197, 94, 0.55)')
         : 'rgba(148, 163, 184, 0.30)';
@@ -1130,7 +1150,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
         const isArr = coords[seg].isArr;
         let segEnd = seg;
         while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
-        drawDirectSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
+        drawSmoothSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
         ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.75)' : 'rgba(74, 222, 128, 0.80)';
         ctx.lineWidth = CARDIAC_WAVE_CONFIG.GLOW_STROKE_WIDTH;
         ctx.stroke();
@@ -1145,13 +1165,13 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
         let segEnd = seg;
         while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
         
-        drawDirectSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
+        drawSmoothSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
         ctx.strokeStyle = isArr ? '#f87171' : '#86efac';
         ctx.lineWidth = CARDIAC_WAVE_CONFIG.LEADING_STROKE_WIDTH;
         ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
         ctx.stroke();
 
-        drawDirectSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
+        drawSmoothSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = CARDIAC_WAVE_CONFIG.CORE_STROKE_WIDTH;
         ctx.shadowBlur = 4;
@@ -1164,7 +1184,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     } else {
       seg = Math.max(leadingCut, 0);
       if (seg < totalLen - 1) {
-        drawDirectSegment(seg, totalLen);
+        drawSmoothSegment(seg, totalLen);
         ctx.strokeStyle = 'rgba(148, 163, 184, 0.65)';
         ctx.lineWidth = CARDIAC_WAVE_CONFIG.BASE_STROKE_WIDTH;
         ctx.stroke();
@@ -1278,12 +1298,16 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
         if (d1_curr < 0 && d1_next > d1_curr && d1_next < 0 && v > midValue) {
           ctx.beginPath();
           ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.DIC_NOTCH_RADIUS, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(103, 232, 249, 0.75)';
+          ctx.fillStyle = 'rgba(103, 232, 249, 0.85)';
+          ctx.shadowColor = '#00f2ff';
+          ctx.shadowBlur = 6;
           ctx.fill();
+          ctx.shadowBlur = 0;
 
-          if (state.props.quality > 70) {
-            ctx.font = `7px ${FONT_MONO}`;
-            ctx.fillStyle = 'rgba(103, 232, 249, 0.9)';
+          if (state.props.quality > 60) {
+            ctx.font = `bold 7px ${FONT_MONO}`;
+            ctx.fillStyle = 'rgba(103, 232, 249, 0.95)';
+            ctx.textAlign = 'center';
             ctx.fillText('DIC', coords[i].x, coords[i].y - 8);
             ctx.font = `bold 8px ${FONT_MONO}`;
           }

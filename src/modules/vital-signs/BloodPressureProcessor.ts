@@ -189,19 +189,22 @@ export class BloodPressureProcessor {
       kValue: median(take.map((c) => c.kValue)),
       vMax: median(take.map((c) => c.vMax)),
       harmonicDistortion: median(take.map((c) => c.harmonicDistortion)),
+      reflectionIndex: median(take.map((c) => c.reflectionIndex ?? 0)),
+      elasticModulusProxy: median(take.map((c) => c.elasticModulusProxy ?? 0)),
     };
   }
 
   private assessFeatureQuality(f: PwaMedianFeatures, cycleCount: number): number {
     let score = 0;
-    score += Math.min(30, cycleCount * 5);
-    if (f.sutMs > 40 && f.sutMs < 400) score += 18;
-    if (f.diastolicPhaseMs > 50 && f.diastolicPhaseMs < 800) score += 15;
+    score += Math.min(25, cycleCount * 5);
+    if (f.sutMs > 40 && f.sutMs < 400) score += 16;
+    if (f.diastolicPhaseMs > 50 && f.diastolicPhaseMs < 800) score += 14;
     if (f.stiffnessIndex > 0.5 && f.stiffnessIndex < 25) score += 12;
     if (f.augmentationIndex > 2 && f.augmentationIndex < 45) score += 10;
     if (f.dicroticDepth > 0 && f.dicroticDepth < 0.8) score += 8;
     if (f.pw50Ms > 60 && f.pw50Ms < 600) score += 7;
-    if (f.harmonicDistortion > 0.05 && f.harmonicDistortion < 1) score += 5;
+    if (f.harmonicDistortion > 0.05 && f.harmonicDistortion < 1) score += 4;
+    if (typeof f.reflectionIndex === 'number' && f.reflectionIndex > 5 && f.reflectionIndex < 95) score += 4;
     return Math.min(100, score);
   }
 

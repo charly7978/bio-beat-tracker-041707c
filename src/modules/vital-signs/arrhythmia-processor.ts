@@ -1,6 +1,13 @@
 import { clamp } from '../../utils/math';
 import { createLogger } from '../../utils/logger';
-import { getMonotonicNow, computeRrHrv } from '../../utils/physio';
+import {
+  getMonotonicNow,
+  computeRrHrv,
+  computePoincare,
+  computeBaevskyStressIndex,
+  type PoincareMetrics,
+  type BaevskyStressMetrics,
+} from '../../utils/physio';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 
 const log = createLogger('ArrhythmiaProcessor');
@@ -25,6 +32,10 @@ export interface ArrhythmiaMetrics {
   abruptDiffCount: number;
   /** Latidos prematuros (PVC/PAC) en la ventana — pausa compensatoria. */
   prematureBeatCount: number;
+  /** Geometría de Poincaré (SD1, SD2, Balance Autonómico SD1/SD2, Área Elipse). */
+  poincare?: PoincareMetrics;
+  /** Índice de Tensión / Estrés Psicofisiológico de Baevsky (SI). */
+  baevskyStress?: BaevskyStressMetrics;
 }
 
 export type ArrhythmiaConfidence = 'none' | 'mild' | 'moderate' | 'severe';
@@ -266,6 +277,10 @@ export class ArrhythmiaProcessor {
     // --- 9. Latidos prematuros (PVC/PAC): acoplamiento corto + pausa compensatoria ---
     const prematureBeatCount = this.countPrematureBeats(valid, median);
 
+    // --- 10. Balance Autonómico (Poincaré) y Tensión/Estrés (Baevsky) ---
+    const poincare = computePoincare(valid);
+    const baevskyStress = computeBaevskyStressIndex(valid);
+
     this.metrics = {
       rmssd, cv, pnn50, pnn31, pnn325, tpr,
       shannonEntropy: shannon,
@@ -274,6 +289,8 @@ export class ArrhythmiaProcessor {
       outlierCount,
       abruptDiffCount,
       prematureBeatCount,
+      poincare,
+      baevskyStress,
     };
 
     // ── Evidencia cruda por ventana: irregularidad global (FA) por score
@@ -597,6 +614,14 @@ export class ArrhythmiaProcessor {
       shannonEntropy: 0, sampleEntropy: 0,
       rrVariation: 0, outlierCount: 0, abruptDiffCount: 0,
       prematureBeatCount: 0,
+      poincare: { sd1: 0, sd2: 0, sd1Sd2Ratio: 0, ellipseArea: 0 },
+      baevskyStress: {
+        stressIndex: 0,
+        modeSec: 0,
+        modeAmplitudePct: 0,
+        variationRangeSec: 0,
+        stressLevel: 'NORMAL',
+      },
     };
   }
 }

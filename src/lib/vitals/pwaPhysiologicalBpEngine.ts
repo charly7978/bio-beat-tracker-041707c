@@ -37,6 +37,8 @@ export interface PwaMedianFeatures {
   kValue: number;
   vMax: number;
   harmonicDistortion: number;
+  reflectionIndex?: number;
+  elasticModulusProxy?: number;
 }
 
 export interface PwaBpContext {
@@ -183,21 +185,24 @@ export function computePhysiologicalIndices(
   const vNorm = norm01(f.vMax, N.V_MAX[0], N.V_MAX[1]);
   const hdNorm = norm01(f.harmonicDistortion, N.HARMONIC_DISTORTION[0], N.HARMONIC_DISTORTION[1]);
 
+  const epNorm = typeof f.elasticModulusProxy === 'number' && Number.isFinite(f.elasticModulusProxy)
+    ? norm01(f.elasticModulusProxy, 0.5, 15)
+    : siNorm;
   const complianceAgeFactor = Math.exp(-0.012 * (p.ageYears - 25));
   const wC = VITAL_THRESHOLDS.BP.WEIGHTS.COMPLIANCE;
   let complianceIndex =
     1 -
     (wC.stiff * stiffNorm +
-      wC.si * siNorm +
+      wC.si * ((siNorm * 0.7) + (epNorm * 0.3)) +
       wC.aix * aixNorm +
       wC.vMax * vNorm +
       wC.sutRatio * norm01(sutRatio, N.SUT_CYCLE_RATIO[0], N.SUT_CYCLE_RATIO[1]) +
       hdNorm * 0.15);
   complianceIndex = clamp(complianceIndex * complianceAgeFactor, 0.05, 1);
 
-  // C. Índice de Reflexión de Onda (PDA Reflection Index)
+  // C. Índice de Reflexión de Onda (PDA Reflection Index + pyPPG direct reflection)
   const wRef = VITAL_THRESHOLDS.BP.WEIGHTS.REFLECTION;
-  const reflectionIndex = clamp(
+  const pdaReflection = clamp(
     wRef.dDivA * dDivANorm +
       wRef.agi * norm01(f.agi, N.AGI[0], N.AGI[1]) +
       wRef.dicroticDepth * norm01(f.dicroticDepth, N.DICROTIC_DEPTH[0], N.DICROTIC_DEPTH[1]) +
@@ -205,6 +210,10 @@ export function computePhysiologicalIndices(
     0,
     1,
   );
+  const directRiNorm = typeof f.reflectionIndex === 'number' && Number.isFinite(f.reflectionIndex)
+    ? norm01(f.reflectionIndex, 10, 80)
+    : pdaReflection;
+  const reflectionIndex = clamp(pdaReflection * 0.65 + directRiNorm * 0.35, 0, 1);
 
   return { resistanceIndex, complianceIndex, reflectionIndex };
 }
