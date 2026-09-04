@@ -1427,13 +1427,15 @@ export function drawLiveFingerOpticalLens(
   const progress = Math.max(0, Math.min(1, diag?.acquisitionProgress ?? 0));
   const innerRad = radius * 0.86;
 
-  // 1. Halo vascular acústico exterior reactivo al pulso cardíaco fisiológico
+  // 1. Halo vascular acústico exterior reactivo al pulso cardíaco fisiológico y PI
+  const pi = p.perfusionIndex ?? 0;
+  const piFactor = Math.min(1.0, pi * 50);
   const pulse = Math.max(state.sweepPulse, 0.04);
-  const auraRad = radius * (1.18 + pulse * 0.28);
+  const auraRad = radius * (1.18 + pulse * (0.22 + piFactor * 0.16));
   const aura = ctx.createRadialGradient(cx, cy, 3, cx, cy, auraRad);
   if (isDetected) {
-    aura.addColorStop(0, `rgba(6, 182, 212, ${0.14 + pulse * 0.20})`);
-    aura.addColorStop(0.55, `rgba(34, 197, 94, ${0.06 + pulse * 0.10})`);
+    aura.addColorStop(0, `rgba(6, 182, 212, ${0.16 + pulse * 0.22})`);
+    aura.addColorStop(0.55, `rgba(34, 197, 94, ${0.08 + pulse * 0.12})`);
     aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
   } else {
     aura.addColorStop(0, 'rgba(245, 158, 11, 0.15)');
@@ -1687,31 +1689,51 @@ export function drawLiveFingerOpticalLens(
     }
     ctx.restore();
 
-    // Badge inferior compacto y sobrio
-    const liveBadgeW = 76;
-    const liveBadgeH = 13;
+    // Badge inferior dinámico de alta fidelidad clínica
+    let statusText = 'POSICIONAR YEMA';
+    let statusColor = '#f59e0b';
+    let statusRgb = '245, 158, 11';
+    if (isDetected) {
+      const isSaturated = (diag?.sqm as Record<string, number> | undefined)?.saturationRatio && (diag?.sqm as Record<string, number>).saturationRatio > 0.15;
+      if (isSaturated) {
+        statusText = 'ISQUEMIA / SOBREPRESIÓN';
+        statusColor = '#ef4444';
+        statusRgb = '239, 68, 68';
+      } else if (p.contactState === 'UNSTABLE_CONTACT' || (p.quality ?? 0) < 30) {
+        statusText = 'CONTACTO LIGERO';
+        statusColor = '#f59e0b';
+        statusRgb = '245, 158, 11';
+      } else {
+        statusText = `PERFUSIÓN ÓPTIMA · PI ${(pi * 100).toFixed(1)}%`;
+        statusColor = '#22c55e';
+        statusRgb = '34, 197, 94';
+      }
+    }
+
+    const liveBadgeW = isDetected ? 124 : 96;
+    const liveBadgeH = 14;
     const liveBadgeY = cy + innerRad + 4;
-    ctx.fillStyle = 'rgba(6, 14, 28, 0.85)';
+    ctx.fillStyle = 'rgba(6, 14, 28, 0.88)';
     ctx.beginPath();
     ctx.roundRect(cx - liveBadgeW / 2, liveBadgeY, liveBadgeW, liveBadgeH, 6);
     ctx.fill();
-    ctx.strokeStyle = isDetected ? 'rgba(34, 197, 94, 0.35)' : 'rgba(245, 158, 11, 0.35)';
+    ctx.strokeStyle = `rgba(${statusRgb}, 0.40)`;
     ctx.stroke();
 
     ctx.beginPath();
-    ctx.arc(cx - liveBadgeW / 2 + 7, liveBadgeY + 6.5, 2.0, 0, Math.PI * 2);
-    ctx.fillStyle = isDetected ? '#22c55e' : '#f59e0b';
+    ctx.arc(cx - liveBadgeW / 2 + 7, liveBadgeY + 7, 2.0, 0, Math.PI * 2);
+    ctx.fillStyle = statusColor;
     if (isDetected) {
-      ctx.shadowColor = '#22c55e';
-      ctx.shadowBlur = 3;
+      ctx.shadowColor = statusColor;
+      ctx.shadowBlur = 4;
     }
     ctx.fill();
     ctx.shadowBlur = 0;
 
-    ctx.font = `bold 7px ${FONT_MONO}`;
-    ctx.fillStyle = isDetected ? '#86efac' : '#fde68a';
+    ctx.font = `bold 7.5px ${FONT_MONO}`;
+    ctx.fillStyle = isDetected ? '#ffffff' : '#fde68a';
     ctx.textAlign = 'center';
-    ctx.fillText('SENSOR ROI', cx + 4, liveBadgeY + 9.5);
+    ctx.fillText(statusText, cx + 4, liveBadgeY + 10.2);
   }
 }
 

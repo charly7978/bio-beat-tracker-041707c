@@ -218,11 +218,11 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.stroke();
   }
 
-  // 7. Onda de Choque Elíptica en el Piso (Floor Shockwave en latido)
-  if (state.traceRevealed && state.sweepPulse > 0.06) {
+  // 7. Ondas de Choque Relativistas en el Piso (Dual Harmonic Floor Shockwaves en sístole)
+  if (state.traceRevealed && state.sweepPulse > 0.04) {
     const shockProg = 1 - state.sweepPulse;
     const shockZ = proj.zNear + shockProg * (proj.zFar - proj.zNear) * 0.72;
-    const shockRadX = (proj.plotW * 0.52) * (0.15 + 0.85 * shockProg);
+    const shockRadX = (proj.plotW * 0.54) * (0.12 + 0.88 * shockProg);
     const shockCenter = proj.floorPoint(0, shockZ);
     const shockLeft = proj.floorPoint(-shockRadX, shockZ);
     const shockRight = proj.floorPoint(shockRadX, shockZ);
@@ -232,12 +232,33 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.save();
     ctx.beginPath();
     ctx.ellipse(shockCenter.x, shockCenter.y, radPxX, radPxY, 0, 0, Math.PI * 2);
-    const shockAlpha = (1 - shockProg) * 0.50;
+    const shockAlpha = (1 - shockProg) * 0.55;
     ctx.strokeStyle = `rgba(0, 242, 255, ${shockAlpha.toFixed(3)})`;
-    ctx.lineWidth = 2.0 * shockCenter.scale;
+    ctx.lineWidth = 2.2 * shockCenter.scale;
     ctx.shadowColor = '#00f2ff';
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = 12;
     ctx.stroke();
+
+    // Anillo armónico secundario de propagación bioeléctrica
+    if (shockProg > 0.15) {
+      const p2 = shockProg - 0.14;
+      const z2 = proj.zNear + p2 * (proj.zFar - proj.zNear) * 0.72;
+      const r2X = (proj.plotW * 0.44) * (0.10 + 0.90 * p2);
+      const c2 = proj.floorPoint(0, z2);
+      const l2 = proj.floorPoint(-r2X, z2);
+      const r2 = proj.floorPoint(r2X, z2);
+      const rad2X = (r2.x - l2.x) / 2;
+      const rad2Y = Math.max(2, rad2X * 0.24 * c2.scale);
+
+      ctx.beginPath();
+      ctx.ellipse(c2.x, c2.y, rad2X, rad2Y, 0, 0, Math.PI * 2);
+      const a2 = (1 - p2) * 0.30;
+      ctx.strokeStyle = `rgba(34, 197, 94, ${a2.toFixed(3)})`;
+      ctx.lineWidth = 1.4 * c2.scale;
+      ctx.shadowColor = '#22c55e';
+      ctx.shadowBlur = 8;
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -330,14 +351,16 @@ export function drawFloorOpticalLens3D(
   const innerRx = rx * 0.86;
   const innerRy = ry * 0.86;
 
-  // 1. Halo acústico vascular bioluminiscente en el piso (Elipse 3D reactiva al latido)
+  // 1. Halo acústico vascular bioluminiscente en el piso (Elipse 3D reactiva al latido y PI)
+  const pi = p.perfusionIndex ?? 0;
+  const piFactor = Math.min(1.0, pi * 50);
   const pulse = Math.max(state.sweepPulse, 0.04);
-  const auraRx = rx * (1.22 + pulse * 0.32);
-  const auraRy = ry * (1.22 + pulse * 0.32);
+  const auraRx = rx * (1.20 + pulse * (0.24 + piFactor * 0.16));
+  const auraRy = ry * (1.20 + pulse * (0.24 + piFactor * 0.16));
   const aura = ctx.createRadialGradient(cx, cy, 3, cx, cy, auraRx);
   if (isDetected) {
-    aura.addColorStop(0, `rgba(6, 182, 212, ${0.20 + pulse * 0.25})`);
-    aura.addColorStop(0.55, `rgba(34, 197, 94, ${0.08 + pulse * 0.12})`);
+    aura.addColorStop(0, `rgba(6, 182, 212, ${0.22 + pulse * 0.25})`);
+    aura.addColorStop(0.55, `rgba(34, 197, 94, ${0.10 + pulse * 0.14})`);
     aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
   } else {
     aura.addColorStop(0, 'rgba(245, 158, 11, 0.18)');
@@ -506,38 +529,69 @@ export function drawFloorOpticalLens3D(
     ctx.stroke();
   }
 
-  // Badge clínico sutil proyectado en la base del piso
-  const badgeW = 76;
+  // Badge clínico de guía óptica proyectado en la base del piso
+  let statusText = 'POSICIONAR YEMA';
+  let statusColor = '#f59e0b';
+  let statusRgb = '245, 158, 11';
+  if (isDetected) {
+    const isSaturated = (diag?.sqm as Record<string, number> | undefined)?.saturationRatio && (diag?.sqm as Record<string, number>).saturationRatio > 0.15;
+    if (isSaturated) {
+      statusText = 'ISQUEMIA / SOBREPRESIÓN';
+      statusColor = '#ef4444';
+      statusRgb = '239, 68, 68';
+    } else if (p.contactState === 'UNSTABLE_CONTACT' || (p.quality ?? 0) < 30) {
+      statusText = 'CONTACTO LIGERO';
+      statusColor = '#f59e0b';
+      statusRgb = '245, 158, 11';
+    } else {
+      statusText = `PERFUSIÓN ÓPTIMA · PI ${(pi * 100).toFixed(1)}%`;
+      statusColor = '#22c55e';
+      statusRgb = '34, 197, 94';
+    }
+  }
+
+  const badgeW = isDetected ? 122 : 94;
   const badgeH = 13;
   const badgeY = cy + ry + 4;
-  ctx.fillStyle = 'rgba(6, 14, 28, 0.85)';
+  ctx.fillStyle = 'rgba(6, 14, 28, 0.88)';
   ctx.beginPath();
   ctx.roundRect(cx - badgeW / 2, badgeY, badgeW, badgeH, 6);
   ctx.fill();
-  ctx.strokeStyle = isDetected ? 'rgba(34, 197, 94, 0.35)' : 'rgba(245, 158, 11, 0.35)';
+  ctx.strokeStyle = `rgba(${statusRgb}, 0.40)`;
   ctx.stroke();
 
   ctx.beginPath();
   ctx.arc(cx - badgeW / 2 + 7, badgeY + 6.5, 2.0, 0, Math.PI * 2);
-  ctx.fillStyle = isDetected ? '#22c55e' : '#f59e0b';
+  ctx.fillStyle = statusColor;
   if (isDetected) {
-    ctx.shadowColor = '#22c55e';
-    ctx.shadowBlur = 3;
+    ctx.shadowColor = statusColor;
+    ctx.shadowBlur = 4;
   }
   ctx.fill();
   ctx.shadowBlur = 0;
 
   ctx.font = `bold 7px ${FONT}`;
-  ctx.fillStyle = isDetected ? '#86efac' : '#fde68a';
+  ctx.fillStyle = isDetected ? '#ffffff' : '#fde68a';
   ctx.textAlign = 'center';
-  ctx.fillText('3D SENSOR ROI', cx + 4, badgeY + 9.5);
+  ctx.fillText(statusText, cx + 4, badgeY + 9.5);
 
   ctx.restore();
 }
 
+// Pools estáticos pre-asignados para erradicar el 100% de asignaciones GC por frame en 3D
+const POOL_CAPACITY = 2048;
+const POOL_PF_X = new Float32Array(POOL_CAPACITY);
+const POOL_PF_Y = new Float32Array(POOL_CAPACITY);
+const POOL_PF_SCALE = new Float32Array(POOL_CAPACITY);
+const POOL_PB_X = new Float32Array(POOL_CAPACITY);
+const POOL_PB_Y = new Float32Array(POOL_CAPACITY);
+const POOL_PFLOOR_X = new Float32Array(POOL_CAPACITY);
+const POOL_PFLOOR_Y = new Float32Array(POOL_CAPACITY);
+
 /**
  * Dibuja la ONDA CARDÍACA 3D como cinta extruida con curvatura suave (Splines / Quadratic Curves),
  * bisel brillante, pared vertical con degradado y marcadores fiduciales con anillos en el piso.
+ * IMPLEMENTACIÓN DE ALTO RENDIMIENTO: CERO ASIGNACIONES DINÁMICAS (TypedArray Pooled).
  */
 export function drawWaveRibbon3D(
   ctx: CanvasRenderingContext2D,
@@ -545,25 +599,39 @@ export function drawWaveRibbon3D(
   coords: WaveCoord[],
   geom: WaveGeom,
 ): void {
-  if (coords.length < 2 || geom.waveH <= 0) return;
+  const n = Math.min(coords.length, POOL_CAPACITY);
+  if (n < 2 || geom.waveH <= 0) return;
   const proj = makeProjector(state);
   const { plot } = state.layout;
   const revealed = state.traceRevealed;
+  const pulse = Math.max(state.sweepPulse, 0.04);
 
-  const hOf = (c: WaveCoord) => clamp((geom.waveBaseY - c.y) / geom.waveH, 0, 1);
-  const uOf = (c: WaveCoord) => clamp((c.x - plot.x) / plot.w, 0, 1);
+  const sFront = proj.scaleAt(WAVE_D_FRONT);
+  const sBack = proj.scaleAt(WAVE_D_BACK);
+  const groundYFront = proj.horizonY + proj.floorSpanY * sFront;
+  const groundYBack = proj.horizonY + proj.floorSpanY * sBack;
+  const intensity = clamp(state.threeD?.intensity ?? 1, 0.6, 1.4);
+  const maxLift = proj.floorSpanY * MAX_LIFT_FRAC * intensity;
 
-  const Pf: ProjPoint[] = [];
-  const Pb: ProjPoint[] = [];
-  const Pfloor: ProjPoint[] = [];
-  for (const c of coords) {
-    const u = uOf(c);
-    const h = hOf(c);
-    Pf.push(proj.project(u, WAVE_D_FRONT, h));
-    Pb.push(proj.project(u, WAVE_D_BACK, h));
-    Pfloor.push(proj.project(u, WAVE_D_FRONT, 0));
+  for (let i = 0; i < n; i++) {
+    const c = coords[i];
+    const u = clamp((c.x - plot.x) / plot.w, 0, 1);
+    const h = clamp((geom.waveBaseY - c.y) / geom.waveH, 0, 1);
+    const xOffset = (u - 0.5) * plot.w;
+
+    const xf = proj.vpX + xOffset * sFront;
+    const yf = groundYFront - h * maxLift * sFront;
+    const xb = proj.vpX + xOffset * sBack;
+    const yb = groundYBack - h * maxLift * sBack;
+
+    POOL_PF_X[i] = xf;
+    POOL_PF_Y[i] = yf;
+    POOL_PF_SCALE[i] = sFront;
+    POOL_PB_X[i] = xb;
+    POOL_PB_Y[i] = yb;
+    POOL_PFLOOR_X[i] = xf;
+    POOL_PFLOOR_Y[i] = groundYFront;
   }
-  const n = Pf.length;
 
   ctx.save();
   ctx.beginPath();
@@ -572,15 +640,15 @@ export function drawWaveRibbon3D(
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
 
-  const traceSmoothPath = (pts: ProjPoint[], from = 0, to = pts.length - 1) => {
+  const traceSmoothPath = (xArr: Float32Array, yArr: Float32Array, from = 0, to = n - 1) => {
     if (to <= from) return;
-    ctx.moveTo(pts[from].x, pts[from].y);
+    ctx.moveTo(xArr[from], yArr[from]);
     for (let i = from; i < to; i++) {
-      const xc = (pts[i].x + pts[i + 1].x) / 2;
-      const yc = (pts[i].y + pts[i + 1].y) / 2;
-      ctx.quadraticCurveTo(pts[i].x, pts[i].y, xc, yc);
+      const xc = (xArr[i] + xArr[i + 1]) * 0.5;
+      const yc = (yArr[i] + yArr[i + 1]) * 0.5;
+      ctx.quadraticCurveTo(xArr[i], yArr[i], xc, yc);
     }
-    ctx.lineTo(pts[to].x, pts[to].y);
+    ctx.lineTo(xArr[to], yArr[to]);
   };
 
   // 1) Sombra proyectada en el piso en perspectiva
@@ -592,7 +660,7 @@ export function drawWaveRibbon3D(
       while (e < n - 1 && coords[e].isArr === isArr) e++;
       const col = isArr ? C.arr : C.signal;
       ctx.beginPath();
-      traceSmoothPath(Pfloor, s, e);
+      traceSmoothPath(POOL_PFLOOR_X, POOL_PFLOOR_Y, s, e);
       ctx.strokeStyle = `rgba(${col}, ${isArr ? 0.38 : 0.16})`;
       ctx.lineWidth = isArr ? 8 : 6;
       ctx.shadowColor = `rgba(${col}, ${isArr ? 0.35 : 0.08})`;
@@ -603,50 +671,55 @@ export function drawWaveRibbon3D(
     }
   }
 
-  // 2) Cara superior de la cinta (Grosor 3D) con suavizado
+  // 2) Cara superior de la cinta (Grosor 3D) con bisel bioluminiscente
   if (revealed) {
     ctx.beginPath();
-    ctx.moveTo(Pf[0].x, Pf[0].y);
-    traceSmoothPath(Pf, 0, n - 1);
-    ctx.lineTo(Pb[n - 1].x, Pb[n - 1].y);
+    ctx.moveTo(POOL_PF_X[0], POOL_PF_Y[0]);
+    traceSmoothPath(POOL_PF_X, POOL_PF_Y, 0, n - 1);
+    ctx.lineTo(POOL_PB_X[n - 1], POOL_PB_Y[n - 1]);
     for (let i = n - 2; i >= 0; i--) {
-      ctx.lineTo(Pb[i].x, Pb[i].y);
+      ctx.lineTo(POOL_PB_X[i], POOL_PB_Y[i]);
     }
     ctx.closePath();
-    ctx.fillStyle = `rgba(${C.signalBright}, 0.24)`;
+    const topGrad = ctx.createLinearGradient(0, plot.y, 0, plot.y + plot.h);
+    topGrad.addColorStop(0, `rgba(${C.signalBright}, ${0.30 + pulse * 0.20})`);
+    topGrad.addColorStop(0.6, `rgba(${C.cyan}, ${0.18 + pulse * 0.12})`);
+    topGrad.addColorStop(1, 'rgba(6, 182, 212, 0.05)');
+    ctx.fillStyle = topGrad;
     ctx.fill();
   }
 
-  // 3) Cara frontal vertical con degradado volumétrico
+  // 3) Cara frontal vertical con degradado volumétrico y oclusión ambiental en suelo
   const wallGrad = ctx.createLinearGradient(0, proj.horizonY, 0, proj.nearY);
-  wallGrad.addColorStop(0, `rgba(${C.signal}, ${revealed ? 0.42 : 0.15})`);
-  wallGrad.addColorStop(0.55, `rgba(${C.signal}, ${revealed ? 0.18 : 0.05})`);
-  wallGrad.addColorStop(1, `rgba(${C.signal}, 0.01)`);
+  wallGrad.addColorStop(0, `rgba(${C.signal}, ${revealed ? 0.44 : 0.15})`);
+  wallGrad.addColorStop(0.55, `rgba(${C.signal}, ${revealed ? 0.20 : 0.05})`);
+  wallGrad.addColorStop(0.92, 'rgba(6, 182, 212, 0.06)');
+  wallGrad.addColorStop(1, 'rgba(0, 0, 0, 0.25)');
 
   ctx.beginPath();
-  ctx.moveTo(Pfloor[0].x, Pfloor[0].y);
-  traceSmoothPath(Pf, 0, n - 1);
-  ctx.lineTo(Pfloor[n - 1].x, Pfloor[n - 1].y);
+  ctx.moveTo(POOL_PFLOOR_X[0], POOL_PFLOOR_Y[0]);
+  traceSmoothPath(POOL_PF_X, POOL_PF_Y, 0, n - 1);
+  ctx.lineTo(POOL_PFLOOR_X[n - 1], POOL_PFLOOR_Y[n - 1]);
   for (let i = n - 2; i >= 0; i--) {
-    ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
+    ctx.lineTo(POOL_PFLOOR_X[i], POOL_PFLOOR_Y[i]);
   }
   ctx.closePath();
   ctx.fillStyle = wallGrad;
   ctx.fill();
 
-  // 3b) Cara de arritmia sobre-pintada en carmesí
+  // 3b) Cara de arritmia sobre-pintada en carmesí intenso
   let s = 0;
   while (s < n) {
     if (!coords[s].isArr) { s++; continue; }
     let e = s;
     while (e < n && coords[e].isArr) e++;
     ctx.beginPath();
-    ctx.moveTo(Pfloor[s].x, Pfloor[s].y);
-    traceSmoothPath(Pf, s, e - 1);
-    ctx.lineTo(Pfloor[e - 1].x, Pfloor[e - 1].y);
-    for (let i = e - 2; i >= s; i--) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
+    ctx.moveTo(POOL_PFLOOR_X[s], POOL_PFLOOR_Y[s]);
+    traceSmoothPath(POOL_PF_X, POOL_PF_Y, s, e - 1);
+    ctx.lineTo(POOL_PFLOOR_X[e - 1], POOL_PFLOOR_Y[e - 1]);
+    for (let i = e - 2; i >= s; i--) ctx.lineTo(POOL_PFLOOR_X[i], POOL_PFLOOR_Y[i]);
     ctx.closePath();
-    ctx.fillStyle = `rgba(${C.arr}, 0.55)`;
+    ctx.fillStyle = `rgba(${C.arr}, 0.58)`;
     ctx.fill();
     s = e;
   }
@@ -654,19 +727,19 @@ export function drawWaveRibbon3D(
   // 4) Cresta trasera suave
   if (revealed) {
     ctx.beginPath();
-    traceSmoothPath(Pb, 0, n - 1);
+    traceSmoothPath(POOL_PB_X, POOL_PB_Y, 0, n - 1);
     ctx.strokeStyle = `rgba(${C.signal}, 0.35)`;
     ctx.lineWidth = 1;
     ctx.stroke();
   }
 
-  // 5) Cresta frontal
+  // 5) Cresta frontal bioluminiscente con núcleo blanco de fósforo
   const drawCrestSeg = (from: number, to: number, arr: boolean) => {
     ctx.beginPath();
-    traceSmoothPath(Pf, from, to);
+    traceSmoothPath(POOL_PF_X, POOL_PF_Y, from, to);
     if (revealed) {
       ctx.strokeStyle = arr ? `rgba(${C.arr}, 0.95)` : `rgb(${C.signalBright})`;
-      ctx.shadowColor = arr ? `rgba(${C.arr}, 0.70)` : `rgba(${C.signal}, 0.70)`;
+      ctx.shadowColor = arr ? `rgba(${C.arr}, 0.75)` : `rgba(${C.signal}, 0.75)`;
       ctx.shadowBlur = 12;
       ctx.lineWidth = 2.4;
       ctx.stroke();
@@ -705,8 +778,11 @@ export function drawWaveRibbon3D(
       const next = coords[i + 1].val;
       const prev2 = coords[i - 2].val;
       const next2 = coords[i + 2].val;
-      const p = Pf[i];
-      const pfG = Pfloor[i];
+      const px = POOL_PF_X[i];
+      const py = POOL_PF_Y[i];
+      const pScale = POOL_PF_SCALE[i];
+      const pfgX = POOL_PFLOOR_X[i];
+      const pfgY = POOL_PFLOOR_Y[i];
 
       // Pico sistólico (SYS)
       if (v > prev && v > next && v > prev2 && v > next2 && v > geom.midValue) {
@@ -714,25 +790,25 @@ export function drawWaveRibbon3D(
         ctx.lineWidth = 1;
         ctx.setLineDash([2, 4]);
         ctx.beginPath();
-        ctx.moveTo(p.x, p.y + 4);
-        ctx.lineTo(pfG.x, pfG.y);
+        ctx.moveTo(px, py + 4);
+        ctx.lineTo(pfgX, pfgY);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        const impactRadX = 6 * p.scale;
+        const impactRadX = 6 * pScale;
         const impactRadY = impactRadX * 0.35;
         ctx.beginPath();
-        ctx.ellipse(pfG.x, pfG.y, impactRadX, impactRadY, 0, 0, Math.PI * 2);
+        ctx.ellipse(pfgX, pfgY, impactRadX, impactRadY, 0, 0, Math.PI * 2);
         ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.65)' : 'rgba(0, 242, 255, 0.65)';
         ctx.lineWidth = 1.2;
         ctx.stroke();
 
-        const r = 3.2 + p.scale * 1.8;
+        const r = 3.2 + pScale * 1.8;
         ctx.beginPath();
-        ctx.moveTo(p.x, p.y - r);
-        ctx.lineTo(p.x + r, p.y);
-        ctx.lineTo(p.x, p.y + r);
-        ctx.lineTo(p.x - r, p.y);
+        ctx.moveTo(px, py - r);
+        ctx.lineTo(px + r, py);
+        ctx.lineTo(px, py + r);
+        ctx.lineTo(px - r, py);
         ctx.closePath();
         ctx.fillStyle = isArr ? `rgb(${C.arr})` : '#ffffff';
         ctx.shadowColor = isArr ? `rgb(${C.arr})` : `rgb(${C.cyan})`;
@@ -742,14 +818,14 @@ export function drawWaveRibbon3D(
 
         ctx.font = `bold 9px ${FONT}`;
         ctx.fillStyle = isArr ? `rgb(${C.arr})` : `rgb(${C.cyan})`;
-        ctx.fillText(v.toFixed(1), p.x, p.y - 11);
+        ctx.fillText(v.toFixed(1), px, py - 11);
         ctx.font = `bold 7px ${FONT}`;
         ctx.fillStyle = isArr ? '#fecaca' : 'rgba(255, 255, 255, 0.85)';
-        ctx.fillText(isArr ? 'ARR' : 'SYS', p.x, p.y - 21);
+        ctx.fillText(isArr ? 'ARR' : 'SYS', px, py - 21);
 
         if (isArr) {
           ctx.beginPath();
-          ctx.arc(p.x, p.y, r + 4, 0, Math.PI * 2);
+          ctx.arc(px, py, r + 4, 0, Math.PI * 2);
           ctx.strokeStyle = `rgba(${C.arr}, 0.75)`;
           ctx.lineWidth = 1.6;
           ctx.stroke();
@@ -759,15 +835,15 @@ export function drawWaveRibbon3D(
       // Valle diastólico (DIA)
       if (v < prev && v < next && v < prev2 && v < next2 && v < geom.midValue) {
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 2.4, 0, Math.PI * 2);
+        ctx.arc(px, py, 2.4, 0, Math.PI * 2);
         ctx.strokeStyle = '#94a3b8';
         ctx.lineWidth = 1.2;
         ctx.stroke();
         ctx.font = `bold 9px ${FONT}`;
         ctx.fillStyle = '#94a3b8';
-        ctx.fillText(v.toFixed(1), p.x, p.y + 15);
+        ctx.fillText(v.toFixed(1), px, py + 15);
         ctx.font = `7px ${FONT}`;
-        ctx.fillText('DIA', p.x, p.y + 24);
+        ctx.fillText('DIA', px, py + 24);
       }
 
       // Muesca dícrota (DIC)
@@ -775,29 +851,30 @@ export function drawWaveRibbon3D(
       const d1Next = next - v;
       if (d1Curr < 0 && d1Next > d1Curr && d1Next < 0 && v > geom.midValue) {
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 2.2, 0, Math.PI * 2);
+        ctx.arc(px, py, 2.2, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(103, 232, 249, 0.75)';
         ctx.fill();
         if (quality > 70) {
           ctx.font = `7px ${FONT}`;
           ctx.fillStyle = 'rgba(103, 232, 249, 0.9)';
-          ctx.fillText('DIC', p.x, p.y - 7);
+          ctx.fillText('DIC', px, py - 7);
         }
       }
     }
   }
 
   // 7) Cursor conductor en la cabeza de la señal 3D
-  const head = Pf[n - 1];
+  const headX = POOL_PF_X[n - 1];
+  const headY = POOL_PF_Y[n - 1];
+  const headScale = POOL_PF_SCALE[n - 1];
   const headArr = coords[n - 1].isArr;
-  const pulse = Math.max(state.sweepPulse, 0.04);
 
   if (revealed && pulse > 0.10) {
     for (let rIdx = 1; rIdx <= 2; rIdx++) {
-      const ringRad = (8 + pulse * (16 * rIdx)) * head.scale;
+      const ringRad = (8 + pulse * (16 * rIdx)) * headScale;
       const ringAlpha = (1 - pulse) * (0.6 / rIdx);
       ctx.beginPath();
-      ctx.arc(head.x, head.y, ringRad, 0, Math.PI * 2);
+      ctx.arc(headX, headY, ringRad, 0, Math.PI * 2);
       ctx.strokeStyle = headArr ? `rgba(239, 68, 68, ${ringAlpha})` : `rgba(0, 242, 255, ${ringAlpha})`;
       ctx.lineWidth = 1.4;
       ctx.stroke();
@@ -805,14 +882,14 @@ export function drawWaveRibbon3D(
   }
 
   ctx.beginPath();
-  ctx.arc(head.x, head.y, (6 + pulse * 6) * (0.7 + 0.3 * head.scale), 0, Math.PI * 2);
+  ctx.arc(headX, headY, (6 + pulse * 6) * (0.7 + 0.3 * headScale), 0, Math.PI * 2);
   ctx.fillStyle = revealed
     ? headArr ? `rgba(${C.arr}, 0.35)` : `rgba(${C.cyan}, 0.35)`
     : 'rgba(148, 163, 184, 0.18)';
   ctx.fill();
 
   ctx.beginPath();
-  ctx.arc(head.x, head.y, 3, 0, Math.PI * 2);
+  ctx.arc(headX, headY, 3, 0, Math.PI * 2);
   ctx.fillStyle = '#ffffff';
   ctx.shadowColor = headArr ? '#ef4444' : '#00f2ff';
   ctx.shadowBlur = 8;
