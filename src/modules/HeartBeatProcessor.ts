@@ -23,12 +23,73 @@ export interface HeartBeatProcessDiagnostics {
   consensusReason?: string;
 }
 
+/**
+ * Circular typed buffer O(1) push / O(1) access — reemplaza Array con shift O(n).
+ * Pre-aloca la capacidad y nunca genera asignaciones GC en el hot-path.
+ */
+class CircularFloat64 {
+  private readonly data: Float64Array;
+  private readonly cap: number;
+  private head = 0;
+  private len = 0;
+
+  constructor(capacity: number) {
+    this.cap = capacity;
+    this.data = new Float64Array(capacity);
+  }
+
+  get length(): number { return this.len; }
+
+  push(value: number): void {
+    this.data[(this.head + this.len) % this.cap] = value;
+    if (this.len < this.cap) {
+      this.len++;
+    } else {
+      this.head = (this.head + 1) % this.cap;
+    }
+  }
+
+  /** Acceso indexado (0 = más antiguo, length-1 = más reciente). */
+  at(index: number): number {
+    return this.data[(this.head + index) % this.cap];
+  }
+
+  /** Copia las últimas `count` muestras a un array destino (sin crear array nuevo). */
+  copyTailTo(dest: number[] | Float64Array, count: number): number {
+    const n = Math.min(count, this.len);
+    const start = this.len - n;
+    for (let i = 0; i < n; i++) {
+      dest[i] = this.at(start + i);
+    }
+    return n;
+  }
+
+  /** Devuelve las últimas `count` muestras como un array nativo (solo para APIs que lo requieren). */
+  tail(count: number): number[] {
+    const n = Math.min(count, this.len);
+    const result: number[] = new Array(n);
+    const start = this.len - n;
+    for (let i = 0; i < n; i++) result[i] = this.at(start + i);
+    return result;
+  }
+
+  clear(): void {
+    this.head = 0;
+    this.len = 0;
+  }
+}
+
+// Buffers de trabajo estáticos para evitar allocations en el hot path
+const GATE_WORK_BUF = new Float64Array(64);
+const MEDIAN_WORK_BUF = new Float64Array(64);
+const SR_INTERVALS_BUF = new Float64Array(64);
+
 export class HeartBeatProcessor {
   private readonly MIN_PEAK_INTERVAL_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS;
   private readonly MAX_PEAK_INTERVAL_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS;
 
-  private signalBuffer: number[] = [];
-  private timestampBuffer: number[] = [];
+  private signalBuffer = new CircularFloat64(DSP_CONSTANTS.BUFFER_SIZE);
+  private timestampBuffer = new CircularFloat64(DSP_CONSTANTS.BUFFER_SIZE);
 
   private lastPeakTime = 0;
   private rrIntervals: number[] = [];
@@ -148,8 +209,11 @@ export class HeartBeatProcessor {
     const rr = this.rrIntervals;
     let medRr = 0;
     if (rr.length >= 3) {
-      const sorted = [...rr].sort((a, b) => a - b);
-      medRr = sorted[Math.floor(sorted.length / 2)] ?? 0;
+      // Mediana in-place en buffer estático (sin crear array nuevo con spread+sort)
+      const n = Math.min(rr.length, MEDIAN_WORK_BUF.length);
+      for (let i = 0; i < n; i++) MEDIAN_WORK_BUF[i] = rr[rr.length - n + i];
+      MEDIAN_WORK_BUF.subarray(0, n).sort();
+      medRr = MEDIAN_WORK_BUF[Math.floor(n / 2)] ?? 0;
     } else if (this.cachedPeriodicity.bpm > 0 && this.cachedPeriodicity.score >= 0.3) {
       // Aún sin RR emitidos: usa la estimación espectral (autocorr) para que la
       // ventana se ensanche desde el ARRANQUE a baja frecuencia (no solo al sostener).
@@ -192,18 +256,14 @@ export class HeartBeatProcessor {
     const now = timestamp ?? (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
     if (Math.abs(filteredValue) > 1e-6) {
+      // CircularFloat64: push O(1), sin shift, sin GC
       this.signalBuffer.push(filteredValue);
       this.timestampBuffer.push(now);
-      if (this.signalBuffer.length > DSP_CONSTANTS.BUFFER_SIZE) {
-        this.signalBuffer.shift();
-        this.timestampBuffer.shift();
-      }
     } else if (
       this.fingerContactConfirmed &&
-      this.signalBuffer.length > 0 &&
-      this.signalBuffer.length < DSP_CONSTANTS.BUFFER_SIZE
+      this.signalBuffer.length > 0
     ) {
-      const hold = this.signalBuffer[this.signalBuffer.length - 1]! * 0.999;
+      const hold = this.signalBuffer.at(this.signalBuffer.length - 1) * 0.999;
       this.signalBuffer.push(hold);
       this.timestampBuffer.push(now);
     }
@@ -215,11 +275,14 @@ export class HeartBeatProcessor {
     this.frameTick++;
 
     if (this.frameTick % 4 === 0 || this.cachedGateRange === 0) {
-      const recentForGate = this.signalBuffer.slice(-60);
-      const gSorted = [...recentForGate].sort((a, b) => a - b);
-      this.cachedGateRange =
-        (gSorted[Math.floor(gSorted.length * 0.9)] ?? 0) -
-        (gSorted[Math.floor(gSorted.length * 0.1)] ?? 0);
+      // Gate range con buffer estático (sin slice + spread + sort)
+      const gn = this.signalBuffer.copyTailTo(GATE_WORK_BUF, 60);
+      if (gn > 0) {
+        GATE_WORK_BUF.subarray(0, gn).sort();
+        this.cachedGateRange =
+          (GATE_WORK_BUF[Math.floor(gn * 0.9)] ?? 0) -
+          (GATE_WORK_BUF[Math.floor(gn * 0.1)] ?? 0);
+      }
     }
 
     const windowLen = this.consecutivePeaks < 3 ? 90 : 150;
@@ -254,8 +317,9 @@ export class HeartBeatProcessor {
 
     if (runEnsemble) {
       const win = Math.min(DSP_CONSTANTS.BUFFER_SIZE, this.signalBuffer.length);
-      const sigRaw = this.signalBuffer.slice(-win);
-      const ts = this.timestampBuffer.slice(-win);
+      // Extraer arrays nativos para el ensemble (requiere number[] por la API de PeakDetectionEnsemble)
+      const sigRaw = this.signalBuffer.tail(win);
+      const ts = this.timestampBuffer.tail(win);
       const sig = this.normalizeWindow(sigRaw, Math.min(150, sigRaw.length));
       const ensSqi = this.ensembleInputSqi(this.signalQualityIndex);
       const ens = PeakDetectionEnsemble.analyze({
@@ -310,8 +374,9 @@ export class HeartBeatProcessor {
           const rrMs = decision.peakTimeMs - prevEmitted;
           if (rrMs >= this.MIN_PEAK_INTERVAL_MS && rrMs <= this.MAX_PEAK_INTERVAL_MS) {
             this.rrIntervals.push(rrMs);
+            // Truncar sin crear array nuevo: splice in-place desde el inicio
             if (this.rrIntervals.length > DSP_CONSTANTS.MAX_RR_INTERVALS) {
-              this.rrIntervals = this.rrIntervals.slice(-DSP_CONSTANTS.MAX_RR_INTERVALS);
+              this.rrIntervals.splice(0, this.rrIntervals.length - DSP_CONSTANTS.MAX_RR_INTERVALS);
             }
           }
         }
@@ -407,74 +472,110 @@ export class HeartBeatProcessor {
     };
   }
 
+  // Objeto reutilizable para normalizeSignal (evita crear objeto nuevo cada frame)
+  private readonly normResult = { normalizedValue: 0, range: 0 };
+
   private normalizeSignal(value: number, windowLen: number = 150): { normalizedValue: number; range: number } {
-    const recent = this.signalBuffer.slice(-windowLen);
+    const recent = this.signalBuffer.tail(windowLen);
     const { low, high, range } = robustBounds(recent);
     const scale = PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_SCALE;
     if (range < this.minNormalizeRange()) {
-      return {
-        normalizedValue: value * PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_FALLBACK_GAIN,
-        range,
-      };
+      this.normResult.normalizedValue = value * PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_FALLBACK_GAIN;
+      this.normResult.range = range;
+      return this.normResult;
     }
     const clipped = Math.min(high, Math.max(low, value));
-    const normalizedValue = ((clipped - low) / range - 0.5) * scale;
-    return { normalizedValue, range };
+    this.normResult.normalizedValue = ((clipped - low) / range - 0.5) * scale;
+    this.normResult.range = range;
+    return this.normResult;
   }
 
   private normalizeWindow(values: number[], windowLen: number = 150): number[] {
-    const refWindow = this.signalBuffer.slice(-windowLen);
+    const refWindow = this.signalBuffer.tail(windowLen);
     const { low, high, range } = robustBounds(refWindow);
     const scale = PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_SCALE;
+    const n = values.length;
+    // Normalización in-place para evitar .map() que crea array nuevo
     if (range < this.minNormalizeRange()) {
-      return values.map((v) => v * PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_FALLBACK_GAIN);
+      const gain = PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_FALLBACK_GAIN;
+      for (let i = 0; i < n; i++) values[i] = values[i] * gain;
+      return values;
     }
-    return values.map((v) => {
-      const c = Math.min(high, Math.max(low, v));
-      return ((c - low) / range - 0.5) * scale;
-    });
+    for (let i = 0; i < n; i++) {
+      const c = Math.min(high, Math.max(low, values[i]));
+      values[i] = ((c - low) / range - 0.5) * scale;
+    }
+    return values;
   }
 
   private estimateSampleRate(): number {
-    if (this.timestampBuffer.length < 10) return this.cachedSampleRate || DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
+    const tsLen = this.timestampBuffer.length;
+    if (tsLen < 10) return this.cachedSampleRate || DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
     if (this.frameTick % 30 !== 0 && this.cachedSampleRate > 0) {
       return this.cachedSampleRate;
     }
-    const recent = this.timestampBuffer.slice(-50);
-    const intervals: number[] = [];
-    for (let i = 1; i < recent.length; i++) {
-      const d = recent[i] - recent[i - 1];
-      if (d >= 10 && d <= 100) intervals.push(d);
+    // Calcular intervalos directamente del circular buffer (sin slice ni arrays nuevos)
+    const lookback = Math.min(50, tsLen);
+    const start = tsLen - lookback;
+    let count = 0;
+    for (let i = 1; i < lookback; i++) {
+      const d = this.timestampBuffer.at(start + i) - this.timestampBuffer.at(start + i - 1);
+      if (d >= 10 && d <= 100) SR_INTERVALS_BUF[count++] = d;
     }
-    if (intervals.length < 6) return this.cachedSampleRate || DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
-    const sorted = [...intervals].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)] ?? 33;
+    if (count < 6) return this.cachedSampleRate || DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
+    SR_INTERVALS_BUF.subarray(0, count).sort();
+    const median = SR_INTERVALS_BUF[Math.floor(count / 2)] ?? 33;
     this.cachedSampleRate = clamp(1000 / median, 20, 40);
     return this.cachedSampleRate;
   }
 
+  // Resultado reutilizable para estimatePeriodicity (evita crear objeto cada 6 frames)
+  private readonly periodicityResult = { bpm: 0, score: 0 };
+
   private estimatePeriodicity(): { bpm: number; score: number } {
-    if (this.signalBuffer.length < 60) return { bpm: 0, score: 0 };
+    if (this.signalBuffer.length < 60) {
+      this.periodicityResult.bpm = 0;
+      this.periodicityResult.score = 0;
+      return this.periodicityResult;
+    }
 
     const sampleRate = this.estimateSampleRate();
     const windowLen =
       this.consecutivePeaks < 3
         ? PEAK_DETECTION_DEFAULTS.HEARTBEAT_WINDOW_WARMUP
         : PEAK_DETECTION_DEFAULTS.HEARTBEAT_WINDOW_STABLE;
-    const recentSignal = this.normalizeWindow(this.signalBuffer.slice(-windowLen), windowLen);
-    const mean = recentSignal.reduce((s, v) => s + v, 0) / recentSignal.length;
-    const centered = recentSignal.map((v) => v - mean);
-    const energy = centered.reduce((s, v) => s + v * v, 0);
+    // tail() crea el array (necesario para normalizeWindow que muta in-place)
+    const recentSignal = this.normalizeWindow(this.signalBuffer.tail(windowLen), windowLen);
+    // Centrar y calcular energía in-place (sin .map ni .reduce)
+    let mean = 0;
+    const rLen = recentSignal.length;
+    for (let i = 0; i < rLen; i++) mean += recentSignal[i];
+    mean /= rLen;
+    let energy = 0;
+    for (let i = 0; i < rLen; i++) {
+      recentSignal[i] -= mean;
+      energy += recentSignal[i] * recentSignal[i];
+    }
 
-    if (energy < 400) return { bpm: 0, score: 0 };
+    if (energy < 400) {
+      this.periodicityResult.bpm = 0;
+      this.periodicityResult.score = 0;
+      return this.periodicityResult;
+    }
 
     const minLag = Math.max(5, Math.round((sampleRate * 60) / 200));
-    const maxLag = Math.min(centered.length - 8, Math.round((sampleRate * 60) / 38));
+    const maxLag = Math.min(rLen - 8, Math.round((sampleRate * 60) / 38));
     // Autocorrelación compartida (dsp.autocorrDominantLag) — sin duplicar el bucle.
-    const { lag, score } = autocorrDominantLag(centered, minLag, maxLag);
+    const { lag, score } = autocorrDominantLag(recentSignal, minLag, maxLag);
 
-    if (lag === 0 || score < 0.18) return { bpm: 0, score: Math.max(0, score) };
-    return { bpm: (60 * sampleRate) / lag, score: clamp(score, 0, 1) };
+    if (lag === 0 || score < 0.18) {
+      this.periodicityResult.bpm = 0;
+      this.periodicityResult.score = Math.max(0, score);
+      return this.periodicityResult;
+    }
+    this.periodicityResult.bpm = (60 * sampleRate) / lag;
+    this.periodicityResult.score = clamp(score, 0, 1);
+    return this.periodicityResult;
   }
 
   private calculateSQI(range: number, periodicityScore: number): number {
@@ -486,7 +587,7 @@ export class HeartBeatProcessor {
     let derivCount = 0;
     const derivStart = Math.max(0, nSig - 61);
     for (let i = derivStart + 1; i < nSig; i++) {
-      meanAbsDeriv += Math.abs(this.signalBuffer[i] - this.signalBuffer[i - 1]);
+      meanAbsDeriv += Math.abs(this.signalBuffer.at(i) - this.signalBuffer.at(i - 1));
       derivCount++;
     }
     if (derivCount > 0) meanAbsDeriv /= derivCount;
@@ -520,9 +621,15 @@ export class HeartBeatProcessor {
       return clamp(sqiFactor * 0.22 + peakSupport * 0.22 + ens * 0.36 + peakBoost, 0, 0.85);
     }
 
-    const mean = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
-    const variance = this.rrIntervals.reduce((a, rr) => a + (rr - mean) ** 2, 0) / this.rrIntervals.length;
-    const cv = Math.sqrt(variance) / Math.max(1, mean);
+    // Media y varianza con for-loop (sin .reduce que crea closures por llamada)
+    const rr = this.rrIntervals;
+    const rrLen = rr.length;
+    let rrSum = 0;
+    for (let i = 0; i < rrLen; i++) rrSum += rr[i];
+    const mean = rrSum / rrLen;
+    let varAcc = 0;
+    for (let i = 0; i < rrLen; i++) { const d = rr[i] - mean; varAcc += d * d; }
+    const cv = Math.sqrt(varAcc / rrLen) / Math.max(1, mean);
     const rrStability = clamp(1 - cv * 1.5, 0, 1);
 
     return clamp(
@@ -574,8 +681,8 @@ export class HeartBeatProcessor {
 
   /** Limpia estado de picos/RR al quitar el dedo o al volver a colocarlo. */
   resetPeakTracking(): void {
-    this.signalBuffer = [];
-    this.timestampBuffer = [];
+    this.signalBuffer.clear();
+    this.timestampBuffer.clear();
     this.rrIntervals = [];
     this.smoothBPM = 0;
     this.lastPeakTime = 0;

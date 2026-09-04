@@ -27,5 +27,12 @@ export function realSignalStrength(perfusionIndex: number, periodicity: number):
     1,
   );
   const per = clamp(periodicity / Math.max(1e-9, Q.WAVE_PERIODICITY_REF), 0, 1);
-  return perf * per;
+  // Combinación lineal ponderada: perfusión (60%) + periodicidad (40%).
+  // Evita el "todo o nada" del producto: una señal débil pero real (perf OR per > 0)
+  // emerge gradualmente en lugar de colapsarse a cero.
+  const linear = perf * 0.60 + per * 0.40;
+  // Floor mínimo: si hay CUALQUIER indicio de pulso real (perf > 0.05 OR per > 0.1),
+  // la onda no se aplana completamente — retroalimentación visual gradual.
+  const hasAnyPulse = perf > 0.05 || per > 0.1;
+  return hasAnyPulse ? Math.max(linear, 0.08) : linear;
 }
