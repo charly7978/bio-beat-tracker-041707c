@@ -197,6 +197,17 @@ export const useSignalProcessor = () => {
     workerRef.current.postMessage({ type: 'start' });
   }, [isProcessing]);
 
+  /** Reset duro del procesador (fin de sesión o cambio de cámara). */
+  const resetProcessor = useCallback(() => {
+    rgbStatsRef.current = {
+      redAC: 0, redDC: 0, greenAC: 0, greenDC: 0, blueAC: 0, blueDC: 0,
+      rgRatio: 0, ratioOfRatios: 0,
+    };
+    lastUiPushRef.current = 0;
+    lastUiContactRef.current = { finger: false, contact: 'NO_CONTACT' };
+    workerRef.current?.postMessage({ type: 'reset' });
+  }, []);
+
   const stopProcessing = useCallback(() => {
     if (!workerRef.current) {
       return;
@@ -207,6 +218,10 @@ export const useSignalProcessor = () => {
     setLastSignal(null);
     lastUiPushRef.current = 0;
     lastUiContactRef.current = { finger: false, contact: 'NO_CONTACT' };
+    rgbStatsRef.current = {
+      redAC: 0, redDC: 0, greenAC: 0, greenDC: 0, blueAC: 0, blueDC: 0,
+      rgRatio: 0, ratioOfRatios: 0,
+    };
   }, []);
 
   const processFrame = useCallback((imageData: ImageData, frameTimestampMs?: number) => {
@@ -274,5 +289,6 @@ export const useSignalProcessor = () => {
     setBackpressureConfig,
     setCameraRuntimeHints,
     setSignalCallback,
+    resetProcessor,
   };
 };

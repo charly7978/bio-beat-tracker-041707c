@@ -16,6 +16,11 @@ import {
   type DiagnosticStatusState,
 } from '../signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import {
+  createAdaptivePolicy,
+  resetAdaptivePolicy,
+  updateAdaptivePolicy,
+} from './AdaptiveRuntimePolicy';
 import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 import {
@@ -293,10 +298,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     RG: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
     POS: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
   };
+  // Política adaptativa (ROI/filtros/rangos de calidad) sin umbrales fijos.
+  private readonly adaptivePolicy = createAdaptivePolicy();
+
   private activeSource: string = 'RG';
   private sourceScores: { [key: string]: number } = { R: 0, G: 0, RG: 0, POS: 0 };
   private lastSourceSwitch = 0;
-  private readonly SOURCE_HYSTERESIS_MS = 4000;
+  private get SOURCE_HYSTERESIS_MS(): number {
+    return this.adaptivePolicy.sourceHysteresisMs;
+  }
 
   // Buffers deslizantes para la proyección del algoritmo POS (Plane-Orthogonal-to-Skin)
   private readonly xBuffer = new RingF32(30);
@@ -605,6 +615,23 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     this.cachedSqi = SignalQualityIndex.calculate(metrics);
     this.signalQuality = this.cachedSqi;
+
+    // === DECISIONES ADAPTATIVAS EN TIEMPO REAL (relativas a la sesión) ===
+    // Actualiza ROI, banda del filtro, histéresis de fuente y rango de calidad
+    // a partir de la distribución online de SQI/movimiento (sin umbrales fijos).
+    updateAdaptivePolicy(this.adaptivePolicy, {
+      sqi: this.cachedSqi,
+      motion: Math.max(this.motionScore, this.signalMotionScore),
+      perfusionIndex: this.cachedPI,
+      periodicity: this.cachedPeriodicity,
+      bpm: this.lastKnownBpm,
+    });
+    if (this.frameCount % 8 === 0) {
+      this.bandpassFilter.setBand(
+        this.adaptivePolicy.bandLowHz,
+        this.adaptivePolicy.bandHighHz,
+      );
+    }
 
     const rejectionScale =
       rejectionStatus === 'MOTION_ARTIFACT'
@@ -1009,7 +1036,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private computeRoiRect(width: number, height: number) {
-    const roiSize = Math.min(width, height) * VITAL_THRESHOLDS.FINGER.ROI_SIZE_FRACTION;
+    const roiSize =
+      Math.min(width, height) *
+      VITAL_THRESHOLDS.FINGER.ROI_SIZE_FRACTION *
+      this.adaptivePolicy.roiScale;
     const side = Math.floor(roiSize);
     
     const centerX = Math.floor(width * this.trackedCentroid.x);
@@ -1787,6 +1817,26 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.morphBandpassFilter.setSampleRate(this.estimatedSampleRate);
     this.bioTremorAbsorber.reset();
     Object.assign(this.acquisitionState, createAcquisitionState());
+    resetAdaptivePolicy(this.adaptivePolicy);
+    this.zloFrameCount = 0;
+    this.pixelStride = 3;
+    this.grayBuffer = null;
+    this.cachedSkewness = 0;
+    this.cachedKurtosis = 0;
+    this.cachedRelativePower = 0;
+    this.sqiMetricsCounter = 0;
+  }
+
+  /**
+   * RESET DURO DE SESIÓN: además del estado DSP, descarta la caracterización de
+   * cámara. Se invoca al terminar/empezar una medición y al cambiar de cámara,
+   * para que ningún estado (baselines, banda adaptativa, hints del dispositivo)
+   * se arrastre de una sesión a otra.
+   */
+  resetSession(): void {
+    this.reset();
+    this.cameraHints = inferCameraRuntimeHints();
+    this.bandpassFilter.setBand(0.5, 4.5);
   }
 
   /**

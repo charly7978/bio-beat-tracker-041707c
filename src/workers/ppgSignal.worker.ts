@@ -47,7 +47,16 @@ self.onmessage = async (event: MessageEvent) => {
       case 'stop':
         if (processor) {
           processor.stop();
+          // Reset duro al cerrar la sesión: nada de estado arrastrado.
+          processor.resetSession();
           self.postMessage({ type: 'stopped' });
+        }
+        break;
+
+      case 'reset':
+        if (processor) {
+          processor.resetSession();
+          self.postMessage({ type: 'resetDone' });
         }
         break;
 
