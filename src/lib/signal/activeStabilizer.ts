@@ -52,11 +52,8 @@ export function stabilizeSample(state: ActiveStabilizerState, x: number): number
   //    alpha→1 (mejor seguimiento de flancos). Transición más nítida que lineal.
   const delta = detrended - state.ema;
   const ad = Math.abs(delta) / Math.max(1e-9, C.EDGE_THRESHOLD);
-  // Aproximación racional rápida de sigmoid(6*(ad-0.5)):
-  //   sigmoid(t) ≈ 0.5 + 0.5 * t / (1 + |t|)    (error < 0.02, ~5x más rápido que Math.exp)
-  const t = 6 * (ad - 0.5);
-  const sigmoid = 0.5 + 0.5 * t / (1 + (t < 0 ? -t : t));
+  const sigmoid = 1 / (1 + Math.exp(-6 * (ad - 0.5)));
   const alpha = C.ALPHA_MIN + (1 - C.ALPHA_MIN) * sigmoid;
-  state.ema = state.ema + alpha * delta;
+  state.ema = state.ema * (1 - alpha) + detrended * alpha;
   return state.ema;
 }

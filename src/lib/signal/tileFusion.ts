@@ -14,9 +14,6 @@ import { detrendLinear } from '@/modules/signal-processing/shared/dsp';
  * esté donde esté el dedo, y optimiza la SNR de la señal inicial.
  */
 
-// Buffer reutilizable estático para sort in-place (evita crear array nuevo por tile por frame)
-const TILE_SORT_BUF = new Float64Array(512);
-
 /**
  * Pulsatilidad de una celda = amplitud AC (banda cardíaca) / DC, robusta.
  * Detrend lineal (quita deriva lenta) + rango p90−p10 (robusto a outliers) sobre
@@ -32,13 +29,9 @@ export function tilePulsatility(greenSamples: number[]): number {
   if (mean <= 1) return 0;
 
   const det = detrendLinear(greenSamples);
-  // Sort in-place en buffer reutilizable (sin spread + sort que crea array nuevo)
-  const len = Math.min(det.length, TILE_SORT_BUF.length);
-  for (let i = 0; i < len; i++) TILE_SORT_BUF[i] = det[i]!;
-  // Float64Array.prototype.sort es in-place y más rápido que Array.sort para números
-  TILE_SORT_BUF.subarray(0, len).sort();
-  const p10 = TILE_SORT_BUF[Math.floor(len * 0.1)] ?? 0;
-  const p90 = TILE_SORT_BUF[Math.floor(len * 0.9)] ?? 0;
+  const sorted = [...det].sort((a, b) => a - b);
+  const p10 = sorted[Math.floor(n * 0.1)] ?? 0;
+  const p90 = sorted[Math.floor(n * 0.9)] ?? 0;
   const ac = Math.max(0, p90 - p10);
   return ac / mean;
 }
