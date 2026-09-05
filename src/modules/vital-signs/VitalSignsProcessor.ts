@@ -649,8 +649,12 @@ export class VitalSignsProcessor {
 
     // === SpO2 — Basado en física (Beer-Lambert), no estadística ===
     // SpO2 usa ratios ópticos AC/DC directamente de la cámara.
-    // Solo necesita datos RGB válidos y confidence no-INVALID.
-    const spo2 = this.spo2Calculator.calculate(this.rgbData, this.frameCount);
+    const spo2 = this.spo2Calculator.calculate(
+      this.rgbData,
+      this.frameCount,
+      30,
+      currentBPM > 0 ? currentBPM : undefined,
+    );
     const spo2Conf = this.getSpo2Confidence();
     if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && spo2Conf !== 'INVALID') {
       const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 5;

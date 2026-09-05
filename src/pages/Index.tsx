@@ -560,28 +560,30 @@ const Index = () => {
       
       // Forzar renderizado y recargar los valores en pantalla y en lastValidResults
       if (lastValidResults) {
-        const updatedBP = sysVal && diaVal
+        const updatedBP = (sysVal && diaVal)
           ? { systolic: sysVal, diastolic: diaVal }
-          : (lastValidResults.bloodPressure.value ?? { systolic: 120, diastolic: 80 });
-          
-        const updatedSpo2 = spo2Val
-          ? spo2Val
-          : (lastValidResults.spo2.value ?? 98);
-          
+          : lastValidResults.bloodPressure.value;
+
+        const updatedSpo2 = spo2Val ?? lastValidResults.spo2.value;
+
         const newVitals: VitalSignsResult = {
           ...lastValidResults,
-          bloodPressure: {
-            ...lastValidResults.bloodPressure,
-            value: updatedBP,
-            status: 'VALID',
-            calibration: calib.getCalibrationInfo('BP')
-          },
-          spo2: {
-            ...lastValidResults.spo2,
-            value: updatedSpo2,
-            status: 'VALID',
-            calibration: calib.getCalibrationInfo('SPO2')
-          }
+          bloodPressure: (calibratedBP && updatedBP)
+            ? {
+                ...lastValidResults.bloodPressure,
+                value: updatedBP,
+                status: 'VALID',
+                calibration: calib.getCalibrationInfo('BP')
+              }
+            : lastValidResults.bloodPressure,
+          spo2: (calibratedSpo2 && updatedSpo2 != null)
+            ? {
+                ...lastValidResults.spo2,
+                value: updatedSpo2,
+                status: 'VALID',
+                calibration: calib.getCalibrationInfo('SPO2')
+              }
+            : lastValidResults.spo2
         };
 
         setLastValidResults(newVitals);

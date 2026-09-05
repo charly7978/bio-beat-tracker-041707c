@@ -5,7 +5,7 @@
  */
 import { clamp } from '../utils/math';
 import { triggerHeartbeatHaptic } from '../utils/haptics';
-import { robustBounds } from '../utils/stats';
+import { robustBounds, skewness } from '../utils/stats';
 import { PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
@@ -372,24 +372,10 @@ export class HeartBeatProcessor {
     const n = data.length;
     if (n < 30) return 0;
 
-    let sum = 0;
-    for (let i = 0; i < n; i++) sum += data[i];
-    const mean = sum / n;
-    
-    let sumDiff2 = 0;
-    let sumDiff3 = 0;
-    for (let i = 0; i < n; i++) {
-      const diff = data[i] - mean;
-      sumDiff2 += diff * diff;
-      sumDiff3 += diff * diff * diff;
-    }
-    
-    const variance = sumDiff2 / n;
-    const std = Math.sqrt(variance);
-    const skewness = (variance > 1e-9) ? (sumDiff3 / n) / (std * std * std) : 0;
+    const skew = skewness(data);
     
     // Skewness positivo y fuerte (ej > 0.4) o negativo fuerte, típicamente indica morfología no gaussiana pura (un pulso)
-    const skewQuality = clamp(Math.abs(skewness) * 25, 0, 30);
+    const skewQuality = clamp(Math.abs(skew) * 25, 0, 30);
     
     const rangeFactor = Math.min(1, range / 4) * 20;
     let rrFactor = 0;
@@ -508,9 +494,7 @@ export class HeartBeatProcessor {
       return clamp(sqiFactor * 0.22 + peakSupport * 0.22 + ens * 0.36 + peakBoost, 0, 0.85);
     }
 
-    const mean = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
-    const variance = this.rrIntervals.reduce((a, rr) => a + (rr - mean) ** 2, 0) / this.rrIntervals.length;
-    const cv = Math.sqrt(variance) / Math.max(1, mean);
+    const cv = computeRrHrv(this.rrIntervals).cv;
     const rrStability = clamp(1 - cv * 1.5, 0, 1);
 
     return clamp(rrStability * 0.32 + peakSupport * 0.22 + sqiFactor * 0.2 + ens * 0.16 + peakBoost, 0, 1);

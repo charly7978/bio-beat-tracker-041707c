@@ -67,6 +67,42 @@ export class RingF32 {
     return this.buf[idx];
   }
 
+  /**
+   * Media aritmética zero-allocation de las muestras activas.
+   */
+  mean(): number {
+    if (this.filled === 0) return 0;
+    let sum = 0;
+    let idx = (this.head - this.filled + this.size) % this.size;
+    for (let i = 0; i < this.filled; i++) {
+      sum += this.buf[idx];
+      idx = idx + 1;
+      if (idx === this.size) idx = 0;
+    }
+    return sum / this.filled;
+  }
+
+  /**
+   * Desviación estándar zero-allocation de las muestras activas.
+   */
+  stdDev(): number {
+    const k = this.filled;
+    if (k < 2) return 0;
+    let sum = 0;
+    let sumSq = 0;
+    let idx = (this.head - k + this.size) % this.size;
+    for (let i = 0; i < k; i++) {
+      const v = this.buf[idx];
+      sum += v;
+      sumSq += v * v;
+      idx = idx + 1;
+      if (idx === this.size) idx = 0;
+    }
+    const mean = sum / k;
+    const variance = (sumSq / k) - (mean * mean);
+    return Math.sqrt(Math.max(0, variance));
+  }
+
   reset(): void {
     this.head = 0;
     this.filled = 0;

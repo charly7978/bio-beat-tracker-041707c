@@ -3,6 +3,7 @@ import { BandpassFilter } from './BandpassFilter';
 import { PPGSignalSplitter } from './PPGSignalSplitter';
 import { createLogger, ppgPerf } from '../../utils/logger';
 import { clamp } from '../../utils/math';
+import { robustBounds, stdDev } from '../../utils/stats';
 import { RingF32 } from '../../utils/RingBuffer';
 import {
   DEFAULT_BACKPRESSURE_CONFIG,
@@ -459,7 +460,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.calculateACDCPrecise();
     }
     const acPi = this.calculatePerfusionIndex();
-    this.cachedPI = acPi > 0 ? acPi : 0.008;
+    if (acPi > 0) {
+      this.cachedPI = acPi;
+    }
 
     // 3. Algoritmo POS (Plane-Orthogonal-to-Skin, Wang et al. IEEE TBME 2017)
     // Proyecta sobre el plano ortogonal al tono de piel para eliminar variaciones de modo común por movimiento
@@ -1856,37 +1859,25 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private calculateStdDev(ring: RingF32): number {
-    const len = ring.length;
-    if (len < 2) return 0;
-    const arr = ring.tail(len);
-    let sum = 0;
-    let sumSq = 0;
-    for (let i = 0; i < len; i++) {
-      const v = arr[i];
-      sum += v;
-      sumSq += v * v;
-    }
-    const mean = sum / len;
-    const variance = (sumSq / len) - (mean * mean);
-    return Math.sqrt(Math.max(0, variance));
+    return ring.stdDev();
   }
 
   private computeSourceScore(buffer: number[]): number {
     if (buffer.length < 30) return 0;
 
-    const sorted = [...buffer].sort((a, b) => a - b);
-    const p10 = sorted[Math.floor(sorted.length * 0.1)] ?? 0;
-    const p90 = sorted[Math.floor(sorted.length * 0.9)] ?? 0;
-    const range = p90 - p10;
+    const { range } = robustBounds(buffer, 0.1, 0.9);
     if (range < 0.3) return 0;
 
-    const mean = buffer.reduce((a, b) => a + b, 0) / buffer.length;
-    const variance = buffer.reduce((a, v) => a + (v - mean) ** 2, 0) / buffer.length;
-    const snr = range / (Math.sqrt(variance) + 0.1);
+    const sd = stdDev(buffer);
+    const snr = range / (sd + 0.1);
 
     // Check for clipping
-    const clipped = buffer.filter(v => Math.abs(v) > 70).length / buffer.length;
-    const clipPenalty = clipped * 30;
+    let clippedCount = 0;
+    const len = buffer.length;
+    for (let i = 0; i < len; i++) {
+      if (Math.abs(buffer[i]) > 70) clippedCount++;
+    }
+    const clipPenalty = (clippedCount / len) * 30;
 
     return Math.max(0, snr * 15 - clipPenalty);
   }

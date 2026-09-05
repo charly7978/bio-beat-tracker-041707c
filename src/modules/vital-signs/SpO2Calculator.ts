@@ -65,7 +65,7 @@ export class SpO2Calculator {
   private readonly ICA_WINDOW_SIZE = 64;
 
   /** Calcula SpO2 a partir de los canales RGB. Retorna 0 si no hay señal válida. */
-  calculate(raw: RGBData, frameCount: number): number {
+  calculate(raw: RGBData, frameCount: number, sampleRate = 30, currentHr?: number): number {
     const spoCfg = VITAL_THRESHOLDS.SPO2;
     let { redAC, redDC, greenAC, greenDC, blueAC, blueDC } = raw;
 
@@ -150,9 +150,17 @@ export class SpO2Calculator {
         const { A, S } = icaResult;
 
         // Buscamos el pitch period de la frecuencia cardíaca mediante autocorrelación en el canal verde (el más pulsátil)
-        let detectedLag = 20; // fallback ≈ 90 BPM a 30fps
+        // Rango fisiológico HR: 42 a 210 BPM
+        const safeFs = sampleRate > 0 ? sampleRate : 30;
+        const minLag = Math.max(2, Math.floor((safeFs * 60) / 210));
+        const maxLag = Math.min(this.greenAcHistory.length - 2, Math.ceil((safeFs * 60) / 42));
+
+        let detectedLag = (typeof currentHr === 'number' && currentHr >= 42 && currentHr <= 210)
+          ? Math.round((safeFs * 60) / currentHr)
+          : Math.round((safeFs * 60) / 75);
+
         let maxAutoCorr = -1;
-        for (let lag = 10; lag <= 40; lag++) {
+        for (let lag = minLag; lag <= maxLag; lag++) {
           const acVal = computeAutocorrelation(this.greenAcHistory, lag);
           if (acVal > maxAutoCorr) {
             maxAutoCorr = acVal;
