@@ -15,6 +15,8 @@ export interface AcquisitionStatusInput {
   timestampJitterMs: number;
   torchActive?: boolean;
   torchSupported?: boolean;
+  mode?: 'finger' | 'gym';
+  faceDetected?: boolean;
 }
 
 /**
@@ -23,11 +25,19 @@ export interface AcquisitionStatusInput {
 export function resolveAcquisitionStatus(input: AcquisitionStatusInput): MeasurementStatus {
   const F = VITAL_THRESHOLDS.FINGER;
   const Q = VITAL_THRESHOLDS.QUALITY;
+  const isGym = input.mode === 'gym';
 
-  if (input.torchSupported === false) return 'TORCH_UNAVAILABLE';
-  if (input.torchSupported && input.torchActive === false) return 'TORCH_UNAVAILABLE';
+  // Antorcha solo requerida en modo finger (cámara trasera con flash)
+  if (!isGym) {
+    if (input.torchSupported === false) return 'TORCH_UNAVAILABLE';
+    if (input.torchSupported && input.torchActive === false) return 'TORCH_UNAVAILABLE';
+  }
 
-  if (!input.fingerDetected || input.contactState === 'NO_CONTACT') {
+  const hasPresence = isGym
+    ? Boolean(input.faceDetected || input.fingerDetected)
+    : Boolean(input.fingerDetected);
+
+  if (!hasPresence || input.contactState === 'NO_CONTACT') {
     return 'NO_FINGER';
   }
 
@@ -41,11 +51,13 @@ export function resolveAcquisitionStatus(input: AcquisitionStatusInput): Measure
     return 'LOW_SIGNAL_QUALITY';
   }
 
-  if (input.coverageRatio < F.MIN_COVERAGE * 0.7) {
+  // En gym mode el rostro ocupa un área menor de la pantalla (15-40%), no el 50-70% del dedo
+  const minCoverage = isGym ? 0.12 : (F.MIN_COVERAGE * 0.7);
+  if (input.coverageRatio < minCoverage) {
     return 'LOW_SIGNAL_QUALITY';
   }
 
-  if (input.coverageRatio > 0.55 && input.perfusionIndex < Q.MIN_PI * 0.5) {
+  if (!isGym && input.coverageRatio > 0.55 && input.perfusionIndex < Q.MIN_PI * 0.5) {
     return 'LOW_SIGNAL_QUALITY';
   }
 

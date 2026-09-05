@@ -292,7 +292,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const signalValue = lastSignal.filteredValue;
     const contactState: ContactState =
       lastSignal.contactState ??
-      (lastSignal.fingerDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT");
+      (lastSignal.fingerDetected || lastSignal.faceDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT");
     const diag = lastSignal.diagnostics;
     const placementMode =
       lastSignal.placementMode ??

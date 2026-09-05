@@ -73,6 +73,9 @@ export interface ProcessedSignal {
       faceTrackConfidence?: number;
       headVelocity?: number;
       kalmanBpm?: number;
+      ambientLuminance?: number;
+      illuminationStatus?: string;
+      isCalibrated?: boolean;
     };
   };
 }

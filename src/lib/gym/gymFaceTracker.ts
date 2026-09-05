@@ -1,17 +1,23 @@
 /**
  * GYM FACE TRACKER — Rastreo y segmentación facial adaptativa para rPPG en movimiento.
  *
- * Características:
- * 1. Segmentación crominámica en espacio YCbCr para aislamiento robusto de piel (inmune a luz variable).
- * 2. Cálculo espacial de momentos de 1º y 2º orden para obtención de centroide y caja envolvente.
- * 3. Seguidor Alpha-Beta para compensar el cabeceo biomecánico (head bobbing en trote/ejercicio).
- * 4. Extracción selectiva de sub-ROIs de alta vascularización (frente y pómulos) excluyendo vello y ojos.
- * 5. Cero asignaciones (zero-allocation) en ciclo caliente de frames para 30+ FPS estables.
+ * Características científicas y biomédicas:
+ * 1. Autocalibración crominámica en espacio YCbCr + RGB normalizado para aislamiento
+ *    robusto e instantáneo de piel (inmune a luz tenue, fría/fluorescente, cálida o contraluz).
+ * 2. Estimación en tiempo real del perfil lumínico ambiental (Retinex / Skin-AE) con
+ *    adaptación continua de umbrales de luminancia (Y_min, Y_max) y centroide cromático.
+ * 3. Actualización adaptativa en línea del tono de piel del usuario (Fitzpatrick I-VI),
+ *    estrechando la elipse de confianza una vez enganchado el rostro para máxima relación señal/ruido.
+ * 4. Cálculo espacial de momentos de 1º y 2º orden para obtención de centroide y caja envolvente.
+ * 5. Seguidor Alpha-Beta biomecánico para compensar el cabeceo en carrera/ejercicio (head bobbing).
+ * 6. Extracción selectiva de sub-ROIs de alta vascularización capilar (frente 60% y pómulos 40%).
+ * 7. Cero asignaciones (zero-allocation) en ciclo caliente de frames para 30+ FPS estables.
  *
  * Referencias científicas:
  * - Kovac et al. (Human skin colour clustering for face detection)
  * - Wang et al. (Algorithmic Principles of Remote PPG, IEEE TBME 2017)
  * - Verkruysse et al. (Remote plethysmographic imaging using ambient light)
+ * - de Haan & Jeanne (Robust pulse rate from chrominance-based rPPG, IEEE TBME 2013)
  */
 
 export interface FaceBoundingBox {
@@ -20,6 +26,14 @@ export interface FaceBoundingBox {
   width: number;
   height: number;
 }
+
+export type GymIlluminationStatus =
+  | 'OPTIMAL'
+  | 'LOW_LIGHT'
+  | 'OVEREXPOSED'
+  | 'COOL_LIGHT'
+  | 'WARM_LIGHT'
+  | 'HIGH_CONTRAST';
 
 export interface GymFaceTrackingResult {
   faceDetected: boolean;
@@ -33,6 +47,9 @@ export interface GymFaceTrackingResult {
   skinPixelCount: number;
   headVelocity: number;
   motionScore: number;
+  ambientLuminance?: number;
+  illuminationStatus?: GymIlluminationStatus;
+  isCalibrated?: boolean;
 }
 
 export class GymFaceTracker {
@@ -54,7 +71,13 @@ export class GymFaceTracker {
   // Parámetros de filtro Alpha-Beta adaptados a aceleración en ejercicio
   private readonly ALPHA = 0.45;
   private readonly BETA = 0.15;
-  private readonly MIN_SKIN_PIXELS = 120;
+
+  // Autocalibración dinámica de tono de piel e iluminación (Fitzpatrick I-VI)
+  private calibratedCb = 112; // Prior poblacional para centroide Cb
+  private calibratedCr = 150; // Prior poblacional para centroide Cr
+  private isSkinCalibrated = false;
+  private ambientLuxEma = 128;
+  private currentIllumination: GymIlluminationStatus = 'OPTIMAL';
 
   /**
    * Resetea el estado del rastreador al cambiar de sesión o de cámara.
@@ -72,10 +95,16 @@ export class GymFaceTracker {
     this.consecutiveDetections = 0;
     this.consecutiveMisses = 0;
     this.lastTimestamp = 0;
+    this.calibratedCb = 112;
+    this.calibratedCr = 150;
+    this.isSkinCalibrated = false;
+    this.ambientLuxEma = 128;
+    this.currentIllumination = 'OPTIMAL';
   }
 
   /**
-   * Procesa un frame de video y extrae las señales cromáticas rPPG estabilizadas.
+   * Procesa un frame de video y extrae las señales cromáticas rPPG estabilizadas
+   * con autocalibración dinámica ante iluminación variable.
    */
   public processFrame(
     imageData: ImageData | { data: Uint8ClampedArray; width: number; height: number },
@@ -86,7 +115,79 @@ export class GymFaceTracker {
     const dt = this.lastTimestamp > 0 ? Math.max(0.016, (now - this.lastTimestamp) / 1000) : 0.033;
     this.lastTimestamp = now;
 
-    // Stride espacial dinámico: muestrea cada 2 píxeles horizontal y verticalmente para alta velocidad
+    // === PASO 1: ANÁLISIS GLOBAL DINÁMICO DE ILUMINACIÓN ===
+    // Muestreo rápido de la escena con paso 4 para caracterizar luminancia y temperatura
+    let sampleCount = 0;
+    let sumYAll = 0;
+    let sumY2All = 0;
+    let sumRAll = 0;
+    let sumGAll = 0;
+    let sumBAll = 0;
+
+    const sampleStep = 4;
+    for (let y = 0; y < height; y += sampleStep) {
+      const row = y * width * 4;
+      for (let x = 0; x < width; x += sampleStep) {
+        const idx = row + x * 4;
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        const Y = (77 * r + 150 * g + 29 * b) >> 8;
+        sumYAll += Y;
+        sumY2All += Y * Y;
+        sumRAll += r;
+        sumGAll += g;
+        sumBAll += b;
+        sampleCount++;
+      }
+    }
+
+    const meanY = sampleCount > 0 ? sumYAll / sampleCount : 128;
+    const ambientVarY = sampleCount > 0 ? Math.max(0, sumY2All / sampleCount - meanY * meanY) : 400;
+    const ambientStdY = Math.sqrt(ambientVarY);
+    const meanR = sampleCount > 0 ? sumRAll / sampleCount : 128;
+    const meanB = sampleCount > 0 ? sumBAll / sampleCount : 128;
+
+    this.ambientLuxEma = this.ambientLuxEma * 0.85 + meanY * 0.15;
+
+    const coolRatio = meanB / Math.max(1, meanR);
+    const warmRatio = meanR / Math.max(1, meanB);
+
+    let illuminationStatus: GymIlluminationStatus = 'OPTIMAL';
+    if (meanY < 42) {
+      illuminationStatus = 'LOW_LIGHT';
+    } else if (meanY > 195) {
+      illuminationStatus = 'OVEREXPOSED';
+    } else if (coolRatio > 0.82) {
+      illuminationStatus = 'COOL_LIGHT';
+    } else if (warmRatio > 2.2) {
+      illuminationStatus = 'WARM_LIGHT';
+    } else if (ambientStdY > 60) {
+      illuminationStatus = 'HIGH_CONTRAST';
+    }
+    this.currentIllumination = illuminationStatus;
+
+    // Adaptación dinámica de rango de luminancia permitida
+    const yMin = illuminationStatus === 'LOW_LIGHT'
+      ? Math.max(8, Math.round(meanY * 0.28))
+      : 20;
+    const yMax = illuminationStatus === 'OVEREXPOSED' ? 254 : 248;
+
+    // Compensación dinámica de temperatura de color
+    let tempShiftCb = 0;
+    let tempShiftCr = 0;
+    if (illuminationStatus === 'COOL_LIGHT') {
+      tempShiftCb = Math.min(16, Math.round((coolRatio - 0.70) * 28));
+      tempShiftCr = Math.max(-18, Math.round((0.70 - coolRatio) * 24));
+    } else if (illuminationStatus === 'WARM_LIGHT') {
+      tempShiftCb = Math.max(-14, Math.round((1.8 - warmRatio) * 10));
+      tempShiftCr = Math.min(16, Math.round((warmRatio - 1.8) * 12));
+    }
+
+    const centerCb = this.isSkinCalibrated ? this.calibratedCb : (112 + tempShiftCb);
+    const centerCr = this.isSkinCalibrated ? this.calibratedCr : (150 + tempShiftCr);
+
+    // === PASO 2: SEGMENTACIÓN DINÁMICA DE PIEL Y ACUMULACIÓN ===
     const stride = 2;
     let skinCount = 0;
     let sumX = 0;
@@ -94,7 +195,9 @@ export class GymFaceTracker {
     let sumX2 = 0;
     let sumY2 = 0;
 
-    // 1. Detección y acumulación de píxeles de piel en espacio YCbCr
+    const sigmaCb = this.isSkinCalibrated ? 28 : 34;
+    const sigmaCr = this.isSkinCalibrated ? 26 : 32;
+
     for (let y = 0; y < height; y += stride) {
       const rowOffset = y * width * 4;
       for (let x = 0; x < width; x += stride) {
@@ -103,15 +206,37 @@ export class GymFaceTracker {
         const g = data[i + 1];
         const b = data[i + 2];
 
-        // Conversión entera rápida a YCbCr
+        // Conversión entera a YCbCr
         const Y = (77 * r + 150 * g + 29 * b) >> 8;
-        if (Y < 25 || Y > 245) continue;
+        if (Y < yMin || Y > yMax) continue;
 
         const Cb = ((-43 * r - 85 * g + 128 * b) >> 8) + 128;
         const Cr = ((128 * r - 107 * g - 21 * b) >> 8) + 128;
 
-        // Región cromática estándar de piel humana (Kovac et al. + Peer et al.)
-        if (Cb >= 77 && Cb <= 130 && Cr >= 133 && Cr <= 175 && r > g && g > b * 0.8) {
+        // Normalización cromática RGB para invarianza a escala e iluminación
+        const sumRGB = r + g + b + 0.0001;
+        const rn = r / sumRGB;
+        const gn = g / sumRGB;
+        const bn = b / sumRGB;
+
+        const isSkinChromatic =
+          rn > 0.28 &&
+          rn >= bn * 0.90 &&
+          gn > 0.18 &&
+          Math.abs(rn - gn) < 0.38;
+
+        // Distancia normalizada a la elipse adaptativa
+        const dCb = (Cb - centerCb) / sigmaCb;
+        const dCr = (Cr - centerCr) / sigmaCr;
+        const ellipDist = dCb * dCb + dCr * dCr;
+
+        // Fallback a modelo clásico ampliado (Kovac et al. / Peer et al.)
+        const isClassicKovac =
+          Cb >= 72 && Cb <= 140 &&
+          Cr >= 126 && Cr <= 180 &&
+          r > g * 0.85 && r > b * 0.75;
+
+        if ((ellipDist <= 1.45 && isSkinChromatic) || isClassicKovac) {
           skinCount++;
           sumX += x;
           sumY += y;
@@ -121,8 +246,13 @@ export class GymFaceTracker {
       }
     }
 
-    // 2. Comprobación de masa crítica de piel
-    if (skinCount < this.MIN_SKIN_PIXELS) {
+    // === PASO 3: COMPROBACIÓN DE MASA CRÍTICA ADAPTATIVA ===
+    const baseMinPixels = Math.max(45, Math.min(120, Math.round(width * height * 0.0012)));
+    const requiredMinPixels = this.isInitialized && this.consecutiveDetections > 0
+      ? Math.round(baseMinPixels * 0.60)
+      : baseMinPixels;
+
+    if (skinCount < requiredMinPixels) {
       this.consecutiveMisses++;
       if (this.consecutiveMisses > 10) {
         this.consecutiveDetections = 0;
@@ -139,13 +269,16 @@ export class GymFaceTracker {
         skinPixelCount: 0,
         headVelocity: 0,
         motionScore: 0,
+        ambientLuminance: Math.round(meanY),
+        illuminationStatus,
+        isCalibrated: this.isSkinCalibrated,
       };
     }
 
     this.consecutiveMisses = 0;
     this.consecutiveDetections++;
 
-    // 3. Momentos espaciales: Centroide (media) y dispersión (desviación estándar)
+    // === PASO 4: MOMENTOS ESPACIALES Y ESTIMACIÓN DE CAJA FACIAL ===
     const rawCx = sumX / skinCount;
     const rawCy = sumY / skinCount;
     const varX = Math.max(16, sumX2 / skinCount - rawCx * rawCx);
@@ -153,11 +286,10 @@ export class GymFaceTracker {
     const stdX = Math.sqrt(varX);
     const stdY = Math.sqrt(varY);
 
-    // Dimensiones proporcionales del rostro (altura suele ser 1.25x el ancho)
     const rawBw = Math.min(width * 0.85, Math.max(30, stdX * 2.8));
     const rawBh = Math.min(height * 0.90, Math.max(40, stdY * 3.2));
 
-    // 4. Filtrado Alpha-Beta para estabilizar cabeceo (head-bobbing)
+    // === PASO 5: FILTRADO ALPHA-BETA PARA ESTABILIZAR CABECEO ===
     if (!this.isInitialized) {
       this.cx = rawCx;
       this.cy = rawCy;
@@ -169,19 +301,16 @@ export class GymFaceTracker {
       this.vbh = 0;
       this.isInitialized = true;
     } else {
-      // Predicción
       const predCx = this.cx + this.vx * dt;
       const predCy = this.cy + this.vy * dt;
       const predBw = this.bw + this.vbw * dt;
       const predBh = this.bh + this.vbh * dt;
 
-      // Residuales de medición
       const resX = rawCx - predCx;
       const resY = rawCy - predCy;
       const resBw = rawBw - predBw;
       const resBh = rawBh - predBh;
 
-      // Actualización de estado
       this.cx = predCx + this.ALPHA * resX;
       this.cy = predCy + this.ALPHA * resY;
       this.vx += (this.BETA / dt) * resX;
@@ -193,12 +322,10 @@ export class GymFaceTracker {
       this.vbh += (this.BETA * 0.6 / dt) * resBh;
     }
 
-    // Cálculo de velocidad física de la cabeza (píxeles/segundo normalizados)
     const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
     const headVelocityNorm = Math.min(1.0, speed / (width * 0.8));
     const motionScore = Math.min(1.0, headVelocityNorm * 1.5);
 
-    // Caja delimitadora estabilizada del rostro completo
     const faceLeft = Math.max(0, Math.min(width - 20, Math.round(this.cx - this.bw / 2)));
     const faceTop = Math.max(0, Math.min(height - 20, Math.round(this.cy - this.bh / 2)));
     const faceW = Math.max(20, Math.min(width - faceLeft, Math.round(this.bw)));
@@ -211,8 +338,8 @@ export class GymFaceTracker {
       height: faceH,
     };
 
-    // 5. Segmentación de Sub-ROIs Biométricas de Alta Densidad Capilar
-    // A) Frente (Forehead): tercio superior central, inmune a expresiones orales y barba
+    // === PASO 6: SEGMENTACIÓN DE SUB-ROIs BIOMÉTRICAS ===
+    // A) Frente (Forehead)
     const fhX = Math.round(faceLeft + faceW * 0.22);
     const fhY = Math.round(faceTop + faceH * 0.08);
     const fhW = Math.round(faceW * 0.56);
@@ -224,7 +351,7 @@ export class GymFaceTracker {
       height: Math.max(10, Math.min(height - fhY, fhH)),
     };
 
-    // B) Pómulos y mejillas (Malar region): tercio medio lateral
+    // B) Pómulos (Malar region)
     const chX = Math.round(faceLeft + faceW * 0.15);
     const chY = Math.round(faceTop + faceH * 0.38);
     const chW = Math.round(faceW * 0.70);
@@ -236,8 +363,9 @@ export class GymFaceTracker {
       height: Math.max(10, Math.min(height - chY, chH)),
     };
 
-    // 6. Extracción promedio ponderada de crominancia en las sub-ROIs (frente 60% + pómulos 40%)
+    // === PASO 7: EXTRACCIÓN CROMÁTICA Y AUTOCALIBRACIÓN EN LÍNEA ===
     let rSumFh = 0, gSumFh = 0, bSumFh = 0, countFh = 0;
+    let cbSumFh = 0, crSumFh = 0;
     const fhYEnd = foreheadBox.y + foreheadBox.height;
     const fhXEnd = foreheadBox.x + foreheadBox.width;
 
@@ -245,14 +373,20 @@ export class GymFaceTracker {
       const rOff = y * width * 4;
       for (let x = foreheadBox.x; x < fhXEnd; x++) {
         const idx = rOff + x * 4;
-        rSumFh += data[idx];
-        gSumFh += data[idx + 1];
-        bSumFh += data[idx + 2];
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        rSumFh += r;
+        gSumFh += g;
+        bSumFh += b;
+        cbSumFh += ((-43 * r - 85 * g + 128 * b) >> 8) + 128;
+        crSumFh += ((128 * r - 107 * g - 21 * b) >> 8) + 128;
         countFh++;
       }
     }
 
     let rSumCh = 0, gSumCh = 0, bSumCh = 0, countCh = 0;
+    let cbSumCh = 0, crSumCh = 0;
     const chYEnd = cheeksBox.y + cheeksBox.height;
     const chXEnd = cheeksBox.x + cheeksBox.width;
 
@@ -260,10 +394,36 @@ export class GymFaceTracker {
       const rOff = y * width * 4;
       for (let x = cheeksBox.x; x < chXEnd; x++) {
         const idx = rOff + x * 4;
-        rSumCh += data[idx];
-        gSumCh += data[idx + 1];
-        bSumCh += data[idx + 2];
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        rSumCh += r;
+        gSumCh += g;
+        bSumCh += b;
+        cbSumCh += ((-43 * r - 85 * g + 128 * b) >> 8) + 128;
+        crSumCh += ((128 * r - 107 * g - 21 * b) >> 8) + 128;
         countCh++;
+      }
+    }
+
+    // Actualización de la autocalibración de piel con los píxeles reales del usuario
+    const totalRoiCount = countFh + countCh;
+    if (totalRoiCount > 40) {
+      const sampleCb = (cbSumFh + cbSumCh) / totalRoiCount;
+      const sampleCr = (crSumFh + crSumCh) / totalRoiCount;
+
+      if (sampleCb >= 70 && sampleCb <= 145 && sampleCr >= 120 && sampleCr <= 185) {
+        if (!this.isSkinCalibrated) {
+          this.calibratedCb = sampleCb;
+          this.calibratedCr = sampleCr;
+          if (this.consecutiveDetections >= 3) {
+            this.isSkinCalibrated = true;
+          }
+        } else {
+          // Adaptación continua suave ante cambios de iluminación o rubor por ejercicio
+          this.calibratedCb = this.calibratedCb * 0.94 + sampleCb * 0.06;
+          this.calibratedCr = this.calibratedCr * 0.94 + sampleCr * 0.06;
+        }
       }
     }
 
@@ -275,7 +435,6 @@ export class GymFaceTracker {
     const chG = countCh > 0 ? gSumCh / countCh : 0;
     const chB = countCh > 0 ? bSumCh / countCh : 0;
 
-    // Fusión biomédica: frente 60% + pómulos 40% (o solo una si la otra no tiene muestras)
     let rawRed = 0;
     let rawGreen = 0;
     let rawBlue = 0;
@@ -294,6 +453,7 @@ export class GymFaceTracker {
       rawBlue = chB;
     }
 
+    const faceLuminance = Math.round((77 * rawRed + 150 * rawGreen + 29 * rawBlue) >> 8);
     const confidence = Math.min(1.0, (this.consecutiveDetections / 8) * (1 - motionScore * 0.4));
 
     return {
@@ -308,6 +468,9 @@ export class GymFaceTracker {
       skinPixelCount: skinCount,
       headVelocity: speed,
       motionScore,
+      ambientLuminance: faceLuminance > 0 ? faceLuminance : Math.round(meanY),
+      illuminationStatus,
+      isCalibrated: this.isSkinCalibrated,
     };
   }
 }

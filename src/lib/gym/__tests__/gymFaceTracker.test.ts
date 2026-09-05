@@ -111,4 +111,57 @@ describe('GymFaceTracker', () => {
     const afterReset = tracker.processFrame({ data: rgba, width, height }, 1200);
     expect(afterReset.faceDetected).toBe(false);
   });
+
+  it('se autocalibra y detecta rostro en condiciones de luz tenue (LOW_LIGHT)', () => {
+    const width = 80;
+    const height = 80;
+    const rgba = new Uint8ClampedArray(width * height * 4);
+
+    // Pintar parche de piel en penumbra (R=60, G=42, B=32) -> Y ~ 45
+    for (let y = 15; y < 65; y++) {
+      for (let x = 15; x < 65; x++) {
+        const idx = (y * width + x) * 4;
+        rgba[idx] = 60;
+        rgba[idx + 1] = 42;
+        rgba[idx + 2] = 32;
+        rgba[idx + 3] = 255;
+      }
+    }
+
+    tracker.processFrame({ data: rgba, width, height }, 1000);
+    tracker.processFrame({ data: rgba, width, height }, 1033);
+    const res = tracker.processFrame({ data: rgba, width, height }, 1066);
+
+    expect(res.faceDetected).toBe(true);
+    expect(res.skinPixelCount).toBeGreaterThan(60);
+    expect(res.illuminationStatus).toBeDefined();
+    expect(res.ambientLuminance).toBeGreaterThan(20);
+  });
+
+  it('se autocalibra y adapta ante iluminacion fria / fluorescente (COOL_LIGHT)', () => {
+    const width = 80;
+    const height = 80;
+    const rgba = new Uint8ClampedArray(width * height * 4);
+
+    // Parche bajo luz fluorescente/LED fría con azul elevado (R=145, G=135, B=125)
+    for (let y = 15; y < 65; y++) {
+      for (let x = 15; x < 65; x++) {
+        const idx = (y * width + x) * 4;
+        rgba[idx] = 145;
+        rgba[idx + 1] = 135;
+        rgba[idx + 2] = 125;
+        rgba[idx + 3] = 255;
+      }
+    }
+
+    tracker.processFrame({ data: rgba, width, height }, 1000);
+    tracker.processFrame({ data: rgba, width, height }, 1033);
+    tracker.processFrame({ data: rgba, width, height }, 1066);
+    const res = tracker.processFrame({ data: rgba, width, height }, 1100);
+
+    expect(res.faceDetected).toBe(true);
+    expect(res.isCalibrated).toBe(true);
+    expect(res.rawRed).toBeGreaterThan(120);
+  });
 });
+

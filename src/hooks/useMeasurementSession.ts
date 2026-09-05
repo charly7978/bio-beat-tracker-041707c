@@ -190,7 +190,9 @@ export function useMeasurementSession({
     if (!isMonitoring || !lastSignal) return;
     const diag = lastSignal.diagnostics as Record<string, unknown> | undefined;
     const sqm = diag?.sqm as Record<string, number> | undefined;
-    const hasContact = !!lastSignal.fingerDetected && lastSignal.contactState !== 'NO_CONTACT';
+    const hasContact =
+      (!!lastSignal.fingerDetected || !!lastSignal.faceDetected) &&
+      lastSignal.contactState !== 'NO_CONTACT';
     const frame: ValidationFrame = {
       sqi: lastSignal.quality || 0,
       pi: lastSignal.perfusionIndex || 0,

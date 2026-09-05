@@ -389,6 +389,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.fingerDetected = false;
       this.stepAcquisition(false);
 
+      // Resetear baselines para que ante el reenganche facial se inicialicen de inmediato
+      this.redBaseline = 0;
+      this.greenBaseline = 0;
+      this.blueBaseline = 0;
+
       this.onSignalReady?.({
         timestamp,
         rawValue: 0,
@@ -418,6 +423,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
             ...this.gymMotionCancellation.getState(),
             faceTrackConfidence: face.confidence,
             headVelocity: face.headVelocity,
+            ambientLuminance: face.ambientLuminance ?? 0,
+            illuminationStatus: face.illuminationStatus ?? 'OPTIMAL',
+            isCalibrated: false,
           },
         },
       });
@@ -425,11 +433,19 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     // 2. Rostro detectado: presencia confirmada
+    const wasLost = this.consecutiveNoContactFrames > 0;
     this.consecutiveNoContactFrames = 0;
     const motionArtifact = face.motionScore > 0.55;
     const isStable = face.confidence >= 0.50 && face.motionScore < 0.65;
     this.contactState = isStable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
     this.fingerDetected = true;
+
+    // Inicialización instantánea o reenganche rápido de baselines al detectar el rostro
+    if (this.redBaseline === 0 || wasLost) {
+      this.redBaseline = face.rawRed;
+      this.greenBaseline = face.rawGreen;
+      this.blueBaseline = face.rawBlue;
+    }
 
     // Actualizar baselines DC con seguimiento adaptativo a variaciones lumínicas
     this.updateChannelBaselines(face.rawRed, face.rawGreen, face.rawBlue, motionArtifact);
@@ -597,6 +613,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           kalmanBpm,
           faceTrackConfidence: face.confidence,
           headVelocity: face.headVelocity,
+          ambientLuminance: face.ambientLuminance ?? 128,
+          illuminationStatus: face.illuminationStatus ?? 'OPTIMAL',
+          isCalibrated: face.isCalibrated ?? false,
         },
       },
     });
@@ -1655,6 +1674,18 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       return;
     }
 
+    if (this.measurementMode === 'gym') {
+      // En modo GYM (cámara frontal rPPG con luz ambiente), la iluminación de fondo
+      // deriva continuamente con leves cambios posturales o fuentes lumínicas.
+      // El tracking DC debe ser dinámico y ágil (alpha ~ 0.06) para que el
+      // algoritmo POS mantenga las señales centradas sin saturar en clampMax (0.06).
+      const gymAlpha = motionArtifact ? 0.22 : 0.06;
+      this.redBaseline = this.redBaseline * (1 - gymAlpha) + rawRed * gymAlpha;
+      this.greenBaseline = this.greenBaseline * (1 - gymAlpha) + rawGreen * gymAlpha;
+      this.blueBaseline = this.blueBaseline * (1 - gymAlpha) + rawBlue * gymAlpha;
+      return;
+    }
+
     // Durante motion el DC salta — aceleramos el tracking para evitar que el
     // bandpass reciba una senal mal normalizada que genera ringing post-motion.
     // Ademas, si salimos de motion saltamos la baseline al valor actual (el DC
@@ -1997,6 +2028,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.redDC = 0; this.redAC = 0;
     this.greenDC = 0; this.greenAC = 0;
     this.blueDC = 0; this.blueAC = 0;
+    this.redBaseline = 0;
+    this.greenBaseline = 0;
+    this.blueBaseline = 0;
     this.sourceBuffers.R.reset();
     this.sourceBuffers.G.reset();
     this.sourceBuffers.RG.reset();

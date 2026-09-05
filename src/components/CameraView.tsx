@@ -97,7 +97,7 @@ function isConstraintSupported(name: string): boolean {
   return Boolean(supported[name as keyof MediaTrackSupportedConstraints]);
 }
 
-async function stabilizeTrack(track: MediaStreamTrack): Promise<void> {
+async function stabilizeTrack(track: MediaStreamTrack, isGym = false): Promise<void> {
   const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
   const constraints: AdvancedConstraint[] = [];
 
@@ -107,10 +107,7 @@ async function stabilizeTrack(track: MediaStreamTrack): Promise<void> {
     constraints.push({ frameRate: targetFps });
   }
 
-  // Exposición y WB en CONTINUO durante la COLOCACIÓN del dedo: el AE/AWB deben
-  // ADAPTARSE al dedo que baja, no congelarse sobre la escena vacía (flash sin
-  // dedo). El bloqueo anti-deriva se DIFIERE a optimizeForFinger(), que congela
-  // exposición/WB ya sobre la escena REAL del dedo en STABLE_CONTACT.
+  // Exposición y WB en CONTINUO: el AE/AWB deben ADAPTARSE dinámicamente a la iluminación
   if (caps.exposureMode?.includes("continuous") && isConstraintSupported('exposureMode')) {
     constraints.push({ exposureMode: "continuous" });
   }
@@ -119,12 +116,19 @@ async function stabilizeTrack(track: MediaStreamTrack): Promise<void> {
     constraints.push({ whiteBalanceMode: "continuous" });
   }
 
-  // Foco cercano fijo desde el inicio: el dedo siempre está pegado al lente, así
-  // que el foco manual a mínima distancia es estable y correcto (no introduce deriva).
-  if (caps.focusMode?.includes("manual") && isConstraintSupported('focusMode')) {
-    constraints.push({ focusMode: "manual", focusDistance: 0 });
-  } else if (caps.focusMode?.includes("continuous") && isConstraintSupported('focusMode')) {
-    constraints.push({ focusMode: "continuous" });
+  // Foco:
+  // En modo finger (trasera), el dedo está pegado al lente -> foco manual a mínima distancia (0).
+  // En modo gym (frontal), el rostro está a 30-80 cm -> SIEMPRE foco continuo/automático (NUNCA macro 0).
+  if (isGym) {
+    if (caps.focusMode?.includes("continuous") && isConstraintSupported('focusMode')) {
+      constraints.push({ focusMode: "continuous" });
+    }
+  } else {
+    if (caps.focusMode?.includes("manual") && isConstraintSupported('focusMode')) {
+      constraints.push({ focusMode: "manual", focusDistance: 0 });
+    } else if (caps.focusMode?.includes("continuous") && isConstraintSupported('focusMode')) {
+      constraints.push({ focusMode: "continuous" });
+    }
   }
 
   if (constraints.length > 0) {
@@ -251,6 +255,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
       }
     },
     optimizeForFinger: (redLevel: number) => {
+      if (measurementMode === 'gym') return;
       const track = streamRef.current?.getVideoTracks?.()[0];
       if (!track) return;
       void (async () => {
@@ -442,7 +447,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
         const track = stream.getVideoTracks()[0];
         if (track && !isGym) {
-          await stabilizeTrack(track);
+          await stabilizeTrack(track, false);
           let torchOn = await activateTorch(track);
           if (!torchOn) {
             await new Promise(r => setTimeout(r, 400));
@@ -452,7 +457,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           else log.warn("Flash no confirmado — se usará perfil de cámara tolerante");
           await applyTorchDependentParams(track, torchOn);
         } else if (track && isGym) {
-          await stabilizeTrack(track);
+          await stabilizeTrack(track, true);
           log.info("Cámara frontal lista para rPPG deportivo");
         }
 
@@ -479,7 +484,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
                 await waitForVideo(videoRef.current);
               }
               const track = fallbackStream.getVideoTracks()[0];
-              if (track) await stabilizeTrack(track);
+              if (track) await stabilizeTrack(track, isGym);
               log.info("Cámara iniciada con constraints relajados");
               onStreamReadyRef.current?.(fallbackStream);
               isStartingRef.current = false;

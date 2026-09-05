@@ -206,13 +206,13 @@ const Index = () => {
       exposureLockedRef.current = false;
       return;
     }
-    if (!exposureLockedRef.current && cs === 'STABLE_CONTACT') {
+    if (!exposureLockedRef.current && cs === 'STABLE_CONTACT' && measurementMode !== 'gym') {
       exposureLockedRef.current = true;
       // Acción concreta sobre el hardware: foco cercano + WB bloqueado + exposición
       // auto-optimizada según el nivel REAL del rojo del dedo (no un valor fijo).
       cameraRef.current?.optimizeForFinger?.(lastRawRedRef.current);
     }
-  }, [lastSignal?.contactState]);
+  }, [lastSignal?.contactState, measurementMode]);
 
   // Sincronizar resultados post-medición
   const { setVitalSigns: routerSetVitalSigns } = router;
@@ -646,10 +646,12 @@ const Index = () => {
     const cam = cameraRef.current?.getDiagnostics?.() as Record<string, unknown> | undefined;
     const cs: ContactState =
       lastSignal.contactState ??
-      (lastSignal.fingerDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT");
+      (lastSignal.fingerDetected || lastSignal.faceDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT");
     return resolveAcquisitionStatus({
       contactState: cs,
       fingerDetected: !!lastSignal.fingerDetected,
+      faceDetected: !!lastSignal.faceDetected,
+      mode: measurementMode,
       coverageRatio: (d?.coverageRatio as number) ?? 0,
       perfusionIndex: lastSignal.perfusionIndex ?? 0,
       motionScore: sqm?.motionScore ?? 0,
@@ -658,10 +660,10 @@ const Index = () => {
       fpsEffective: sqm?.fpsEffective ?? 30,
       frameDropRatio: sqm?.frameDropRatio ?? 0,
       timestampJitterMs: sqm?.timestampJitterMs ?? 0,
-      torchActive: cam?.torchActive as boolean | undefined,
-      torchSupported: cam?.torchSupported as boolean | undefined,
+      torchActive: measurementMode === 'gym' ? undefined : (cam?.torchActive as boolean | undefined),
+      torchSupported: measurementMode === 'gym' ? undefined : (cam?.torchSupported as boolean | undefined),
     });
-  }, [lastSignal]);
+  }, [lastSignal, measurementMode]);
 
   // CONTROL DE CALIBRACIÓN
   useEffect(() => {
@@ -1009,7 +1011,7 @@ const Index = () => {
               bpStatus={router.vitalSigns.bloodPressure.status}
               contactState={
                 lastSignal?.contactState ??
-                (lastSignal?.fingerDetected ? 'UNSTABLE_CONTACT' : 'NO_CONTACT')
+                (lastSignal?.fingerDetected || lastSignal?.faceDetected ? 'UNSTABLE_CONTACT' : 'NO_CONTACT')
               }
               acquisitionStatus={acquisitionStatusLabel}
               getVideoElement={() => cameraRef.current?.getVideoElement() ?? canvasRef.current ?? null}
