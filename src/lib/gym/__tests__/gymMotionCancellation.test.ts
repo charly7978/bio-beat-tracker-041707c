@@ -23,7 +23,7 @@ describe('GymMotionCancellation', () => {
     for (let i = 0; i < 90; i++) {
       const t = i / fs;
       const motionSignal = Math.sin(2 * Math.PI * freqCadence * t) * 5.0;
-      canceller.pushMotionSample(Math.abs(motionSignal));
+      canceller.pushMotionSample(motionSignal);
     }
 
     const state = canceller.getState();
@@ -41,7 +41,7 @@ describe('GymMotionCancellation', () => {
     for (let i = 0; i < 90; i++) {
       const t = i / fs;
       const motion = Math.sin(2 * Math.PI * cadenceHz * t) * 6;
-      canceller.pushMotionSample(Math.abs(motion));
+      canceller.pushMotionSample(motion);
     }
 
     // Filtrar una onda senoidal exactamente en la frecuencia de cadencia

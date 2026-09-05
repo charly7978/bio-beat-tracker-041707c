@@ -183,6 +183,13 @@ export class GymMotionCancellation {
   }
 
   /**
+   * Alias de filterSample para filtrado de señal rPPG.
+   */
+  public filterPPGSignal(rawRppgSample: number): number {
+    return this.filterSample(rawRppgSample);
+  }
+
+  /**
    * Actualiza el rastreador de Kalman con una medición observada de frecuencia cardíaca instantánea.
    * @param measuredBpm BPM medido por el ensemble de picos o espectro
    * @param dt Delta de tiempo en segundos desde la última actualización
