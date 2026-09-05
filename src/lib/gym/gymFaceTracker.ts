@@ -121,7 +121,6 @@ export class GymFaceTracker {
     let sumYAll = 0;
     let sumY2All = 0;
     let sumRAll = 0;
-    let sumGAll = 0;
     let sumBAll = 0;
 
     const sampleStep = 4;
@@ -136,7 +135,6 @@ export class GymFaceTracker {
         sumYAll += Y;
         sumY2All += Y * Y;
         sumRAll += r;
-        sumGAll += g;
         sumBAll += b;
         sampleCount++;
       }

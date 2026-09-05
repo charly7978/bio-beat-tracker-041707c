@@ -636,7 +636,7 @@ export class HeartBeatProcessor {
   dispose(): void {
     this.removeAudioUnlockListeners();
     if (this.audioContext) {
-      this.audioContext.close().catch(() => {});
+      this.audioContext.close().catch(() => undefined);
     }
   }
 }
