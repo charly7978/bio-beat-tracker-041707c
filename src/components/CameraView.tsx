@@ -308,7 +308,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         }
       })();
     },
-  }), []);
+  }), [measurementMode]);
 
   useEffect(() => {
     const mountedRef = { current: true };
