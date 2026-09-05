@@ -107,6 +107,16 @@ self.onmessage = async (event: MessageEvent) => {
         }
         break;
 
+      case 'setMeasurementMode':
+        if (processor) {
+          processor.setMeasurementMode(data);
+          self.postMessage({
+            type: 'measurementModeChanged',
+            data: processor.getMeasurementMode()
+          });
+        }
+        break;
+
       default:
         // Tipo de mensaje no reconocido - ignorado silenciosamente
     }

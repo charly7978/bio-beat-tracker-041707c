@@ -270,6 +270,8 @@ export interface PpgRenderProps {
   value: number;
   quality: number;
   isFingerDetected: boolean;
+  faceDetected?: boolean;
+  measurementMode?: 'finger' | 'gym';
   isMonitoring: boolean;
   isPeak: boolean;
   preserveResults: boolean;
@@ -428,7 +430,9 @@ export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: numb
  */
 export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { header } = state.layout;
-  const { isFingerDetected: detected, elapsedTime: elapsed, diagnostics } = state.props;
+  const { isFingerDetected, faceDetected, measurementMode, elapsedTime: elapsed, diagnostics } = state.props;
+  const isGym = measurementMode === 'gym';
+  const detected = isGym ? (faceDetected ?? isFingerDetected) : isFingerDetected;
 
   ctx.fillStyle = 'rgba(6, 14, 28, 0.92)';
   ctx.fillRect(header.x, header.y, header.w, header.h);
@@ -453,16 +457,19 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.save();
   ctx.beginPath();
   ctx.arc(dotX, dotY, 4, 0, Math.PI * 2);
-  ctx.fillStyle = detected ? '#22c55e' : 'rgba(148, 163, 184, 0.4)';
+  ctx.fillStyle = detected ? (isGym ? '#00f2ff' : '#22c55e') : 'rgba(148, 163, 184, 0.4)';
   if (detected) {
-    ctx.shadowColor = '#22c55e';
+    ctx.shadowColor = isGym ? '#00f2ff' : '#22c55e';
     ctx.shadowBlur = 8;
   }
   ctx.fill();
   ctx.restore();
 
-  ctx.fillStyle = detected ? '#4ade80' : COLORS.TEXT_DIM;
-  ctx.fillText(detected ? 'SENSOR ÓPTICO ACTIVO' : 'COLOCAR DEDO EN SENSOR', dotX + 12, header.y + 24);
+  ctx.fillStyle = detected ? (isGym ? '#38bdf8' : '#4ade80') : COLORS.TEXT_DIM;
+  const headerStatusText = detected
+    ? (isGym ? 'MODO GYM - POS rPPG ACTIVO' : 'SENSOR ÓPTICO ACTIVO')
+    : (isGym ? 'ENFOCAR ROSTRO EN CÁMARA' : 'COLOCAR DEDO EN SENSOR');
+  ctx.fillText(headerStatusText, dotX + 12, header.y + 24);
 
   // Cápsula central
   const d = new Date(state.now);
@@ -1595,7 +1602,8 @@ export function drawLiveFingerOpticalLens(
   mode: 'CALIBRATION' | 'LIVE_MONITORING'
 ): void {
   const p = state.props;
-  const isDetected = p.isFingerDetected;
+  const isGym = p.measurementMode === 'gym';
+  const isDetected = isGym ? (p.faceDetected ?? p.isFingerDetected) : p.isFingerDetected;
   const diag = p.diagnostics;
   const progress = Math.max(0, Math.min(1, diag?.acquisitionProgress ?? 0));
   const innerRad = radius * 0.86;
@@ -1846,20 +1854,20 @@ export function drawLiveFingerOpticalLens(
     ctx.textAlign = 'center';
     ctx.fillText(isDetected ? `${Math.round(progress * 100)}%` : 'EN ESPERA', cx, pctBadgeY + 11);
 
-    // Mensaje clínico inferior
-    let msgText = 'COLOCAR DEDO EN CÁMARA';
+    // Mensaje clínico / deportivo inferior
+    let msgText = isGym ? 'ENFOCAR ROSTRO EN CÁMARA' : 'COLOCAR DEDO EN CÁMARA';
     let msgColor = '#f59e0b';
-    let icon = '👆';
+    let icon = isGym ? '🏃' : '👆';
 
     if (isDetected) {
       msgColor = '#67e8f9';
       icon = '⚡';
       if (progress < 0.35) {
-        msgText = 'ACOPLANDO SENSOR';
+        msgText = isGym ? 'RASTREANDO ROSTRO' : 'ACOPLANDO SENSOR';
       } else if (progress < 0.75) {
-        msgText = 'CALIBRANDO BIOMARCADORES';
+        msgText = isGym ? 'CALIBRANDO rPPG (POS)' : 'CALIBRANDO BIOMARCADORES';
       } else {
-        msgText = 'SINCRONIZANDO ONDA';
+        msgText = isGym ? 'SINCRONIZANDO PULSO' : 'SINCRONIZANDO ONDA';
       }
     }
 

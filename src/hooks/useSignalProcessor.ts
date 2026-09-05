@@ -1,6 +1,6 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ProcessedSignal, ProcessingError } from '../types/signal';
+import type { ProcessedSignal, ProcessingError, MeasurementMode } from '../types/signal';
 import {
   loadBackpressureConfig,
   saveBackpressureConfig,
@@ -18,6 +18,8 @@ export const useSignalProcessor = () => {
   const workerRef = useRef<Worker | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const isProcessingRef = useRef(false);
+  const [measurementMode, setMeasurementModeState] = useState<MeasurementMode>('finger');
+  const measurementModeRef = useRef<MeasurementMode>('finger');
   const [lastSignal, setLastSignal] = useState<ProcessedSignal | null>(null);
   const [currentStride, setCurrentStride] = useState<number>(3);
 
@@ -285,10 +287,22 @@ export const useSignalProcessor = () => {
     realtimeCbRef.current = cb;
   }, []);
 
+  const setMeasurementMode = useCallback((mode: MeasurementMode) => {
+    measurementModeRef.current = mode;
+    setMeasurementModeState(mode);
+    workerRef.current?.postMessage({
+      type: 'setMeasurementMode',
+      data: mode,
+    });
+    log.info(`useSignalProcessor: Modo enviado al worker: ${mode}`);
+  }, []);
+
   return {
     isProcessing,
     lastSignal,
     currentStride,
+    measurementMode,
+    setMeasurementMode,
     startProcessing,
     stopProcessing,
     processFrame,

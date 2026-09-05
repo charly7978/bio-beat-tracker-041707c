@@ -71,6 +71,8 @@ const Index = () => {
     setSignalCallback,
     setCameraRuntimeHints,
     resetProcessor,
+    measurementMode,
+    setMeasurementMode,
   } = useSignalProcessor();
 
   const {
@@ -761,6 +763,34 @@ const Index = () => {
               </div>
             </div>
 
+            {/* Selector de Modo Pre-Inicio */}
+            <div className="flex items-center gap-1.5 p-1 bg-black/40 backdrop-blur-md rounded-2xl border border-white/10">
+              <button
+                type="button"
+                onClick={() => setMeasurementMode('finger')}
+                className={`px-3.5 py-1.5 rounded-xl text-[10px] font-mono font-bold tracking-wider transition-all duration-200 flex items-center gap-1.5 ${
+                  measurementMode === 'finger'
+                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/30'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                <Heart className="w-3 h-3" />
+                CLÍNICO (DEDO)
+              </button>
+              <button
+                type="button"
+                onClick={() => setMeasurementMode('gym')}
+                className={`px-3.5 py-1.5 rounded-xl text-[10px] font-mono font-bold tracking-wider transition-all duration-200 flex items-center gap-1.5 ${
+                  measurementMode === 'gym'
+                    ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/30'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                <Activity className="w-3 h-3" />
+                MODO GYM (FACIAL)
+              </button>
+            </div>
+
             <button 
               onClick={() => {
                 session.enterFullScreen();
@@ -811,6 +841,8 @@ const Index = () => {
             ref={cameraRef}
             onStreamReady={session.handleStreamReady}
             isMonitoring={session.isCameraOn}
+            measurementMode={measurementMode}
+            faceDetected={lastSignal?.faceDetected}
           />
         </div>
 
@@ -834,7 +866,7 @@ const Index = () => {
             </div>
           </div>
 
-          {/* Lado Derecho: SQI Badge + Acciones Rápidas */}
+          {/* Lado Derecho: SQI Badge + Modo Switcher + Acciones Rápidas */}
           <div className="flex items-center gap-1.5">
             {/* Calidad de Señal SQI */}
             <div className={`px-2 py-0.5 rounded-full border text-[8px] font-mono font-bold tracking-wider flex items-center gap-1 ${
@@ -849,6 +881,41 @@ const Index = () => {
               }`} />
               <span>SQI {Math.round(lastSignal?.quality || 0)}%</span>
             </div>
+
+            {/* Toggle Rápido de Modo Clínico / GYM */}
+            <button
+              type="button"
+              onClick={() => {
+                const nextMode = measurementMode === 'gym' ? 'finger' : 'gym';
+                setMeasurementMode(nextMode);
+                toast({
+                  title: nextMode === 'gym' ? "MODO GYM ACTIVADO" : "MODO CLÍNICO ACTIVADO",
+                  description: nextMode === 'gym'
+                    ? "Cámara frontal + algoritmo POS + filtro biomecánico activados."
+                    : "Cámara trasera con flash para máxima precisión de laboratorio.",
+                  duration: 2500,
+                });
+              }}
+              aria-label="Cambiar Modo"
+              title={measurementMode === 'gym' ? "Cambiar a Modo Clínico (Dedo)" : "Cambiar a Modo GYM (Facial rPPG)"}
+              className={`px-2 py-0.5 rounded-full border text-[8px] font-mono font-bold tracking-wider flex items-center gap-1 transition-all duration-200 ${
+                measurementMode === 'gym'
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-[0_0_8px_rgba(245,158,11,0.4)]'
+                  : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25'
+              }`}
+            >
+              {measurementMode === 'gym' ? (
+                <>
+                  <Activity className="w-2.5 h-2.5 text-amber-400" />
+                  <span>GYM</span>
+                </>
+              ) : (
+                <>
+                  <Heart className="w-2.5 h-2.5 text-emerald-400" />
+                  <span>CLÍNICO</span>
+                </>
+              )}
+            </button>
 
             {/* TELEMEDICINA */}
             <button
@@ -912,9 +979,12 @@ const Index = () => {
               value={router.heartbeatSignal}
               quality={lastSignal?.quality || 0}
               isFingerDetected={
-                !!lastSignal?.fingerDetected &&
-                lastSignal?.contactState !== 'NO_CONTACT'
+                measurementMode === 'gym'
+                  ? !!lastSignal?.faceDetected
+                  : (!!lastSignal?.fingerDetected && lastSignal?.contactState !== 'NO_CONTACT')
               }
+              measurementMode={measurementMode}
+              faceDetected={lastSignal?.faceDetected}
               onStartMeasurement={handleToggleMonitoring}
               onReset={handleReset}
               isMonitoring={session.isMonitoring}

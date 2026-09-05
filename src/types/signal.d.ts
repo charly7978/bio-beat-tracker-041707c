@@ -2,6 +2,8 @@ export type ContactState = 'NO_CONTACT' | 'UNSTABLE_CONTACT' | 'STABLE_CONTACT';
 
 export type FingerPlacementMode = 'tip' | 'pad' | 'hybrid';
 
+export type MeasurementMode = 'finger' | 'gym';
+
 export interface ProcessedSignal {
   timestamp: number;
   rawValue: number;
@@ -26,8 +28,11 @@ export interface ProcessedSignal {
   placementMode?: FingerPlacementMode;
   quality: number;
   fingerDetected: boolean;
+  /** En modo GYM, indica si se detecta un rostro en el encuadre */
+  faceDetected?: boolean;
   contactState: ContactState;
   motionArtifact?: boolean;
+  measurementMode?: MeasurementMode;
   roi: {
     x: number;
     y: number;
@@ -61,6 +66,14 @@ export interface ProcessedSignal {
     acquisitionConfidence?: number;
     /** Progreso monótono de estabilización [0..1] para la UI. */
     acquisitionProgress?: number;
+    /** Métricas específicas de Modo GYM */
+    gymMetrics?: {
+      cadenceBpm?: number;
+      motionCancellationSnr?: number;
+      faceTrackConfidence?: number;
+      headVelocity?: number;
+      kalmanBpm?: number;
+    };
   };
 }
 

@@ -1,4 +1,4 @@
-import type { ProcessedSignal, ProcessingError, SignalProcessor as SignalProcessorInterface, ContactState } from '../../types/signal';
+import type { ProcessedSignal, ProcessingError, SignalProcessor as SignalProcessorInterface, ContactState, MeasurementMode } from '../../types/signal';
 import { BandpassFilter } from './BandpassFilter';
 import { PPGSignalSplitter } from './PPGSignalSplitter';
 import { createLogger, ppgPerf } from '../../utils/logger';
@@ -68,6 +68,8 @@ import {
 import { BioTremorAbsorber } from './BioTremorAbsorber';
 import { bandLimitedDominantFreq } from './shared/dsp';
 import { RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
+import { GymFaceTracker, type GymFaceTrackingResult } from '../../lib/gym/gymFaceTracker';
+import { GymMotionCancellation } from '../../lib/gym/gymMotionCancellation';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -106,6 +108,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private placementMode: FingerPlacementMode = 'hybrid';
   private placementStreak = { mode: 'hybrid' as FingerPlacementMode, count: 0 };
   private readonly pulseAgcState = createPulseAgcState();
+  private measurementMode: MeasurementMode = 'finger';
+  private readonly gymFaceTracker = new GymFaceTracker();
+  private readonly gymMotionCancellation = new GymMotionCancellation(30);
+  private lastGymFaceResult: GymFaceTrackingResult | null = null;
 
   private readonly ACDC_WINDOW = 120;
   private readonly TILE_COLUMNS = 5;
@@ -348,6 +354,254 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.cameraHints = inferCameraRuntimeHints(diag);
   }
 
+  /**
+   * Configura el modo de medición: 'finger' (trasera con flash) o 'gym' (frontal rPPG).
+   */
+  setMeasurementMode(mode: MeasurementMode): void {
+    if (this.measurementMode !== mode) {
+      this.measurementMode = mode;
+      this.resetSignalTrackingBuffers();
+      log.info(`PPGSignalProcessor: Modo de medición cambiado a "${mode}"`);
+    }
+  }
+
+  getMeasurementMode(): MeasurementMode {
+    return this.measurementMode;
+  }
+
+  /**
+   * Pipeline especializado para Modo GYM (Cámara frontal rPPG con compensación activa de movimiento).
+   */
+  private processGymFrame(imageData: ImageData, timestamp: number): void {
+    const endRoi = ppgPerf.start('roi');
+    const face = this.gymFaceTracker.processFrame(imageData, timestamp);
+    this.lastGymFaceResult = face;
+    endRoi();
+
+    this.gymMotionCancellation.pushMotionSample(face.headVelocity);
+
+    // 1. Pérdida o ausencia de rostro en el encuadre
+    if (!face.faceDetected) {
+      this.consecutiveNoContactFrames++;
+      this.signalQuality = 0;
+      this.displaySqiEma = 0;
+      this.contactState = 'NO_CONTACT';
+      this.fingerDetected = false;
+      this.stepAcquisition(false);
+
+      this.onSignalReady?.({
+        timestamp,
+        rawValue: 0,
+        filteredValue: 0,
+        quality: 0,
+        fingerDetected: false,
+        faceDetected: false,
+        contactState: 'NO_CONTACT',
+        measurementMode: 'gym',
+        motionArtifact: face.motionScore > 0.6,
+        roi: {
+          x: face.faceBox.x,
+          y: face.faceBox.y,
+          width: face.faceBox.width,
+          height: face.faceBox.height,
+        },
+        perfusionIndex: 0,
+        rawRed: face.rawRed,
+        rawGreen: face.rawGreen,
+        rawBlue: face.rawBlue,
+        diagnostics: {
+          message: 'ENFOCA TU ROSTRO EN CÁMARA',
+          hasPulsatility: false,
+          pulsatilityValue: 0,
+          status: 'NO_FINGER',
+          gymMetrics: {
+            ...this.gymMotionCancellation.getState(),
+            faceTrackConfidence: face.confidence,
+            headVelocity: face.headVelocity,
+          },
+        },
+      });
+      return;
+    }
+
+    // 2. Rostro detectado: presencia confirmada
+    this.consecutiveNoContactFrames = 0;
+    const motionArtifact = face.motionScore > 0.55;
+    const isStable = face.confidence >= 0.50 && face.motionScore < 0.65;
+    this.contactState = isStable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
+    this.fingerDetected = true;
+
+    // Actualizar baselines DC con seguimiento adaptativo a variaciones lumínicas
+    this.updateChannelBaselines(face.rawRed, face.rawGreen, face.rawBlue, motionArtifact);
+
+    this.redBuffer.push(face.rawRed);
+    this.greenBuffer.push(face.rawGreen);
+    this.blueBuffer.push(face.rawBlue);
+
+    // Calcular AC/DC periódico
+    if (this.redBuffer.length >= 36 && this.frameCount % 2 === 0) {
+      this.calculateACDCPrecise();
+    }
+    const acPi = this.calculatePerfusionIndex();
+    this.cachedPI = acPi > 0 ? acPi : 0.008;
+
+    // 3. Algoritmo POS (Plane-Orthogonal-to-Skin, Wang et al. IEEE TBME 2017)
+    // Proyecta sobre el plano ortogonal al tono de piel para eliminar variaciones de modo común por movimiento
+    const rNorm = this.redBaseline > 0 ? (this.redBaseline - face.rawRed) / this.redBaseline : 0;
+    const gNorm = this.greenBaseline > 0 ? (this.greenBaseline - face.rawGreen) / this.greenBaseline : 0;
+    const bNorm = this.blueBaseline > 0 ? (this.blueBaseline - face.rawBlue) / this.blueBaseline : 0;
+
+    const clampMax = 0.06;
+    const clampPulse = (v: number) => clamp(v, -clampMax, clampMax);
+    const rPulse = clampPulse(rNorm);
+    const gPulse = clampPulse(gNorm);
+    const bPulse = clampPulse(bNorm);
+
+    const X = gPulse - bPulse;
+    const Y = gPulse + bPulse - 2 * rPulse;
+    this.xBuffer.push(X);
+    this.yBuffer.push(Y);
+
+    const stdX = this.calculateStdDev(this.xBuffer);
+    const stdY = this.calculateStdDev(this.yBuffer);
+    const rawAlpha = stdY > 1e-9 ? stdX / stdY : this.smoothedPosAlpha;
+    const reliability = clamp(stdY / Math.max(1, stdX * 0.5 + stdY), 0, 1);
+    const blendedAlpha = rawAlpha * reliability + this.smoothedPosAlpha * (1 - reliability);
+    this.smoothedPosAlpha = this.smoothedPosAlpha * 0.9 + blendedAlpha * 0.1;
+    const posPulse = (X + this.smoothedPosAlpha * Y) * 4400;
+
+    // 4. Cancelador de armónicos de cadencia biomecánica (Adaptive Notch)
+    const cleanedPos = this.gymMotionCancellation.filterSample(posPulse);
+
+    // 5. Acondicionamiento activo + Filtros Bandpass
+    const endFilt = ppgPerf.start('bandpass');
+    const stabilizedInput = stabilizeSample(this.activeStabilizer, cleanedPos);
+    const filtered = this.bandpassFilter.filter(stabilizedInput);
+    const morphFiltered = this.morphBandpassFilter.filter(cleanedPos);
+    const enhanced = applyPulseAgc(
+      this.pulseAgcState,
+      filtered,
+      this.cachedPeriodicity > 0 ? this.cachedPeriodicity : this.periodicityEma,
+      face.motionScore,
+      DEFAULT_PULSE_AGC,
+      this.contactState === 'STABLE_CONTACT',
+    );
+    endFilt();
+
+    this.rawBuffer.push(cleanedPos);
+    this.filteredBuffer.push(enhanced);
+
+    // 6. Banco de filtros por signo vital (Splitter)
+    const splitOut = this.signalSplitter.process(
+      face.rawRed,
+      face.rawGreen,
+      face.rawBlue,
+      this.lastKnownBpm,
+    );
+
+    // 7. Métricas de periodicidad y calidad de señal facial
+    const endSqi = ppgPerf.start('sqi');
+    this.periodicitySkip++;
+    if (this.periodicitySkip >= 4 || this.filteredBuffer.length < 90) {
+      this.periodicitySkip = 0;
+      const pInstant = this.calculatePeriodicity();
+      this.periodicityEma =
+        this.periodicityEma <= 0
+          ? pInstant
+          : this.periodicityEma * 0.72 + pInstant * 0.28;
+    }
+    this.cachedPeriodicity = this.periodicityEma;
+
+    const snapPerf = ppgPerf.snapshot();
+    const rawSqi = clamp(
+      Math.round((1 - face.motionScore * 0.45) * (this.cachedPeriodicity * 65 + 35)),
+      10,
+      98,
+    );
+    this.cachedSqi = rawSqi;
+    this.signalQuality = rawSqi;
+
+    this.displaySqiEma = SignalQualityIndex.smoothDisplayedSqi(
+      this.displaySqiEma,
+      this.signalQuality,
+      this.contactState,
+      motionArtifact ? 0.8 : 1.0,
+    );
+    endSqi();
+
+    // 8. Actualización de Filtro de Kalman predictivo de frecuencia cardíaca
+    const dt = 1 / Math.max(15, this.estimatedSampleRate);
+    const kalmanBpm = this.gymMotionCancellation.updateKalmanHR(
+      this.lastKnownBpm,
+      dt,
+      this.displaySqiEma,
+    );
+    const gymState = this.gymMotionCancellation.getState();
+
+    this.stepAcquisition(true);
+
+    const now = timestamp;
+    if (now - this.lastLogTime >= 2000) {
+      this.lastLogTime = now;
+      log.info(
+        `[GYM-POS] Filt=${enhanced.toFixed(3)} Q=${Math.round(this.displaySqiEma)} ` +
+        `Kalman=${kalmanBpm}BPM Cadence=${gymState.cadenceBpm}BPM Motion=${face.motionScore.toFixed(2)} ` +
+        `Contact=${this.contactState} Notch=${gymState.isNotchActive ? 'ON' : 'OFF'}`
+      );
+    }
+
+    this.onSignalReady?.({
+      timestamp,
+      rawValue: cleanedPos,
+      filteredValue: enhanced,
+      morphologyValue: morphFiltered,
+      morphologyFiltered: splitOut.morphology,
+      respirationFiltered: splitOut.respiration,
+      arrhythmiaFiltered: splitOut.arrhythmia,
+      spo2Channels: splitOut.spo2,
+      placementMode: 'hybrid',
+      quality: Math.round(this.displaySqiEma),
+      fingerDetected: true,
+      faceDetected: true,
+      contactState: this.contactState,
+      measurementMode: 'gym',
+      motionArtifact,
+      roi: {
+        x: face.faceBox.x,
+        y: face.faceBox.y,
+        width: face.faceBox.width,
+        height: face.faceBox.height,
+      },
+      perfusionIndex: this.cachedPI,
+      rawRed: face.rawRed,
+      rawGreen: face.rawGreen,
+      rawBlue: face.rawBlue,
+      diagnostics: {
+        message: motionArtifact
+          ? 'MODO GYM · COMPENSANDO MOVIMIENTO'
+          : 'MODO GYM · SEÑAL FACIAL ESTABLE',
+        hasPulsatility: this.cachedPeriodicity > 0.25,
+        pulsatilityValue: this.cachedPeriodicity,
+        coverageRatio: face.confidence,
+        status: 'VALID',
+        sqm: {
+          sqi: Math.round(this.displaySqiEma),
+          perfusionIndex: this.cachedPI,
+          periodicity: this.cachedPeriodicity,
+          motionScore: face.motionScore,
+          fpsEffective: this.estimatedSampleRate,
+          timestampJitterMs: snapPerf.jitterMs,
+        },
+        gymMetrics: {
+          ...gymState,
+          kalmanBpm,
+          faceTrackConfidence: face.confidence,
+          headVelocity: face.headVelocity,
+        },
+      },
+    });
+  }
+
   processFrame(imageData: ImageData, frameTimestampMs?: number): void {
     if (!this.isProcessing || !this.onSignalReady) return;
 
@@ -357,6 +611,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       : (typeof performance !== 'undefined' ? performance.now() : Date.now());
     this.updateSampleRate(timestamp);
     this.maybeAdaptBackpressure(timestamp);
+
+    // En Modo GYM, despachar al pipeline especializado rPPG frontal
+    if (this.measurementMode === 'gym') {
+      this.processGymFrame(imageData, timestamp);
+      return;
+    }
 
     const endRoi = ppgPerf.start('roi');
     const roi = this.extractROI(imageData);
@@ -1762,6 +2022,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.tileMaxPulsatility = 0;
     this.tilePulseThrottle = 0;
     resetActiveStabilizer(this.activeStabilizer);
+    this.gymFaceTracker.reset();
+    this.gymMotionCancellation.reset();
+    this.lastGymFaceResult = null;
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
     // Resetear contadores y caches para que el WARMUP gate (frameCount < 28)
@@ -1909,6 +2172,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     const rawScore = accelRMS * 0.5 + gyroRMS * 0.3;
     this.motionScore = this.motionScore * 0.85 + rawScore * 0.15;
+    this.gymMotionCancellation.pushMotionSample(accelRMS);
   };
 
   /**

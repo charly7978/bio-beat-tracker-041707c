@@ -21,6 +21,7 @@ export interface CameraViewHandle {
 interface CameraViewProps {
   onStreamReady?: (stream: MediaStream) => void;
   isMonitoring: boolean;
+  measurementMode?: 'finger' | 'gym';
   faceDetected?: boolean;
 }
 
@@ -198,7 +199,7 @@ async function getBestEnvironmentCameraDeviceId(): Promise<string | undefined> {
 }
 
 const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
-  { onStreamReady, isMonitoring },
+  { onStreamReady, isMonitoring, measurementMode = 'finger', faceDetected },
   ref
 ) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -392,21 +393,39 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         return;
       }
 
-      try {
-        // 2. Cámara Trasera con preferencia a sensor principal con flash
-        const preferredDeviceId = await getBestEnvironmentCameraDeviceId();
-        const videoConstraints: MediaTrackConstraints = {
-          facingMode: preferredDeviceId ? undefined : { ideal: "environment" },
-          deviceId: preferredDeviceId ? { ideal: preferredDeviceId } : undefined,
-          width: { ideal: 640, max: 960 },
-          height: { ideal: 480, max: 720 },
-          frameRate: { ideal: 30, min: 15, max: 30 },
-        };
+      const isGym = measurementMode === 'gym';
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: videoConstraints,
-        });
+      try {
+        let stream: MediaStream;
+        if (isGym) {
+          // Cámara Frontal para rPPG en Modo Gimnasio
+          const videoConstraints: MediaTrackConstraints = {
+            facingMode: { ideal: "user" },
+            width: { ideal: 640, max: 1280 },
+            height: { ideal: 480, max: 720 },
+            frameRate: { ideal: 30, min: 15, max: 30 },
+          };
+
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: videoConstraints,
+          });
+        } else {
+          // 2. Cámara Trasera con preferencia a sensor principal con flash
+          const preferredDeviceId = await getBestEnvironmentCameraDeviceId();
+          const videoConstraints: MediaTrackConstraints = {
+            facingMode: preferredDeviceId ? undefined : { ideal: "environment" },
+            deviceId: preferredDeviceId ? { ideal: preferredDeviceId } : undefined,
+            width: { ideal: 640, max: 960 },
+            height: { ideal: 480, max: 720 },
+            frameRate: { ideal: 30, min: 15, max: 30 },
+          };
+
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: videoConstraints,
+          });
+        }
 
         if (!mountedRef.current) {
           stream.getTracks().forEach(t => t.stop());
@@ -422,7 +441,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         }
 
         const track = stream.getVideoTracks()[0];
-        if (track) {
+        if (track && !isGym) {
           await stabilizeTrack(track);
           let torchOn = await activateTorch(track);
           if (!torchOn) {
@@ -432,15 +451,18 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           if (torchOn) log.info("Flash activado");
           else log.warn("Flash no confirmado — se usará perfil de cámara tolerante");
           await applyTorchDependentParams(track, torchOn);
+        } else if (track && isGym) {
+          await stabilizeTrack(track);
+          log.info("Cámara frontal lista para rPPG deportivo");
         }
 
-        log.info(`Cámara trasera lista ${videoRef.current?.videoWidth ?? "?"}x${videoRef.current?.videoHeight ?? "?"}`);
+        log.info(`Cámara ${isGym ? 'frontal (GYM)' : 'trasera'} lista ${videoRef.current?.videoWidth ?? "?"}x${videoRef.current?.videoHeight ?? "?"}`);
 
         onStreamReadyRef.current?.(stream);
 
       } catch (err) {
         const errType = classifyCameraError(err);
-        log.error(`Error al inicializar cámara trasera (${errType})`, err);
+        log.error(`Error al inicializar cámara (${errType})`, err);
 
         // Reintentar con constraints relajados si es OverconstrainedError
         if (errType === 'overconstrained' && mountedRef.current) {
@@ -448,7 +470,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           try {
             const fallbackStream = await navigator.mediaDevices.getUserMedia({
               audio: false,
-              video: { facingMode: { ideal: "environment" } },
+              video: { facingMode: isGym ? { ideal: "user" } : { ideal: "environment" } },
             });
             if (mountedRef.current) {
               streamRef.current = fallbackStream;
@@ -486,12 +508,12 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
       mountedRef.current = false;
       stopCamera();
     };
-  }, [isMonitoring]);
+  }, [isMonitoring, measurementMode]);
 
 
   return (
     <>
-      {/* Cámara trasera principal (fondo completo) */}
+      {/* Video de cámara (trasera directa o frontal espejada para rPPG) */}
       <video
         ref={videoRef}
         playsInline
@@ -506,8 +528,83 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           imageRendering: "pixelated",
           opacity: 1,
           pointerEvents: "none",
+          transform: measurementMode === 'gym' ? "scaleX(-1)" : "none",
         }}
       />
+      {measurementMode === 'gym' && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 10,
+          }}
+        >
+          {/* Facial Reticle / Face framing guide */}
+          <div
+            style={{
+              width: "220px",
+              height: "280px",
+              borderRadius: "110px",
+              border: `2px dashed ${faceDetected ? "rgba(16, 185, 129, 0.85)" : "rgba(239, 68, 68, 0.7)"}`,
+              boxShadow: faceDetected
+                ? "0 0 24px rgba(16, 185, 129, 0.35), inset 0 0 20px rgba(16, 185, 129, 0.15)"
+                : "0 0 24px rgba(239, 68, 68, 0.25)",
+              transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+              position: "relative",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              paddingTop: "24px",
+            }}
+          >
+            {/* Forehead Target Area Indicator */}
+            <div
+              style={{
+                width: "96px",
+                height: "36px",
+                borderRadius: "8px",
+                border: `1.5px solid ${faceDetected ? "rgba(59, 130, 246, 0.85)" : "rgba(148, 163, 184, 0.4)"}`,
+                background: faceDetected ? "rgba(59, 130, 246, 0.2)" : "rgba(15, 23, 42, 0.4)",
+                backdropFilter: "blur(4px)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "10px",
+                fontWeight: 700,
+                letterSpacing: "0.08em",
+                color: faceDetected ? "#93c5fd" : "#94a3b8",
+                textTransform: "uppercase",
+              }}
+            >
+              ROI rPPG
+            </div>
+            {/* Status Pill at Bottom of Reticle */}
+            <div
+              style={{
+                position: "absolute",
+                bottom: "-32px",
+                padding: "4px 12px",
+                borderRadius: "12px",
+                background: faceDetected ? "rgba(16, 185, 129, 0.9)" : "rgba(239, 68, 68, 0.9)",
+                color: "#ffffff",
+                fontSize: "10px",
+                fontWeight: 700,
+                letterSpacing: "0.05em",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+                textTransform: "uppercase",
+              }}
+            >
+              {faceDetected ? "ROSTRO BLOQUEADO" : "ENFOCAR ROSTRO"}
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 });

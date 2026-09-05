@@ -301,10 +301,10 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         : 'hybrid');
     heartBeatApiRef.current.setFingerPlacementMode(placementMode);
     vitalSignsApiRef.current.setPlacementMode(placementMode);
-    const fingerConfirmed = !!lastSignal.fingerDetected;
+    const presenceConfirmed = !!lastSignal.fingerDetected || !!lastSignal.faceDetected;
     const nowT = performance.now();
     const hasUsableContact =
-      fingerConfirmed && contactState !== 'NO_CONTACT';
+      presenceConfirmed && contactState !== 'NO_CONTACT';
 
     if (
       hasUsableContact &&
@@ -350,7 +350,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         : lastSignal.quality) || 0;
 
     let hbInput = 0;
-    if (fingerConfirmed) {
+    if (presenceConfirmed) {
       if (Math.abs(signalValue) > 1e-7) {
         lastHbInputRef.current = signalValue;
         hbInput = signalValue;
@@ -365,7 +365,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       hbInput,
       contactState,
       nowT,
-      fingerConfirmed,
+      presenceConfirmed,
       {
         sqi: rawSqi,
         perfusionIndex: lastSignal.perfusionIndex ?? 0,
@@ -398,7 +398,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     );
     const latchPeakMs = measurementLatchRef.current.lastPeakMs;
     const peakRecent =
-      fingerConfirmed &&
+      presenceConfirmed &&
       latchPeakMs > 0 &&
       nowT - latchPeakMs < SESSION_LATCH.MAX_PEAK_GAP_MS;
 
@@ -411,7 +411,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         ? heartBeatResult.bpm
         : 0;
     const bpmLive =
-      fingerConfirmed && (bpmProcessor > 0 || bpmFromRr > 0)
+      presenceConfirmed && (bpmProcessor > 0 || bpmFromRr > 0)
         ? bpmProcessor > 0
           ? bpmProcessor
           : bpmFromRr
@@ -423,7 +423,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     }
 
     const bpmOut =
-      hasUsableContact && fingerConfirmed && bpmLive > 0 ? bpmLive : 0;
+      hasUsableContact && presenceConfirmed && bpmLive > 0 ? bpmLive : 0;
 
     // ESTABILIZACIÓN POR CONVERGENCIA (criterio REAL, reemplaza el warm-up fijo).
     // La señal está estable cuando la LECTURA DE HR convergió (dejó de moverse) y

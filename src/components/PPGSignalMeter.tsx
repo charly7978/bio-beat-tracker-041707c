@@ -31,6 +31,8 @@ export interface PPGSignalMeterProps {
   value: number;
   quality: number;
   isFingerDetected: boolean;
+  measurementMode?: 'finger' | 'gym';
+  faceDetected?: boolean;
   onStartMeasurement: () => void;
   onReset: () => void;
   isMonitoring?: boolean;
@@ -108,6 +110,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   value,
   quality,
   isFingerDetected,
+  measurementMode = 'finger',
+  faceDetected = false,
   onStartMeasurement,
   onReset,
   isMonitoring = false,
@@ -139,7 +143,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const dataBufferRef = useRef<CircularBuffer | null>(null);
 
   const propsRef = useRef({
-    value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus,
+    value, quality, isFingerDetected, measurementMode, faceDetected, isMonitoring, arrhythmiaStatus,
     arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals,
     rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus,
     contactState, acquisitionStatus, getVideoElement, diagnostics,
@@ -197,7 +201,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
 
   useEffect(() => {
     propsRef.current = {
-      value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus,
+      value, quality, isFingerDetected, measurementMode, faceDetected, isMonitoring, arrhythmiaStatus,
       arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals,
       rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus,
       contactState, acquisitionStatus, getVideoElement, diagnostics,
@@ -255,21 +259,23 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         bpmTrendRef.current = bpmTrendRef.current.slice(-TREND_MAX_POINTS);
       }
     }
-    if (!isFingerDetected && !preserveResults) {
+
+    const isPresent = measurementMode === 'gym' ? (faceDetected || isFingerDetected) : isFingerDetected;
+    if (!isPresent && !preserveResults) {
       bpmStatsRef.current = { min: 0, max: 0, sum: 0, n: 0 };
       bpmTrendRef.current = [];
       pendingTrendArrRef.current = false;
       smoothedBpmRef.current = 0;
     }
 
-    if (!isFingerDetected && !preserveResults) {
+    if (!isPresent && !preserveResults) {
       displayBpmRef.current = 0;
       displaySpo2Ref.current = 0;
       displaySysRef.current = 0;
       displayDiaRef.current = 0;
     }
   }, [
-    value, quality, isFingerDetected, arrhythmiaStatus, preserveResults,
+    value, quality, isFingerDetected, measurementMode, faceDetected, arrhythmiaStatus, preserveResults,
     isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime,
     perfusionIndex, pressure, bpStatus, arrhythmiaCount, isMonitoring,
     contactState, acquisitionStatus, diagnostics, getVideoElement,
@@ -284,10 +290,11 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   }, []);
 
   useEffect(() => {
-    if (preserveResults && !isFingerDetected) {
+    const isPresent = measurementMode === 'gym' ? (faceDetected || isFingerDetected) : isFingerDetected;
+    if (preserveResults && !isPresent) {
       dataBufferRef.current?.clear();
     }
-  }, [preserveResults, isFingerDetected]);
+  }, [preserveResults, isFingerDetected, faceDetected, measurementMode]);
 
   const recomputeLayout = useCallback(() => {
     const canvas = canvasRef.current;
@@ -376,7 +383,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       lastRenderTime = now;
 
       const p = propsRef.current;
-      const fingerOn = p.isFingerDetected;
+      const fingerOn = p.measurementMode === 'gym' ? (p.faceDetected ?? p.isFingerDetected) : p.isFingerDetected;
       const preserve = p.preserveResults;
       const targetBpm = !fingerOn && !preserve ? 0 : Math.max(0, p.bpm ?? 0);
       const targetSpo2 = fingerOn || preserve ? p.spo2 ?? 0 : 0;
@@ -420,6 +427,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         layout: layoutRef.current,
         props: {
           value: p.value, quality: p.quality, isFingerDetected: p.isFingerDetected,
+          measurementMode: p.measurementMode, faceDetected: p.faceDetected,
           isMonitoring: p.isMonitoring, isPeak: p.isPeak ?? false, preserveResults: p.preserveResults,
           bpm: p.bpm, spo2: p.spo2 ?? 0, rrIntervals: p.rrIntervals ?? [],
           elapsedTime: p.elapsedTime ?? 0, perfusionIndex: p.perfusionIndex ?? 0,
