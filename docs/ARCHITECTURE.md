@@ -11,21 +11,34 @@ Aplicación React/TypeScript que estima signos vitales a partir de **fotopletism
 ```
 CameraView (MediaStream, torch, capabilities/settings)
     │ requestVideoFrameCallback + FPS/jitter reales
+    │ torch verificado vía applyConstraints→getSettings
     ▼
-useSignalProcessor → PPGSignalProcessor
-    │ ROI adaptativo, dedo (color + dinámica), AC/DC, bandpass, SQI frame
-    ▼
-ProcessedSignal
+useSignalProcessor → PPGSignalProcessor  ─┐
+    │ ROI 5×5 tiling + pulsatility-fusion │  hoja de ruta Web Worker
+    │ fingerSceneClassifier (hemoglobina  │  src/workers/ppgSignal.worker.ts
+    │  + pulsatilidad CV + ensemble)      │  → PPGSignalProcessor en worker
+    │ AC/DC preciso, Bandpass Butterworth│     (init/start/stop/processFrame/motion/
+    │ 4º orden + Bessel 0.5–12 Hz morfo   │      setCameraRuntimeHints/setMeasurementMode)
+    │ activeStabilizer + pulseAgc + SQI  │  Si worker no disponible: fallback sync
+    │ AdaptiveRuntimePolicy (roiScale/    │  en main thread (backpressure stride 3→4)
+    │  bandLow/Hi, sourceHysteresis)     │
+    ▼                                     │
+ProcessedSignal (con splitter: hr/spo2/morph/resp/arr)
     ├─► useHeartBeatProcessor → HeartBeatProcessor
-    │       PeakDetectionEnsemble (Elgendi optimizado)
-    │       → BPM, RR, isPeak, ensembleDiagnostics
+    │       PeakDetectionEnsemble (Elgendi MApeak/MAbeat + scorePeakCandidate)
+    │       → BPM, RR, isPeak, ensembleDiagnostics, HampelOnline
+    │       + GymMotionCancellation (AdaptiveNotch por cadencia 60–180 spm)
     └─► useVitalSignsProcessor → VitalSignsProcessor
-            ├─ SpO2 (ratio-of-ratios + calibración)
-            ├─ BloodPressureProcessor (morfología + calibración individual)
-            ├─ respiración (modulación PPG)
-            └─ ArrhythmiaProcessor (RR + HRV)
+            ├─ SpO2Calculator (Beer-Lambert ratio-of-ratios R/G, DEMA-DC)
+            ├─ BloodPressureProcessor (PWA 74 features, b/a d/a AIx SI)
+            ├─ respiratorySmartFusion (RIAV+RIIV+RIFV+ACC, Karlen 2013)
+            └─ ArrhythmiaProcessor (RMSSD/pNN31/pNN50/Shannon/SampEn, deadband)
     ▼
-Index.tsx → PPGSignalMeter + DebugTelemetryPanel + Supabase
+Index.tsx → PPGSignalMeter (Canvas 2D Catmull-Rom + 3D ribbon)
+          + DebugTelemetryPanel + Supabase (measurements + local encrypted)
+          + useSignalRouter (throttle HR 80 ms / vitals 300 ms, latch, sanity)
+          + useMeasurementSession (60 s, 60 s trend)
+Medición dual: finger (trasera+flash) vs gym (frontal POS Wang 2017, rPPG)
 ```
 
 ## Fuentes de verdad (anti-duplicación)
@@ -33,14 +46,17 @@ Index.tsx → PPGSignalMeter + DebugTelemetryPanel + Supabase
 | Dominio | Módulo canónico |
 |--------|------------------|
 | Contrato de medición | `src/types/measurements.ts` (`VitalMeasurement`, `PeakDetectionResult`) |
-| Umbrales fisiológicos | `src/config/vitalThresholds.ts` |
-| DSP / picos (ventanas, BPM min/max) | `src/config/signalProcessing.ts` |
-| Filtros y utilidades DSP | `src/modules/signal-processing/shared/dsp.ts` |
-| SQI central | `src/modules/signal-quality/SignalQualityIndex.ts` |
-| Calibración | `src/modules/vital-signs/CalibrationManager.ts` |
-| Estado de adquisición | `src/lib/acquisition/resolveAcquisitionStatus.ts` |
+| Umbrales fisiológicos | `src/config/vitalThresholds.ts` (HR 30–220, RR 270–2200 ms, SQI, PLACEMENT) |
+| DSP / picos (ventanas, BPM min/max) | `src/config/signalProcessing.ts` (PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS) |
+| Filtros y utilidades DSP | `src/modules/signal-processing/shared/dsp.ts` + `BandpassFilter.ts` (Butterworth 4º) / `BesselFilter.ts` (Bessel 4º fase lineal) |
+| SQI central | `src/modules/signal-quality/SignalQualityIndex.ts` (skewness SQI óptimo Elgendi 2016, perfusión, PI) |
+| Calibración | `src/modules/vital-signs/CalibrationManager.ts` (SPO2/BP antropométrico + offset por referencia) |
+| Estado de adquisición | `src/lib/acquisition/resolveAcquisitionStatus.ts` + `AcquisitionStabilizer.ts` |
+| Honestidad de onda | `src/lib/ui/waveHonesty.ts` (`realSignalStrength = perf×per` AND — prioridad no-lectura) |
+| Backpressure | `src/lib/perf/backpressureConfig.ts` (stride 3↔4, checked 1 s, hysteresis) |
 
 CI ejecuta `npm run check:architecture` para impedir procesadores paralelos y rutas legacy.
+`check:orphans` verifica 0 huérfanos; `check:no-sim` prohibe Math.random/mock/synthetic sin allowlist auditada.
 
 ## Cámara y flash
 
@@ -108,12 +124,25 @@ npm run check:architecture
 
 Tests relevantes: `Detectors.test.ts`, `PPGSignalProcessor.test.ts`, `fingerRoiPulsation.test.ts`, `resolveAcquisitionStatus.test.ts`.
 
+## Ejecución y concurrencia
+
+- **Worker disponible**: `src/workers/ppgSignal.worker.ts` mueve `PPGSignalProcessor` fuera del main thread
+  (postMessage ImageData → ProcessedSignal). Backpressure stride 3→4 se negocia vía `setBackpressureConfig`.
+  Fallback automático a main thread si `Worker` no disponible o `?worker` bloqueado por CSP.
+- **Main thread optimizado**: ring buffers `RingF32` (Float32Array, O(1) push, sin `Array.shift`),
+  `CircularBuffer` para `PPGDataPoint` con isArrhythmia, scratch `Float32Array(120)` reutilizable,
+  LUTs de teselado, throttling de periodicidad cada 4 frames, coalescing de SQI/skew cada 8 frames.
+- **Hooks**: `useSignalRouter` centraliza throttles (`HR 80 ms, vitals 300 ms, signal 16 ms`) y
+  evita rerenders por frame; `useFrameLoop` con `requestVideoFrameCallback` preferente.
+
 ## Limitaciones explícitas
 
 - Estimaciones **orientativas** sin calibración de usuario (especialmente SpO2 y PA).
-- Variabilidad entre dispositivos (sensor RG-Bayer, torch, FPS).
-- Procesamiento en main thread (sin Web Worker aún).
+- Variabilidad entre dispositivos (sensor RG-Bayer, torch, FPS, AE/WB).
 - No sustituye un pulsioxímetro ni un tensiómetro certificado.
+- SpO2 usa verde como proxy IR (Beer–Lambert) — requiere calibración para uso clínico.
+- BP estimado por PWA solo orientativo sin referencia de tensiómetro; `REQUIRES_CALIBRATION` si no hay perfil vigente.
+- rPPG frontal (gym) MAE competitivo 4–5 bpm (POS-SSA Wang 2026 JAIT 17(4):788) pero sensible a iluminación/movimiento facial.
 
 ## Referencias internas
 

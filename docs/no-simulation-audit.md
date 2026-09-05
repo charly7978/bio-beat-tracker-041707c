@@ -11,7 +11,7 @@
 | `Math.random` | `rg "Math\.random" src/` | **0 coincidencias** |
 | `simulate / mock / fake / dummy / stub` | `rg -i "simulat\|mock\|fake\|dummy\|stub"` | Solo `placeholder=` en `<input>` HTML de Auth (legítimo) |
 | Generadores sintéticos (`sine/cosine wave / synthetic / generate signal / seed`) | `rg -i "synthet\|sine.*wave\|generate.*signal\|seed"` | **0 coincidencias** |
-| `Math.sin / Math.cos` en pipeline | `rg "Math\.(sin\|cos)"` | Solo en `BandpassFilter.ts` (coeficientes Butterworth IIR) — **operación matemática legítima** |
+| `Math.sin / Math.cos / Math.tan` en pipeline | `rg "Math\.(sin\|cos\|tan)"` | Solo en `BandpassFilter.ts`/`BesselFilter.ts` (coefs Butterworth/Bessel IIR, bilinear) + `ica.ts` (`Math.tanh` para FastICA) — **operación matemática legítima**; rPPG POS usa solo álgebra lineal (Wang 2017) |
 | Valores clínicos hardcoded (`120/80`, `98%`, baseline fijos) | `rg "120/80\|return.*spo2.*9[0-9]"` | Solo en **comentarios explicativos** ("SIN BASE FIJA 120/80") |
 
 ## Garantías por capa
@@ -51,10 +51,12 @@
 - Detectadas exclusivamente desde RR-intervals reales obtenidos de los picos del HeartBeatProcessor.
 - Estado inicial: `"SIN ARRITMIAS|0"`. No se incrementa el contador sin evento RR genuino.
 
-### 9. Capa de UI (`Index.tsx`, `PPGSignalMeter.tsx`, `VitalSign.tsx`)
+### 9. Capa de UI (`Index.tsx`, `PPGSignalMeter.tsx`, `ppgCanvasRenderer.ts`, `waveHonesty.ts`)
 - Todos los componentes muestran `--` cuando el valor es `0` o `null` proveniente del pipeline.
+- `waveHonesty.realSignalStrength = perf×per` (AND) — sin periodicidad cardíaca la onda queda plana; evita "ondas hermosas" de ruido bandpass (verificada en `waveHonesty.test.ts` — objeto movido sin periodicidad → <0.1).
 - Redondeo a entero **solo en presentación** (`Math.round(heartRate)`); precisión float preservada en cálculos internos.
-- Suavizado EMA aplicado solo para estabilidad visual, nunca para enmascarar pérdida de señal.
+- Suavizado EMA doble (primary 0.15/0.25 + secondary 0.08, `VITAL_THRESHOLDS.QUALITY`) solo para estabilidad visual, nunca para enmascarar pérdida de señal.
+- `ppgCanvasRenderer` usa `RingF32`/`CircularBuffer` con honestidad de rango (transform `pow 1.05`) y Catmull-Rom sin extrapolación.
 
 ### 10. Edge function de IA (`supabase/functions/analyze-vitals`)
 - Recibe únicamente los valores ya validados del pipeline; si llegan en `0` los reporta como tal en el prompt al modelo.
@@ -63,8 +65,11 @@
 
 | Ubicación | Uso de constante numérica | Justificación |
 |---|---|---|
-| `BandpassFilter.computeCoefficients` | `Math.sin`, `Math.cos`, `Math.tan` | Diseño analítico de coeficientes Butterworth IIR (transformación bilineal). |
+| `BandpassFilter`/`BesselFilter.compute*` | `Math.sin`, `Math.cos`, `Math.tan` | Diseño analítico coefs Butterworth/Bessel 4º orden (bilinear). Refs: Abramowitz & Stegun §19.6, Zverev, Williams & Taylor Ch.11, Proakis/ Manolakis. |
+| `src/utils/ica.ts` | `Math.tanh` | FastICA no-linealidad `g(u)=tanh(u)` — separación ciega, no generación. |
+| `waveHonesty.ts` | `realSignalStrength = perf×per` (AND) | Honestidad visual — producto estricto evita onda de objeto inerte con movimiento (ver comentario en src). |
 | `PPGSignalProcessor` — pesos de fuentes | constantes `0.45 / 0.40 / 0.15`… | Parámetros heurísticos del modelo de selección competitiva, no datos. |
+| `rPPG POS` (`GymFaceTracker`/`GymMotionCancellation`) | álgebra `X,Y,α` | Proyección Wang 2017 IEEE TBME 64(7):1479 + POS-SSA Wang 2026 JAIT 17(4):788 — sin síntesis. |
 
 ## Conclusión
 
