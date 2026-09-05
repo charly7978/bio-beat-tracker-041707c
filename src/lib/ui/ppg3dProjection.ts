@@ -691,13 +691,30 @@ export function drawWaveRibbon3D(
 
   const traceSmoothPath = (xArr: Float32Array, yArr: Float32Array, from = 0, to = n - 1) => {
     if (to <= from) return;
+    const count = to - from + 1;
     ctx.moveTo(xArr[from], yArr[from]);
-    for (let i = from; i < to; i++) {
-      const xc = (xArr[i] + xArr[i + 1]) * 0.5;
-      const yc = (yArr[i] + yArr[i + 1]) * 0.5;
-      ctx.quadraticCurveTo(xArr[i], yArr[i], xc, yc);
+    if (count === 2) {
+      ctx.lineTo(xArr[to], yArr[to]);
+      return;
     }
-    ctx.lineTo(xArr[to], yArr[to]);
+    const factor = 1 / 6;
+    for (let i = from; i < to; i++) {
+      const p0x = i > from ? xArr[i - 1] : 2 * xArr[i] - xArr[i + 1];
+      const p0y = i > from ? yArr[i - 1] : 2 * yArr[i] - yArr[i + 1];
+      const p1x = xArr[i];
+      const p1y = yArr[i];
+      const p2x = xArr[i + 1];
+      const p2y = yArr[i + 1];
+      const p3x = i + 2 <= to ? xArr[i + 2] : 2 * xArr[i + 1] - xArr[i];
+      const p3y = i + 2 <= to ? yArr[i + 2] : 2 * yArr[i + 1] - yArr[i];
+
+      const cp1x = p1x + (p2x - p0x) * factor;
+      const cp1y = p1y + (p2y - p0y) * factor;
+      const cp2x = p2x - (p3x - p1x) * factor;
+      const cp2y = p2y - (p3y - p1y) * factor;
+
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2x, p2y);
+    }
   };
 
   // 1) Sombra proyectada en el piso en perspectiva

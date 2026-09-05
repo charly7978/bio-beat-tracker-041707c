@@ -303,7 +303,11 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     canvas.style.width = `${cssW}px`;
     canvas.style.height = `${cssH}px`;
     const ctx = canvas.getContext('2d', { alpha: false });
-    if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (ctx) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+    }
 
     const header = { x: 0, y: 0, w: cssW, h: 40 };
     const metricsH = Math.max(90, Math.min(106, Math.round(cssH * 0.11)));

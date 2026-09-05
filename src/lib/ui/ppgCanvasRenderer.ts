@@ -95,6 +95,7 @@ export interface WaveCoord {
   y: number;
   isArr: boolean;
   val: number;
+  time: number;
 }
 const COORD_POOL_CAPACITY = 1024;
 const RENDER_COORD_POOL: WaveCoord[] = Array.from({ length: COORD_POOL_CAPACITY }, () => ({
@@ -102,7 +103,126 @@ const RENDER_COORD_POOL: WaveCoord[] = Array.from({ length: COORD_POOL_CAPACITY 
   y: 0,
   isArr: false,
   val: 0,
+  time: 0,
 }));
+
+/**
+ * Traza una curva spline Catmull-Rom centrípeta (C1 continua) a través de los puntos.
+ * A diferencia de las curvas cuadráticas de punto medio, esta spline pasa EXACTAMENTE
+ * por cada muestra fisiológica medida sin sobreoscilaciones ni recorte de picos.
+ */
+export function traceCatmullRomSpline(
+  ctx: CanvasRenderingContext2D,
+  pts: { x: number; y: number }[],
+  startIdx = 0,
+  endIdx = pts.length,
+  tension = 0.5
+): void {
+  const count = endIdx - startIdx;
+  if (count < 2) return;
+  if (count === 2) {
+    ctx.lineTo(pts[startIdx + 1].x, pts[startIdx + 1].y);
+    return;
+  }
+
+  const factor = (1 - tension) / 3;
+
+  for (let i = startIdx; i < endIdx - 1; i++) {
+    const p0 = i > startIdx ? pts[i - 1] : { x: 2 * pts[i].x - pts[i + 1].x, y: 2 * pts[i].y - pts[i + 1].y };
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = i + 2 < endIdx ? pts[i + 2] : { x: 2 * pts[i + 1].x - pts[i].x, y: 2 * pts[i + 1].y - pts[i].y };
+
+    const cp1x = p1.x + (p2.x - p0.x) * factor;
+    const cp1y = p1.y + (p2.y - p0.y) * factor;
+    const cp2x = p2.x - (p3.x - p1.x) * factor;
+    const cp2y = p2.y - (p3.y - p1.y) * factor;
+
+    ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+  }
+}
+
+export interface PhysiologicalFiducials {
+  systolicPeaks: { idx: number; x: number; y: number; val: number; isArr: boolean; riseTimeMs: number }[];
+  dicroticNotches: { idx: number; x: number; y: number; val: number }[];
+  tidalWaves: { idx: number; x: number; y: number; val: number }[];
+  diastolicTroughs: { idx: number; x: number; y: number; val: number }[];
+  maxDvDt: number; // Velocidad sistólica máxima dV/dt [unidades/seg]
+  reflectionIndex: number; // hD / hS (%)
+}
+
+/**
+ * Análisis morfológico riguroso de la señal PPG basado en la 1ª derivada (VPG)
+ * y 2ª derivada (APG) (Elgendi 2012, Charlton 2022).
+ */
+export function detectPhysiologicalFiducials(
+  coords: WaveCoord[],
+  midValue: number,
+  safeRange: number
+): PhysiologicalFiducials {
+  const systolicPeaks: PhysiologicalFiducials['systolicPeaks'] = [];
+  const dicroticNotches: PhysiologicalFiducials['dicroticNotches'] = [];
+  const tidalWaves: PhysiologicalFiducials['tidalWaves'] = [];
+  const diastolicTroughs: PhysiologicalFiducials['diastolicTroughs'] = [];
+  let maxDvDt = 0;
+  let lastTroughTime = 0;
+  let lastSystolicVal = 0;
+  let lastDiastolicVal = 0;
+
+  const n = coords.length;
+  if (n < 6) return { systolicPeaks, dicroticNotches, tidalWaves, diastolicTroughs, maxDvDt, reflectionIndex: 0 };
+
+  // Derivadas discretas centrales filtradas
+  for (let i = 2; i < n - 2; i++) {
+    const cPrev2 = coords[i - 2];
+    const cPrev = coords[i - 1];
+    const cCurr = coords[i];
+    const cNext = coords[i + 1];
+    const cNext2 = coords[i + 2];
+
+    const dt = Math.max(1, Math.abs(cNext.time - cPrev.time)) / 1000;
+    const d1 = (cNext.val - cPrev.val) / (2 * Math.max(1e-4, dt));
+    const d2 = (cNext.val - 2 * cCurr.val + cPrev.val) / Math.max(1e-6, dt * dt);
+
+    if (d1 > maxDvDt && cCurr.val > midValue) {
+      maxDvDt = d1;
+    }
+
+    // 1. Valle Diastólico (mínimo local)
+    if (cCurr.val < cPrev.val && cCurr.val < cNext.val && cCurr.val < cPrev2.val && cCurr.val < cNext2.val && cCurr.val < midValue) {
+      diastolicTroughs.push({ idx: i, x: cCurr.x, y: cCurr.y, val: cCurr.val });
+      lastTroughTime = cCurr.time;
+    }
+
+    // 2. Pico Sistólico (máximo local principal)
+    if (cCurr.val > cPrev.val && cCurr.val > cNext.val && cCurr.val > cPrev2.val && cCurr.val > cNext2.val && cCurr.val > midValue + safeRange * 0.08) {
+      const riseTime = lastTroughTime > 0 ? Math.max(40, Math.min(300, cCurr.time - lastTroughTime)) : 110;
+      systolicPeaks.push({ idx: i, x: cCurr.x, y: cCurr.y, val: cCurr.val, isArr: cCurr.isArr, riseTimeMs: riseTime });
+      lastSystolicVal = cCurr.val;
+    }
+
+    // 3. Onda de Marea / Reflexión (Tidal Wave)
+    const isTidal = d1 < -0.10 && d2 > 0.18 && cCurr.val > midValue + safeRange * 0.04 && cPrev.val < cPrev2.val;
+    if (isTidal) {
+      if (tidalWaves.length === 0 || Math.abs(tidalWaves[tidalWaves.length - 1].x - cCurr.x) > 16) {
+        tidalWaves.push({ idx: i, x: cCurr.x, y: cCurr.y, val: cCurr.val });
+      }
+    }
+
+    // 4. Muesca Dícrota (Dicrotic Notch)
+    const isNotch = d1 < 0 && (cNext.val - cCurr.val) > (cCurr.val - cPrev.val) * 0.35 && cCurr.val > midValue - safeRange * 0.15;
+    if (isNotch && systolicPeaks.length > 0 && (cCurr.x - systolicPeaks[systolicPeaks.length - 1].x) > 10) {
+      if (dicroticNotches.length === 0 || Math.abs(dicroticNotches[dicroticNotches.length - 1].x - cCurr.x) > 18) {
+        dicroticNotches.push({ idx: i, x: cCurr.x, y: cCurr.y, val: cCurr.val });
+        lastDiastolicVal = cCurr.val;
+      }
+    }
+  }
+
+  const reflectionIndex = lastSystolicVal > 0 ? Math.max(10, Math.min(95, Math.round((lastDiastolicVal / lastSystolicVal) * 100))) : 42;
+
+  return { systolicPeaks, dicroticNotches, tidalWaves, diastolicTroughs, maxDvDt, reflectionIndex };
+}
 
 export interface PpgLayout {
   width: number;
@@ -684,6 +804,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
  */
 export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { plot } = state.layout;
+  const snap = (v: number) => Math.floor(v) + 0.5;
 
   const pulseScale = getCardiacPulseScale(state.now, state.displayBpm);
   const breathAlpha = state.traceRevealed ? 0.05 + (pulseScale - 1.0) * 0.25 : 0.04;
@@ -706,31 +827,35 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   const minor = pxPerMm;
   const major = pxPerMm * 5;
 
-  // Grilla Menor
+  // Grilla Menor (1mm estándar) con alineación sub-píxel 0.5px
   ctx.strokeStyle = COLORS.GRID_MINOR;
   ctx.lineWidth = 0.5;
   ctx.beginPath();
   for (let x = plot.x; x <= plot.x + plot.w; x += minor) {
-    ctx.moveTo(x, plot.y);
-    ctx.lineTo(x, plot.y + plot.h);
+    const sx = snap(x);
+    ctx.moveTo(sx, plot.y);
+    ctx.lineTo(sx, plot.y + plot.h);
   }
   for (let y = plot.y; y <= plot.y + plot.h; y += minor) {
-    ctx.moveTo(plot.x, y);
-    ctx.lineTo(plot.x + plot.w, y);
+    const sy = snap(y);
+    ctx.moveTo(plot.x, sy);
+    ctx.lineTo(plot.x + plot.w, sy);
   }
   ctx.stroke();
 
-  // Grilla Mayor
+  // Grilla Mayor (5mm estándar)
   ctx.strokeStyle = COLORS.GRID_MAJOR;
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let x = plot.x; x <= plot.x + plot.w; x += major) {
-    ctx.moveTo(x, plot.y);
-    ctx.lineTo(x, plot.y + plot.h);
+    const sx = snap(x);
+    ctx.moveTo(sx, plot.y);
+    ctx.lineTo(sx, plot.y + plot.h);
   }
   for (let y = plot.y; y <= plot.y + plot.h; y += major) {
-    ctx.moveTo(plot.x, y);
-    ctx.lineTo(plot.x + plot.w, y);
+    const sy = snap(y);
+    ctx.moveTo(plot.x, sy);
+    ctx.lineTo(plot.x + plot.w, sy);
   }
   ctx.stroke();
 
@@ -741,42 +866,45 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.beginPath();
   for (let x = plot.x + major; x < plot.x + plot.w; x += major * 2) {
     for (let y = plot.y + major; y < plot.y + plot.h; y += major * 2) {
-      ctx.moveTo(x - crossSize, y);
-      ctx.lineTo(x + crossSize, y);
-      ctx.moveTo(x, y - crossSize);
-      ctx.lineTo(x, y + crossSize);
+      const sx = snap(x);
+      const sy = snap(y);
+      ctx.moveTo(sx - crossSize, sy);
+      ctx.lineTo(sx + crossSize, sy);
+      ctx.moveTo(sx, sy - crossSize);
+      ctx.lineTo(sx, sy + crossSize);
     }
   }
   ctx.stroke();
 
-  // Divisiones de segundo
+  // Divisiones de segundo calibradas (25 mm/s estándar)
   const oneSec = 25 * pxPerMm;
   ctx.strokeStyle = COLORS.GRID_SEC;
   ctx.lineWidth = 1.2;
   ctx.beginPath();
   for (let x = plot.x + plot.w; x >= plot.x; x -= oneSec) {
-    ctx.moveTo(x, plot.y);
-    ctx.lineTo(x, plot.y + plot.h);
+    const sx = snap(x);
+    ctx.moveTo(sx, plot.y);
+    ctx.lineTo(sx, plot.y + plot.h);
   }
   ctx.stroke();
 
-  // Escáner láser táctico
+  // Escáner láser táctico con atenuación cosenoidal
   const scanX = plot.x + ((state.now / 32) % plot.w);
   const scanGrad = ctx.createLinearGradient(scanX - 35, 0, scanX + 35, 0);
   scanGrad.addColorStop(0, 'rgba(6, 182, 212, 0)');
-  scanGrad.addColorStop(0.5, 'rgba(6, 182, 212, 0.12)');
+  scanGrad.addColorStop(0.5, 'rgba(6, 182, 212, 0.14)');
   scanGrad.addColorStop(1, 'rgba(6, 182, 212, 0)');
   ctx.fillStyle = scanGrad;
   ctx.fillRect(scanX - 35, plot.y, 70, plot.h);
 
   ctx.save();
-  ctx.strokeStyle = 'rgba(0, 242, 255, 0.6)';
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.7)';
   ctx.shadowColor = '#00f2ff';
   ctx.shadowBlur = 6;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(scanX, plot.y);
-  ctx.lineTo(scanX, plot.y + plot.h);
+  ctx.moveTo(snap(scanX), plot.y);
+  ctx.lineTo(snap(scanX), plot.y + plot.h);
   ctx.stroke();
 
   ctx.fillStyle = '#00f2ff';
@@ -795,7 +923,28 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.fill();
   ctx.restore();
 
-  // Línea Base Cero
+  // Pulso de calibración médica estándar (10 mm / 1 mV de prueba)
+  const calX = plot.x + 4;
+  const calW = 10;
+  const calH = pxPerMm * 10;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.45)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(calX, snap(plot.centerY));
+  ctx.lineTo(calX + 2, snap(plot.centerY));
+  ctx.lineTo(calX + 2, snap(plot.centerY - calH / 2));
+  ctx.lineTo(calX + 2 + calW, snap(plot.centerY - calH / 2));
+  ctx.lineTo(calX + 2 + calW, snap(plot.centerY));
+  ctx.lineTo(calX + calW + 4, snap(plot.centerY));
+  ctx.stroke();
+  ctx.font = `bold 7px ${FONT_MONO}`;
+  ctx.fillStyle = 'rgba(0, 242, 255, 0.60)';
+  ctx.textAlign = 'left';
+  ctx.fillText('10mm/mV', calX, plot.centerY - calH / 2 - 3);
+  ctx.restore();
+
+  // Línea Base Cero con aura de estabilización
   ctx.save();
   ctx.strokeStyle = COLORS.BASELINE;
   ctx.shadowColor = '#22c55e';
@@ -803,8 +952,8 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.lineWidth = 1;
   ctx.setLineDash([8, 6]);
   ctx.beginPath();
-  ctx.moveTo(plot.x, plot.centerY);
-  ctx.lineTo(plot.x + plot.w, plot.centerY);
+  ctx.moveTo(plot.x, snap(plot.centerY));
+  ctx.lineTo(plot.x + plot.w, snap(plot.centerY));
   ctx.stroke();
   ctx.restore();
 
@@ -852,22 +1001,26 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
 /**
  * Dibuja la cápsula HUD unificada de telemetría en la esquina superior derecha (Zero Overlap).
  */
-function drawUnifiedTelemetryCapsule(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
+function drawUnifiedTelemetryCapsule(
+  ctx: CanvasRenderingContext2D,
+  state: PpgRenderState,
+  metricsExt?: { maxDvDt?: number; reflectionIndex?: number }
+): void {
   const { plot } = state.layout;
   const p = state.props;
 
-  const capsuleW = 138;
-  const capsuleH = 72;
+  const capsuleW = 144;
+  const capsuleH = 80;
   const capsuleX = plot.x + plot.w - capsuleW - 8;
   const capsuleY = plot.y + 8;
 
   ctx.save();
   // Fondo de tarjeta de cristal
-  ctx.fillStyle = 'rgba(6, 14, 28, 0.90)';
+  ctx.fillStyle = 'rgba(6, 14, 28, 0.92)';
   ctx.beginPath();
   ctx.roundRect(capsuleX, capsuleY, capsuleW, capsuleH, 6);
   ctx.fill();
-  ctx.strokeStyle = 'rgba(0, 242, 255, 0.30)';
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.35)';
   ctx.lineWidth = 1;
   ctx.stroke();
 
@@ -897,7 +1050,7 @@ function drawUnifiedTelemetryCapsule(ctx: CanvasRenderingContext2D, state: PpgRe
   ctx.textAlign = 'left';
   ctx.fillStyle = '#67e8f9';
   ctx.font = `8px ${FONT_MONO}`;
-  ctx.fillText(`PI ${(p.perfusionIndex ?? 0).toFixed(3)}`, capsuleX + 10, capsuleY + 32);
+  ctx.fillText(`PI ${(p.perfusionIndex ?? 0).toFixed(3)}`, capsuleX + 10, capsuleY + 31);
 
   const rrList = p.rrIntervals ?? [];
   let deltaRrStr = '--';
@@ -907,9 +1060,20 @@ function drawUnifiedTelemetryCapsule(ctx: CanvasRenderingContext2D, state: PpgRe
   }
   ctx.textAlign = 'right';
   ctx.fillStyle = '#93c5fd';
-  ctx.fillText(`ΔRR ${deltaRrStr}`, capsuleX + capsuleW - 10, capsuleY + 32);
+  ctx.fillText(`ΔRR ${deltaRrStr}`, capsuleX + capsuleW - 10, capsuleY + 31);
 
-  // Fila 3: Medidor de Apoyo Dactilar (Contacto sobre la lente)
+  // Fila 3: Hemodinámica Avanzada: Velocidad de ascenso sistólico (VPG) + Índice de Reflexión (RI)
+  const maxDv = metricsExt?.maxDvDt && metricsExt.maxDvDt > 0 ? metricsExt.maxDvDt.toFixed(1) : '--';
+  const riVal = metricsExt?.reflectionIndex && metricsExt.reflectionIndex > 0 ? `${metricsExt.reflectionIndex}%` : '--';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#a78bfa';
+  ctx.fillText(`VPG ${maxDv}`, capsuleX + 10, capsuleY + 44);
+
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#cbd5e1';
+  ctx.fillText(`RI ${riVal}`, capsuleX + capsuleW - 10, capsuleY + 44);
+
+  // Fila 4: Medidor de Apoyo Dactilar (Contacto sobre la lente)
   const diag = p.diagnostics;
   const pressure = diag?.fingerPressure || 'IDEAL';
   let targetPct = 0.5;
@@ -928,17 +1092,17 @@ function drawUnifiedTelemetryCapsule(ctx: CanvasRenderingContext2D, state: PpgRe
   ctx.textAlign = 'left';
   ctx.fillStyle = pColor;
   ctx.font = `7px ${FONT_MONO}`;
-  ctx.fillText(pLabel, capsuleX + 10, capsuleY + 46);
+  ctx.fillText(pLabel, capsuleX + 10, capsuleY + 57);
 
   ctx.textAlign = 'right';
   const contactText = formatContactState(p.contactState);
   ctx.fillStyle = '#94a3b8';
-  ctx.fillText(contactText, capsuleX + capsuleW - 10, capsuleY + 46);
+  ctx.fillText(contactText, capsuleX + capsuleW - 10, capsuleY + 57);
 
   const barW = capsuleW - 20;
-  const barH = 5;
+  const barH = 4;
   const barX = capsuleX + 10;
-  const barY = capsuleY + 52;
+  const barY = capsuleY + 63;
 
   const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
   grad.addColorStop(0, '#f59e0b');
@@ -950,7 +1114,7 @@ function drawUnifiedTelemetryCapsule(ctx: CanvasRenderingContext2D, state: PpgRe
 
   ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.roundRect(barX, barY, barW, barH, 2.5);
+  ctx.roundRect(barX, barY, barW, barH, 2);
   ctx.fill();
 
   // Cursor diamante indicador
@@ -960,13 +1124,14 @@ function drawUnifiedTelemetryCapsule(ctx: CanvasRenderingContext2D, state: PpgRe
   ctx.shadowBlur = 6;
   ctx.beginPath();
   ctx.moveTo(curX, barY + barH + 1);
-  ctx.lineTo(curX - 3.5, barY + barH + 5);
-  ctx.lineTo(curX + 3.5, barY + barH + 5);
+  ctx.lineTo(curX - 3, barY + barH + 4.5);
+  ctx.lineTo(curX + 3, barY + barH + 4.5);
   ctx.closePath();
   ctx.fill();
 
   ctx.restore();
 }
+
 
 /**
  * Dibuja la señal cardíaca con haz de fósforo multicapa (bloom + láser core),
@@ -1051,10 +1216,14 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     c.y = y;
     c.isArr = pt.isArrhythmia;
     c.val = pt.value;
+    c.time = pt.time;
   });
 
   if (coordCount < 2) return;
   const coords = RENDER_COORD_POOL.slice(0, coordCount);
+
+  // Análisis morfológico riguroso de la señal visible
+  const fiducials = detectPhysiologicalFiducials(coords, midValue, safeRange);
 
   ctx.save();
   ctx.beginPath();
@@ -1068,7 +1237,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   if (state.threeD?.enabled) {
     drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
   } else {
-    // ── MODO 2D: RENDERIZADO DE HAZ DE FÓSFORO Y BLOOM MULTICAPA ──
+    // ── MODO 2D: RENDERIZADO DE HAZ DE FÓSFORO P31 Y BLOOM MULTICAPA ──
 
     // 1. Fondo de Alerta Roja para Segmentos con Arritmia
     let seg = 0;
@@ -1086,33 +1255,26 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       seg = end;
     }
 
-    // 2. Relleno Degradado Bioluminiscente bajo la onda
+    // 2. Relleno Degradado Bioluminiscente bajo la onda con Catmull-Rom
     const fillSegment = (startIdx: number, endIdx: number, arrhythmia: boolean) => {
       if (!state.traceRevealed) return;
       if (endIdx <= startIdx) return;
       ctx.beginPath();
       ctx.moveTo(coords[startIdx].x, waveBaseY);
       ctx.lineTo(coords[startIdx].x, coords[startIdx].y);
-      if (endIdx - startIdx >= 3) {
-        for (let k = startIdx; k < endIdx - 1; k++) {
-          const xc = (coords[k].x + coords[k + 1].x) / 2;
-          const yc = (coords[k].y + coords[k + 1].y) / 2;
-          ctx.quadraticCurveTo(coords[k].x, coords[k].y, xc, yc);
-        }
-        ctx.lineTo(coords[endIdx - 1].x, coords[endIdx - 1].y);
-      } else {
-        for (let k = startIdx + 1; k < endIdx; k++) ctx.lineTo(coords[k].x, coords[k].y);
-      }
+      traceCatmullRomSpline(ctx, coords, startIdx, endIdx);
       ctx.lineTo(coords[endIdx - 1].x, waveBaseY);
       ctx.closePath();
       const fillGrad = ctx.createLinearGradient(0, plot.y + wavePadTop, 0, waveBaseY);
       if (arrhythmia) {
-        fillGrad.addColorStop(0, 'rgba(248, 113, 113, 0.22)');
+        fillGrad.addColorStop(0, 'rgba(248, 113, 113, 0.26)');
+        fillGrad.addColorStop(0.5, 'rgba(239, 68, 68, 0.08)');
         fillGrad.addColorStop(1, 'rgba(127, 29, 29, 0.01)');
       } else {
-        fillGrad.addColorStop(0, 'rgba(34, 197, 94, 0.18)');
-        fillGrad.addColorStop(0.5, 'rgba(6, 182, 212, 0.08)');
-        fillGrad.addColorStop(1, 'rgba(34, 197, 94, 0.01)');
+        fillGrad.addColorStop(0, 'rgba(34, 197, 94, 0.22)');
+        fillGrad.addColorStop(0.45, 'rgba(6, 182, 212, 0.10)');
+        fillGrad.addColorStop(0.85, 'rgba(34, 197, 94, 0.03)');
+        fillGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       }
       ctx.fillStyle = fillGrad;
       ctx.fill();
@@ -1127,30 +1289,21 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       fi = fj;
     }
 
-    // 3. Trazado Multicapa del Haz de Fósforo con Suavizado Spline Sub-píxel
+    // 3. Trazado Multicapa del Haz de Fósforo con Spline Catmull-Rom Centrípeto
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     const drawSmoothSegment = (startIdx: number, endIdx: number) => {
       if (endIdx <= startIdx) return;
       ctx.beginPath();
       ctx.moveTo(coords[startIdx].x, coords[startIdx].y);
-      if (endIdx - startIdx < 3) {
-        for (let k = startIdx + 1; k < endIdx; k++) ctx.lineTo(coords[k].x, coords[k].y);
-        return;
-      }
-      for (let k = startIdx; k < endIdx - 1; k++) {
-        const xc = (coords[k].x + coords[k + 1].x) / 2;
-        const yc = (coords[k].y + coords[k + 1].y) / 2;
-        ctx.quadraticCurveTo(coords[k].x, coords[k].y, xc, yc);
-      }
-      ctx.lineTo(coords[endIdx - 1].x, coords[endIdx - 1].y);
+      traceCatmullRomSpline(ctx, coords, startIdx, endIdx);
     };
 
     const totalLen = coords.length;
-    const recentCut = Math.max(0, totalLen - Math.floor(totalLen * 0.40));
-    const leadingCut = Math.max(0, totalLen - Math.floor(totalLen * 0.15));
+    const recentCut = Math.max(0, totalLen - Math.floor(totalLen * 0.45));
+    const leadingCut = Math.max(0, totalLen - Math.floor(totalLen * 0.16));
 
-    // Capa 1: Trazo Base de Fósforo
+    // Capa 1: Trazo Base de Fósforo P31 (Estela Persistente Profunda)
     seg = 0;
     while (seg < totalLen - 1) {
       const isArr = coords[seg].isArr;
@@ -1158,15 +1311,15 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
       drawSmoothSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
       ctx.strokeStyle = state.traceRevealed
-        ? (isArr ? 'rgba(239, 68, 68, 0.50)' : 'rgba(34, 197, 94, 0.55)')
-        : 'rgba(148, 163, 184, 0.30)';
+        ? (isArr ? 'rgba(239, 68, 68, 0.42)' : 'rgba(34, 197, 94, 0.45)')
+        : 'rgba(148, 163, 184, 0.25)';
       ctx.lineWidth = CARDIAC_WAVE_CONFIG.BASE_STROKE_WIDTH;
       ctx.stroke();
       seg = segEnd;
     }
 
     if (state.traceRevealed) {
-      // Capa 2: Halo de Emisión Difusa (Bloom)
+      // Capa 2: Halo de Emisión Difusa P31 (Gaussian Bloom)
       ctx.shadowColor = COLORS.SIGNAL_GLOW;
       ctx.shadowBlur = CARDIAC_WAVE_CONFIG.SHADOW_BLUR_BASE;
       seg = Math.max(recentCut, 0);
@@ -1175,13 +1328,13 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
         let segEnd = seg;
         while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
         drawSmoothSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
-        ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.75)' : 'rgba(74, 222, 128, 0.80)';
+        ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.82)' : 'rgba(74, 222, 128, 0.85)';
         ctx.lineWidth = CARDIAC_WAVE_CONFIG.GLOW_STROKE_WIDTH;
         ctx.stroke();
         seg = segEnd;
       }
 
-      // Capa 3: Núcleo Láser Ultra-Brillante
+      // Capa 3: Cabeza de Haz Láser Ultra-Brillante (Leading Beam Core)
       ctx.shadowBlur = CARDIAC_WAVE_CONFIG.SHADOW_BLUR_LEADING;
       seg = Math.max(leadingCut, 0);
       while (seg < totalLen - 1) {
@@ -1195,10 +1348,11 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
         ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
         ctx.stroke();
 
+        // Núcleo Blanco Puro de Rayo Catódico (Luminescence Peak)
         drawSmoothSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = CARDIAC_WAVE_CONFIG.CORE_STROKE_WIDTH;
-        ctx.shadowBlur = 4;
+        ctx.shadowBlur = 5;
         ctx.shadowColor = '#ffffff';
         ctx.stroke();
 
@@ -1247,90 +1401,73 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       ctx.shadowBlur = 0;
     }
 
-    // 5. Marcadores Fiduciales Holográficos de Grado Instrumentación
+    // 5. Marcadores Fiduciales Analíticos de Grado Instrumentación (VPG/APG)
     if (state.traceRevealed) {
       ctx.font = `bold 8px ${FONT_MONO}`;
-      for (let i = 2; i < coords.length - 2; i++) {
-        const v = coords[i].val;
-        const isArr = coords[i].isArr;
-        const prev2 = coords[i - 2].val;
-        const prev = coords[i - 1].val;
-        const next = coords[i + 1].val;
-        const next2 = coords[i + 2].val;
 
-        // Pico Sistólico (SYS)
-        if (v > prev && v > next && v > prev2 && v > next2 && v > midValue) {
-          ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.35)' : 'rgba(0, 242, 255, 0.30)';
-          ctx.lineWidth = 1;
-          ctx.setLineDash([2, 4]);
+      // A) Picos Sistólicos (SYS)
+      for (const pk of fiducials.systolicPeaks) {
+        ctx.strokeStyle = pk.isArr ? 'rgba(239, 68, 68, 0.40)' : 'rgba(0, 242, 255, 0.35)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.moveTo(pk.x, pk.y + 6);
+        ctx.lineTo(pk.x, plot.centerY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const dSize = CARDIAC_WAVE_CONFIG.SYS_PEAK_RADIUS;
+        ctx.beginPath();
+        ctx.moveTo(pk.x, pk.y - dSize);
+        ctx.lineTo(pk.x + dSize, pk.y);
+        ctx.lineTo(pk.x, pk.y + dSize);
+        ctx.lineTo(pk.x - dSize, pk.y);
+        ctx.closePath();
+        ctx.fillStyle = pk.isArr ? COLORS.PEAK_ARR : '#ffffff';
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = pk.isArr ? COLORS.PEAK_ARR : '#00f2ff';
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = pk.isArr ? COLORS.PEAK_ARR : '#00f2ff';
+        ctx.textAlign = 'center';
+        ctx.fillText(pk.val.toFixed(1), pk.x, pk.y - 12);
+
+        ctx.font = `bold 7px ${FONT_MONO}`;
+        ctx.fillStyle = pk.isArr ? '#fecaca' : 'rgba(255, 255, 255, 0.88)';
+        ctx.fillText(pk.isArr ? 'ARR' : `SYS · ${pk.riseTimeMs}ms`, pk.x, pk.y - 22);
+        ctx.font = `bold 8px ${FONT_MONO}`;
+
+        if (pk.isArr) {
           ctx.beginPath();
-          ctx.moveTo(coords[i].x, coords[i].y + 6);
-          ctx.lineTo(coords[i].x, plot.centerY);
+          ctx.arc(pk.x, pk.y, CARDIAC_WAVE_CONFIG.ARR_WARNING_RADIUS, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.75)';
+          ctx.lineWidth = CARDIAC_WAVE_CONFIG.ARR_WARNING_WIDTH;
           ctx.stroke();
-          ctx.setLineDash([]);
-
-          const dSize = CARDIAC_WAVE_CONFIG.SYS_PEAK_RADIUS;
-          ctx.beginPath();
-          ctx.moveTo(coords[i].x, coords[i].y - dSize);
-          ctx.lineTo(coords[i].x + dSize, coords[i].y);
-          ctx.lineTo(coords[i].x, coords[i].y + dSize);
-          ctx.lineTo(coords[i].x - dSize, coords[i].y);
-          ctx.closePath();
-          ctx.fillStyle = isArr ? COLORS.PEAK_ARR : '#ffffff';
-          ctx.shadowBlur = 10;
-          ctx.shadowColor = isArr ? COLORS.PEAK_ARR : '#00f2ff';
-          ctx.fill();
-          ctx.shadowBlur = 0;
-
-          ctx.fillStyle = isArr ? COLORS.PEAK_ARR : '#00f2ff';
-          ctx.textAlign = 'center';
-          ctx.fillText(v.toFixed(1), coords[i].x, coords[i].y - 12);
-
-          ctx.font = `bold 7px ${FONT_MONO}`;
-          ctx.fillStyle = isArr ? '#fecaca' : 'rgba(255, 255, 255, 0.85)';
-          ctx.fillText(isArr ? 'ARR' : 'SYS', coords[i].x, coords[i].y - 22);
-          ctx.font = `bold 8px ${FONT_MONO}`;
-
-          if (isArr) {
-            ctx.beginPath();
-            ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.ARR_WARNING_RADIUS, 0, Math.PI * 2);
-            ctx.strokeStyle = 'rgba(239, 68, 68, 0.75)';
-            ctx.lineWidth = CARDIAC_WAVE_CONFIG.ARR_WARNING_WIDTH;
-            ctx.stroke();
-          }
         }
+      }
 
-        // Valle Diastólico (DIA)
-        if (v < prev && v < next && v < prev2 && v < next2 && v < midValue) {
+      // B) Valles Diastólicos (DIA)
+      for (const tr of fiducials.diastolicTroughs) {
+        ctx.beginPath();
+        ctx.arc(tr.x, tr.y, CARDIAC_WAVE_CONFIG.DIA_VALLEY_RADIUS, 0, Math.PI * 2);
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.textAlign = 'center';
+        ctx.fillText(tr.val.toFixed(1), tr.x, tr.y + 16);
+        ctx.font = `7px ${FONT_MONO}`;
+        ctx.fillText('DIA', tr.x, tr.y + 24);
+        ctx.font = `bold 8px ${FONT_MONO}`;
+      }
+
+      // C) Ondas de Marea / Reflexión (T)
+      if (state.props.quality > 60) {
+        for (const tw of fiducials.tidalWaves) {
           ctx.beginPath();
-          ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.DIA_VALLEY_RADIUS, 0, Math.PI * 2);
-          ctx.strokeStyle = '#94a3b8';
-          ctx.lineWidth = 1.2;
-          ctx.stroke();
-
-          ctx.fillStyle = '#94a3b8';
-          ctx.textAlign = 'center';
-          ctx.fillText(v.toFixed(1), coords[i].x, coords[i].y + 16);
-          ctx.font = `7px ${FONT_MONO}`;
-          ctx.fillText('DIA', coords[i].x, coords[i].y + 24);
-          ctx.font = `bold 8px ${FONT_MONO}`;
-        }
-
-        // Onda de Reflexión / Marea (Tidal Wave - T) (Elgendi 2012)
-        // Hombro en la pendiente descendente sistólica antes de la muesca dícrota
-        const d1_curr = v - prev;
-        const d1_next = next - v;
-        const d2_curr = d1_next - d1_curr;
-        const isTidalShoulder =
-          d1_curr < -0.12 &&
-          d2_curr > 0.28 &&
-          v > midValue + 0.12 * Math.abs(midValue || 1) &&
-          prev < prev2 &&
-          !(v > prev && v > next);
-
-        if (isTidalShoulder && state.props.quality > 65) {
-          ctx.beginPath();
-          ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.DIC_NOTCH_RADIUS, 0, Math.PI * 2);
+          ctx.arc(tw.x, tw.y, CARDIAC_WAVE_CONFIG.DIC_NOTCH_RADIUS, 0, Math.PI * 2);
           ctx.fillStyle = 'rgba(52, 211, 153, 0.90)';
           ctx.shadowColor = '#10b981';
           ctx.shadowBlur = 5;
@@ -1340,27 +1477,27 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
           ctx.font = `bold 7px ${FONT_MONO}`;
           ctx.fillStyle = '#6ee7b7';
           ctx.textAlign = 'center';
-          ctx.fillText('T', coords[i].x, coords[i].y - 8);
+          ctx.fillText('T', tw.x, tw.y - 8);
           ctx.font = `bold 8px ${FONT_MONO}`;
         }
+      }
 
-        // Muesca Dícrota (DIC)
-        if (d1_curr < 0 && d1_next > d1_curr && d1_next < 0 && v > midValue) {
-          ctx.beginPath();
-          ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.DIC_NOTCH_RADIUS, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(103, 232, 249, 0.85)';
-          ctx.shadowColor = '#00f2ff';
-          ctx.shadowBlur = 6;
-          ctx.fill();
-          ctx.shadowBlur = 0;
+      // D) Muescas Dícrotas (DIC) - Incisura de cierre aórtico
+      for (const dn of fiducials.dicroticNotches) {
+        ctx.beginPath();
+        ctx.arc(dn.x, dn.y, CARDIAC_WAVE_CONFIG.DIC_NOTCH_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(103, 232, 249, 0.85)';
+        ctx.shadowColor = '#00f2ff';
+        ctx.shadowBlur = 6;
+        ctx.fill();
+        ctx.shadowBlur = 0;
 
-          if (state.props.quality > 60) {
-            ctx.font = `bold 7px ${FONT_MONO}`;
-            ctx.fillStyle = 'rgba(103, 232, 249, 0.95)';
-            ctx.textAlign = 'center';
-            ctx.fillText('DIC', coords[i].x, coords[i].y - 8);
-            ctx.font = `bold 8px ${FONT_MONO}`;
-          }
+        if (state.props.quality > 55) {
+          ctx.font = `bold 7px ${FONT_MONO}`;
+          ctx.fillStyle = 'rgba(103, 232, 249, 0.95)';
+          ctx.textAlign = 'center';
+          ctx.fillText('DIC', dn.x, dn.y - 8);
+          ctx.font = `bold 8px ${FONT_MONO}`;
         }
       }
 
@@ -1439,7 +1576,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.fillText(rhythm.guidance, plot.x + 14, panelY + 44);
 
   // Cápsula HUD de Telemetría unificada en la esquina superior derecha (Zero Overlap)
-  drawUnifiedTelemetryCapsule(ctx, state);
+  drawUnifiedTelemetryCapsule(ctx, state, { maxDvDt: fiducials.maxDvDt, reflectionIndex: fiducials.reflectionIndex });
 
   ctx.restore();
 }
@@ -1842,7 +1979,7 @@ export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: Ppg
   // UBICACIÓN CENTRAL FIJA EN EL MONITOR: cy = plot.centerY
   const cx = plot.x + plot.w / 2;
   const cy = plot.centerY;
-  const radius = Math.min(68, Math.max(48, Math.floor(plot.h * 0.23)));
+  const radius = Math.min(60, Math.max(40, Math.floor(plot.h * 0.20)));
 
   drawLiveFingerOpticalLens(
     ctx,
@@ -2024,12 +2161,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     while (end < coords.length - 1 && coords[end + 1].isArr === isArr) end++;
     ctx.beginPath();
     ctx.moveTo(coords[seg].x, coords[seg].y);
-    for (let k = seg; k < end; k++) {
-      const xc = (coords[k].x + coords[k + 1].x) / 2;
-      const yc = (coords[k].y + coords[k + 1].y) / 2;
-      ctx.quadraticCurveTo(coords[k].x, coords[k].y, xc, yc);
-    }
-    ctx.lineTo(coords[end].x, coords[end].y);
+    traceCatmullRomSpline(ctx, coords, seg, end + 1);
     ctx.strokeStyle = isArr ? COLORS.SIGNAL_ARR : '#22c55e';
     ctx.lineWidth = isArr ? 2.4 : 2;
     ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : '#22c55e';
