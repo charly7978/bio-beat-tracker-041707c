@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bio-Beat Tracker — Política de Privacidad</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:760px;margin:0 auto;padding:24px;line-height:1.6;color:#111}
+  h1{font-size:24px} h2{font-size:18px;margin-top:28px} small{color:#555}
+  table{border-collapse:collapse;width:100%} td,th{border:1px solid #ccc;padding:6px 8px;font-size:14px;text-align:left}
+</style>
+</head>
+<body>
+<h1>Política de Privacidad — Bio-Beat Tracker</h1>
+<p><small>Versión 1.0.0 — Última actualización: 2026-09-05. Responsable: [NOMBRE/EMPRESA — PENDIENTE]. Contacto privacidad: [privacidad@[TU-DOMINIO] — PENDIENTE].</small></p>
+
+<h2>1. Qué es esta app (posicionamiento)</h2>
+<p>Bio-Beat Tracker es un producto de <strong>bienestar general</strong> que estima pulso, SpO<sub>2</sub>, presión arterial y respiración mediante fotopletismografía (PPG) con la cámara del teléfono. <strong>No es un dispositivo médico, no diagnostica, no trata, no cura ni previene ninguna enfermedad</strong> y no sustituye la atención de un profesional de la salud.</p>
+
+<h2>2. Datos que tratamos</h2>
+<table>
+<tr><th>Dato</th><th>Origen</th><th>Dónde se procesa / guarda</th></tr>
+<tr><td>Fotogramas de cámara (dedo/rostro)</td><td>Cámara del dispositivo, solo durante la medición</td><td><strong>Solo en memoria del dispositivo.</strong> No se suben imágenes ni vídeo a ningún servidor. Al detener la medición los fotogramas se descartan.</td></tr>
+<tr><td>Señal PPG derivada y métricas (BPM, SpO<sub>2</sub>, PA, respiración, calidad SQI)</td><td>Cálculo local desde píxeles reales</td><td>En el dispositivo; si el usuario guarda la medición, también en su cuenta en la nube (ver tabla siguiente).</td></tr>
+<tr><td>Mediciones guardadas (valores + fecha + calidad)</td><td>Acción explícita del usuario (“guardar”)</td><td>Tabla <code>measurements</code> (nube) bajo su <code>user_id</code>, y/o copia local cifrada <code>local_measurements</code> (AES-GCM) en el dispositivo.</td></tr>
+<tr><td>Intentos de medición y diagnóstico técnico (calidad, artefactos, FPS/jitter, modelo de cámara)</td><td>Uso de la app</td><td>Tablas <code>measurement_attempts</code> y <code>perf_snapshots</code> (nube), solo de su usuario.</td></tr>
+<tr><td>Perfil y calibración (edad/altura/peso/sexo, offsets de referencia)</td><td>Datos que el usuario introduce</td><td>Tablas <code>profiles</code> y <code>calibration_settings</code> (nube), solo de su usuario.</td></tr>
+<tr><td>Cuenta (email) si inicia sesión</td><td>Autenticación</td><td>Proveedor de autenticación (Supabase Auth). Sin cuenta, la app funciona en modo local.</td></tr>
+</table>
+<p>No se recogen: contactos, ubicación, micrófono, archivos, ni identificadores publicitarios. No hay rastreadores de terceros ni venta de datos.</p>
+
+<h2>3. Base jurídica y consentimiento</h2>
+<p>Los datos de salud son categoría especial (art. 9 RGPD). Los tratamos únicamente con su <strong>consentimiento explícito</strong>: el descargo de responsabilidad médica inicial y la acción de guardar/iniciar sesión. Puede retirar el consentimiento en cualquier momento dejando de usar la nube y borrando sus datos (punto 6); el tratamiento previo sigue siendo lícito.</p>
+
+<h2>4. Permisos del dispositivo</h2>
+<ul>
+<li><strong>Cámara</strong> (obligatorio para medir): los fotogramas se procesan en el dispositivo y no se almacenan.</li>
+<li><strong>Vibración/hápticos</strong>: pulso de confirmación de latido, sin datos personales.</li>
+<li><strong>Internet</strong>: solo para cuenta en la nube y análisis bajo demanda. Sin conexión, la medición local sigue disponible.</li>
+</ul>
+
+<h2>5. Conservación</h2>
+<ul>
+<li>Datos locales: hasta que el usuario los borre desde Historial (“borrar historial local”).</li>
+<li>Datos en la nube: hasta que el usuario solicite su borrado ([privacidad@[TU-DOMINIO] — PENDIENTE]) o elimine su cuenta. No hay cesión a terceros salvo el encargado de infraestructura (alojamiento) bajo contrato.</li>
+<li>Fotogramas de cámara: retención cero — nunca se guardan ni se transmiten.</li>
+</ul>
+
+<h2>6. Sus derechos</h2>
+<p>Acceso, rectificación, supresión, oposición, limitación y portabilidad (exportación CSV disponible en Historial). Para ejercerlos: [privacidad@[TU-DOMINIO] — PENDIENTE]. Respondemos en el plazo legal aplicable (p. ej., 1 mes RGPD).</p>
+
+<h2>7. Seguridad</h2>
+<p>Cifrado en tránsito (HTTPS), aislamiento por usuario mediante políticas de acceso a nivel de fila (cada usuario solo ve sus filas), copia local cifrada con AES-GCM, copia de seguridad del sistema desactivada para datos de salud en Android (<code>allowBackup=false</code>). Ninguna medida es infalible; ante una brecha que afecte a sus datos se lo notificaremos según la normativa aplicable.</p>
+
+<h2>8. Menores</h2>
+<p>La app no está dirigida a menores de [14/16 — PENDIENTE según jurisdicción]. Si es menor, úsela solo con supervisión de un adulto responsable.</p>
+
+<h2>9. Cambios</h2>
+<p>Publicaremos cada nueva versión en esta misma dirección con fecha de actualización. Los cambios materiales se avisarán dentro de la app.</p>
+</body>
+</html>

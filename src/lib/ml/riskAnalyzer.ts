@@ -24,9 +24,11 @@ export interface RiskWeights {
 }
 
 /**
- * Analizador de riesgo cardiovascular y respiratorio de grado biomédico.
- * Evalúa únicamente variables fisiológicas reales y comprobadas, normalizando
- * ponderaciones de forma dinámica sin fabricar valores ficticios.
+ * Analizador informativo de bienestar cardiovascular y respiratorio.
+ * Producto de bienestar general: NO es dispositivo medico, NO diagnostica
+ * ni prescribe. Evalua unicamente variables fisiologicas medidas,
+ * normalizando ponderaciones de forma dinamica sin fabricar valores ficticios.
+ * Toda salida es orientativa y debe interpretarse junto a un profesional.
  */
 export class HealthRiskAnalyzer {
   private readonly BASE_WEIGHTS = {
@@ -304,32 +306,36 @@ export class HealthRiskAnalyzer {
     flags: string[],
   ): string[] {
     const recs: string[] = [];
+    // Lenguaje de bienestar: informacion general + derivacion profesional.
+    // Prohibido prescribir, ajustar medicacion, administrar oxigeno o indicar
+    // pruebas clinicas concretas (FDA General Wellness 2026: sin treatment
+    // guidance ni clinical management). Ante sintomas de alarma, emergencias.
     if (flags.includes('CRISIS_HIPERTENSIVA')) {
-      recs.push('Busque atención médica de URGENCIA inmediatamente');
+      recs.push('Lectura fuera del rango habitual de bienestar: consulte a un profesional de la salud cuanto antes. Ante sintomas de alarma (dolor de pecho, desmayo, dificultad respiratoria intensa), busque atencion de emergencia local de inmediato');
     }
     if (flags.includes('DESATURACION_CRITICA')) {
-      recs.push('Administre oxígeno si está disponible. Acuda a emergencias');
+      recs.push('Lectura fuera del rango habitual de bienestar: consulte a un profesional de la salud cuanto antes. Ante sintomas de alarma, busque atencion de emergencia local de inmediato; no se automedique por esta lectura');
     }
     if (flags.includes('HIPERTENSION_SEVERA') || flags.includes('HIPERTENSION_MODERADA')) {
-      recs.push('Monitoree su presión arterial diariamente. Consulte a su médico para ajustar medicación');
+      recs.push('Patron fuera del rango habitual de bienestar: consulte a un profesional de la salud. No ajuste medicacion por su cuenta');
     }
     if (flags.includes('HIPOXIA_SEVERA') || flags.includes('HIPOXIA_MODERADA')) {
-      recs.push('Realice ejercicios de respiración profunda y mantenga oxigenación adecuada');
+      recs.push('Patron fuera del rango habitual de bienestar: consulte a un profesional de la salud si persiste');
     }
     if (flags.includes('TAQUIPNEA')) {
-      recs.push('Frecuencia respiratoria elevada: descanse y consulte a su médico si persiste dificultad para respirar');
+      recs.push('Frecuencia respiratoria fuera del rango habitual de bienestar: descanse y consulte a un profesional de la salud si persiste o hay dificultad para respirar');
     }
     if (flags.includes('BRADIPNEA')) {
-      recs.push('Frecuencia respiratoria deprimida: manténgase en observación médica si presenta somnolencia o disnea');
+      recs.push('Frecuencia respiratoria fuera del rango habitual de bienestar: consulte a un profesional de la salud, especialmente si hay somnolencia o malestar');
     }
     if (flags.includes('ARRITMIA_SEVERA') || flags.includes('ARRITMIA_MODERADA')) {
-      recs.push('Evite estimulantes como cafeína o alcohol. Realice un ECG de confirmación con su médico');
+      recs.push('Patron de pulso irregular: evite sacar conclusiones por su cuenta y consulte a un profesional de la salud para valoracion con equipo clinico');
     }
     if (flags.includes('TAQUICARDIA')) {
-      recs.push('Descanse y manténgase hidratado. Si la frecuencia elevada persiste en reposo, consulte a su médico');
+      recs.push('Pulso fuera del rango habitual de bienestar en reposo: descanse, hidratese y consulte a un profesional de la salud si persiste');
     }
     if (flags.includes('BRADICARDIA')) {
-      recs.push('Si presenta mareos, fatiga extrema o desmayos, acuda a consulta médica de inmediato');
+      recs.push('Pulso fuera del rango habitual de bienestar: si hay mareos, fatiga extrema o desmayos, busque atencion medica de inmediato');
     }
     if (categories.hypoxia > 0.2 && categories.hypoxia <= 0.4) {
       recs.push('Manténgase hidratado y ventile bien el área donde se encuentra');

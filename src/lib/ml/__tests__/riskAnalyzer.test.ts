@@ -1,14 +1,45 @@
 import { describe, expect, it } from 'vitest';
 import { HealthRiskAnalyzer, healthRiskAnalyzer } from '../riskAnalyzer';
 import type { VitalSignsResult } from '../../../modules/vital-signs/VitalSignsProcessor';
+import type { MeasurementStatus, VitalMeasurement } from '../../../types/measurements';
+
+function makeMeasurement<T>(
+  name: string,
+  value: T | null,
+  unit: string,
+  status: MeasurementStatus = 'VALID',
+  confidence = 0.9,
+): VitalMeasurement<T> {
+  return {
+    name,
+    value,
+    unit,
+    timestamp: Date.now(),
+    confidence,
+    status,
+    reason: 'clinical test',
+    signalQuality: {
+      sqi: 90,
+      perfusionIndex: 1.5,
+      snr: 10,
+      periodicity: 0.9,
+      motionScore: 0.05,
+      saturationRatio: 0,
+      frameDropRatio: 0,
+      fpsEffective: 30,
+      timestampJitterMs: 1,
+    },
+    diagnostics: {},
+  };
+}
 
 function createMockVitals(overrides: Partial<VitalSignsResult> = {}): VitalSignsResult {
   return {
-    heartRate: { value: 72, confidence: 0.9, status: 'VALID' },
-    spo2: { value: 98, confidence: 0.9, status: 'VALID' },
-    bloodPressure: { value: { systolic: 120, diastolic: 80 }, confidence: 0.8, status: 'VALID' },
-    respiration: { value: 16, confidence: 0.85, status: 'VALID' },
-    arrhythmia: { value: { count: 0, status: 'NORMAL', score: 0 }, confidence: 0.9, status: 'VALID' },
+    heartRate: makeMeasurement('Heart Rate', 72, 'BPM'),
+    spo2: makeMeasurement('SpO2', 98, '%'),
+    bloodPressure: makeMeasurement('Blood Pressure', { systolic: 120, diastolic: 80 }, 'mmHg'),
+    respiration: makeMeasurement('Respiration', 16, 'RPM'),
+    arrhythmia: makeMeasurement('Arrhythmia', { count: 0, status: 'NORMAL', score: 0 }, 'events'),
     signalQuality: 90,
     isCalibrating: false,
     calibrationProgress: 100,
@@ -33,7 +64,7 @@ describe('HealthRiskAnalyzer', () => {
 
   it('detecta y marca TAQUICARDIA y RIESGO_CARDIOVASCULAR_ELEVADO', () => {
     const vitals = createMockVitals({
-      heartRate: { value: 135, confidence: 0.95, status: 'VALID' },
+      heartRate: makeMeasurement('Heart Rate', 135, 'BPM'),
     });
     const score = healthRiskAnalyzer.analyze(vitals);
 
@@ -43,7 +74,7 @@ describe('HealthRiskAnalyzer', () => {
 
   it('detecta y marca BRADICARDIA cuando HR < 50', () => {
     const vitals = createMockVitals({
-      heartRate: { value: 44, confidence: 0.95, status: 'VALID' },
+      heartRate: makeMeasurement('Heart Rate', 44, 'BPM'),
     });
     const score = healthRiskAnalyzer.analyze(vitals);
 
@@ -52,7 +83,7 @@ describe('HealthRiskAnalyzer', () => {
 
   it('detecta CRISIS_HIPERTENSIVA y asigna timeline IMMEDIATE', () => {
     const vitals = createMockVitals({
-      bloodPressure: { value: { systolic: 195, diastolic: 125 }, confidence: 0.9, status: 'VALID' },
+      bloodPressure: makeMeasurement('Blood Pressure', { systolic: 195, diastolic: 125 }, 'mmHg'),
     });
     const score = healthRiskAnalyzer.analyze(vitals);
 
@@ -63,7 +94,7 @@ describe('HealthRiskAnalyzer', () => {
 
   it('detecta DESATURACION_CRITICA y evalúa hipoxia severa', () => {
     const vitals = createMockVitals({
-      spo2: { value: 84, confidence: 0.95, status: 'VALID' },
+      spo2: makeMeasurement('SpO2', 84, '%'),
     });
     const score = healthRiskAnalyzer.analyze(vitals);
 
@@ -75,7 +106,7 @@ describe('HealthRiskAnalyzer', () => {
   it('evalúa frecuencia respiratoria fisiológica real: TAQUIPNEA y BRADIPNEA', () => {
     // Taquipnea
     const vitalsTachypnea = createMockVitals({
-      respiration: { value: 28, confidence: 0.9, status: 'VALID' },
+      respiration: makeMeasurement('Respiration', 28, 'RPM'),
     });
     const scoreTach = healthRiskAnalyzer.analyze(vitalsTachypnea);
     expect(scoreTach.flags).toContain('TAQUIPNEA');
@@ -83,7 +114,7 @@ describe('HealthRiskAnalyzer', () => {
 
     // Bradipnea
     const vitalsBradypnea = createMockVitals({
-      respiration: { value: 8, confidence: 0.9, status: 'VALID' },
+      respiration: makeMeasurement('Respiration', 8, 'RPM'),
     });
     const scoreBrad = healthRiskAnalyzer.analyze(vitalsBradypnea);
     expect(scoreBrad.flags).toContain('BRADIPNEA');
@@ -93,11 +124,11 @@ describe('HealthRiskAnalyzer', () => {
   it('NO inventa lecturas falsas ni dispara falsas alarmas ante signos ausentes o nulos', () => {
     // Vitals completamente sin medir (aún en calibración o sin dedo/rostro)
     const emptyVitals: VitalSignsResult = {
-      heartRate: { value: 0, confidence: 0, status: 'INVALID' },
-      spo2: { value: 0, confidence: 0, status: 'INVALID' },
-      bloodPressure: { value: null as unknown as { systolic: number; diastolic: number }, confidence: 0, status: 'INVALID' },
-      respiration: { value: 0, confidence: 0, status: 'INVALID' },
-      arrhythmia: { value: null as unknown as { count: number; status: string; score?: number }, confidence: 0, status: 'INVALID' },
+      heartRate: makeMeasurement<number>('Heart Rate', null, 'BPM', 'NO_VALID_SIGNAL', 0),
+      spo2: makeMeasurement<number>('SpO2', null, '%', 'NO_VALID_SIGNAL', 0),
+      bloodPressure: makeMeasurement<{ systolic: number; diastolic: number }>('Blood Pressure', null, 'mmHg', 'NO_VALID_SIGNAL', 0),
+      respiration: makeMeasurement<number>('Respiration', null, 'RPM', 'NO_VALID_SIGNAL', 0),
+      arrhythmia: makeMeasurement<{ count: number; status: string; score?: number }>('Arrhythmia', null, 'events', 'NO_VALID_SIGNAL', 0),
       signalQuality: 0,
       isCalibrating: true,
       calibrationProgress: 0,
@@ -105,7 +136,7 @@ describe('HealthRiskAnalyzer', () => {
 
     const score = healthRiskAnalyzer.analyze(emptyVitals);
 
-    // No debe disparar BRADICARDIA por hr === 0
+    // No debe disparar BRADICARDIA por hr === null/0
     expect(score.flags).not.toContain('BRADICARDIA');
     expect(score.flags).not.toContain('CRISIS_HIPERTENSIVA');
     expect(score.flags).not.toContain('DESATURACION_CRITICA');
@@ -116,11 +147,11 @@ describe('HealthRiskAnalyzer', () => {
   it('normaliza dinámicamente los pesos sobre las categorías disponibles', () => {
     // Solo tenemos HR y SpO2
     const partialVitals: VitalSignsResult = {
-      heartRate: { value: 72, confidence: 0.9, status: 'VALID' },
-      spo2: { value: 98, confidence: 0.9, status: 'VALID' },
-      bloodPressure: { value: null as unknown as { systolic: number; diastolic: number }, confidence: 0, status: 'INVALID' },
-      respiration: { value: 0, confidence: 0, status: 'INVALID' },
-      arrhythmia: { value: null as unknown as { count: number; status: string; score?: number }, confidence: 0, status: 'INVALID' },
+      heartRate: makeMeasurement('Heart Rate', 72, 'BPM'),
+      spo2: makeMeasurement('SpO2', 98, '%'),
+      bloodPressure: makeMeasurement<{ systolic: number; diastolic: number }>('Blood Pressure', null, 'mmHg', 'NO_VALID_SIGNAL', 0),
+      respiration: makeMeasurement<number>('Respiration', null, 'RPM', 'NO_VALID_SIGNAL', 0),
+      arrhythmia: makeMeasurement<{ count: number; status: string; score?: number }>('Arrhythmia', null, 'events', 'NO_VALID_SIGNAL', 0),
       signalQuality: 85,
       isCalibrating: false,
       calibrationProgress: 100,

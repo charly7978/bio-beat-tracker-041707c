@@ -1,7 +1,9 @@
 {
-  "name": "vite_react_shadcn_ts",
+  "name": "bio-beat-tracker",
+  "description": "Bio-Beat Tracker — estimacion de bienestar por fotopletismografia (PPG) con camara. Producto de bienestar general, no es dispositivo medico.",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "dev": "vite",

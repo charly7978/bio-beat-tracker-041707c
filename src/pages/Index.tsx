@@ -1710,6 +1710,17 @@ const Index = () => {
                 >
                   ACEPTAR Y CONTINUAR
                 </button>
+                <p className="text-center text-zinc-500 text-[10px] leading-relaxed">
+                  Al continuar acepta los{" "}
+                  <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-emerald-400 underline">
+                    Términos de Uso
+                  </a>{" "}
+                  y la{" "}
+                  <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-emerald-400 underline">
+                    Política de Privacidad
+                  </a>
+                  . Producto de bienestar: no es dispositivo médico.
+                </p>
               </div>
             </div>
           )}
