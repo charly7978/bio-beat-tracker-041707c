@@ -100,10 +100,6 @@ export class VitalSignsProcessor {
   /** Frames seguidos con SpO2 fuera de banda de coherencia → adapta cambios reales sostenidos. */
   private spo2IncoherentStreak = 0;
 
-  // Suavizado adaptativo para estabilidad SIN perder respuesta
-  // Alpha más bajo = más suavizado = lecturas más estables
-  private readonly EMA_ALPHA_STABLE = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_PRIMARY_STABLE;
-  private readonly EMA_ALPHA_DYNAMIC = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_PRIMARY_DYNAMIC;
   /** Segundo EMA (doble suavizado) — reduce ruido residual con menos latencia que un único EMA fuerte. */
   private readonly EMA_ALPHA_SECONDARY = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_SECONDARY;
   // Estados del segundo EMA por signo vital
