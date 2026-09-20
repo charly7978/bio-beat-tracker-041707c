@@ -20,13 +20,13 @@
 |---|---|---|---|---|
 | `react`, `react-dom` | UI runtime | No | ✅ Ninguno | Solo render. |
 | `react-router-dom` | Routing | No | ✅ Ninguno | |
+| `@capacitor/android`, `@capacitor/camera`, `@capacitor/core`, `@capacitor/haptics` | Capacitor runtime | No | ✅ Ninguno | Solo hardware access. |
+| `@capgo/capacitor-health` | Health bridge | No | ✅ Ninguno | Reads native health stores. |
 | `@radix-ui/react-slot`, `@radix-ui/react-toast` | UI primitives | No | ✅ Ninguno | |
-| `lucide-react` | Iconos SVG | No | ✅ Ninguno | Estático. |
+| `@supabase/supabase-js` | Backend client | Solo persistencia post-medicion | ✅ Ninguno | No fabrica vitales; solo lee/escribe. |
 | `class-variance-authority`, `clsx`, `tailwind-merge`, `tailwindcss-animate` | Styling | No | ✅ Ninguno | |
-| `next-themes` | Theme switcher | No | ✅ Ninguno | |
-| `sonner` | Toasts | No | ✅ Ninguno | |
-| `@tanstack/react-query` | Cache de fetch | No (no se usa para signos vitales) | ✅ Ninguno | No produce datos por defecto. |
-| `@supabase/supabase-js` | Backend client | Solo persistencia post-medición | ✅ Ninguno | No fabrica vitales; solo lee/escribe. |
+| `lucide-react` | Iconos SVG | No | ✅ Ninguno | Estatico. |
+| `zustand` | State management | No | ✅ Ninguno | Solo stores numericos. |
 
 ### Build / dev (`devDependencies`)
 
@@ -67,15 +67,11 @@ Si en el futuro se necesita alguno (ej. `faker` para tests), debe quedar en `dev
 ## Conclusión
 
 El árbol de dependencias actual es **mínimo y auditado**. Ninguna librería puede contaminar el pipeline médico con valores sintéticos. El guardrail de CI bloquea automáticamente cualquier regresión.
-## Actualizacion 2026-09-20 - Poda de dependencias sin uso
+## Updated 2026-09-20 - Dependency pruning
 
-Auditoria de referencias (0 imports en src/ y supabase/, incluidas importaciones dinamicas). Eliminadas de package.json:
+Reference audit (0 imports in src/ and supabase/, including dynamic imports). Removed from package.json:
 
-- sonner (sistema de toasts activo: radix use-toast + components/ui/toast.tsx)
-- @huggingface/transformers (nunca importada)
-- @capacitor/network (el codigo usa navigator.onLine / evento online)
-- @capacitor/preferences (el codigo usa localStorage)
-- @capacitor/status-bar, @capacitor/filesystem, @capacitor/app (sin usos)
-- bun.lock eliminado (lockfile duplicado; npm + package-lock.json son los operativos)
-
-NOTA: la seccion historica de arriba mencionaba next-themes y @tanstack/react-query, que ya no existen en package.json. La lista canonica vigente es la de package.json.
+- @capacitor/network (code uses navigator.onLine / online event)
+- @capacitor/preferences (code uses localStorage directly)
+- @capacitor/status-bar, @capacitor/filesystem, @capacitor/app (no usages)
+- bun.lock removed (duplicate lockfile; npm + package-lock.json are operational)
