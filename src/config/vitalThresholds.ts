@@ -157,6 +157,13 @@ export const VITAL_THRESHOLDS = {
     SKEWNESS_SQI_HIGH: 0.2,
     SKEWNESS_SQI_FLOOR: 0.55,
     /**
+     * SQI POR KURTOSIS (Elgendi 2016, complementario a skewness): mide la puntiagudez de la onda PPG. PPG limpio con sistole abrupta = kurtosis POSITIVA (leptocurtica); senal ruidosa o aplastada = kurtosis ~0 o negativa (platicurtica). Se usa como PENALIZACION SUAVE complementaria a skewness; peso menor (6 vs 14) porque Elgendi encontro skewness como predictor mas fuerte.
+     * factor = FLOOR + (1-FLOOR)*clamp((kurt-LOW)/(HIGH-LOW),0,1).
+     */
+    KURTOSIS_SQI_LOW: -0.5,
+    KURTOSIS_SQI_HIGH: 1.0,
+    KURTOSIS_SQI_FLOOR: 0.5,
+    /**
      * HONESTIDAD DE LA ONDA: la altura mostrada se multiplica por la fuerza
      * pulsátil real = f(perfusión) × f(periodicidad). Por debajo del piso de
      * perfusión (ruido de objeto inerte) o sin periodicidad cardíaca → onda PLANA;

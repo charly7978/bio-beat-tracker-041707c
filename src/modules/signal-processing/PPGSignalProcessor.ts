@@ -892,6 +892,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       fpsEffective: this.estimatedSampleRate,
       timestampJitterMs: snapPerf.jitterMs,
       skewness: this.cachedSkewness,
+      kurtosis: this.cachedKurtosis,
       relativePower: this.cachedRelativePower,
     };
 

@@ -47,6 +47,7 @@ export class SignalQualityIndex {
       fpsEffective,
       timestampJitterMs,
       skewness,
+      kurtosis,
       relativePower,
     } = metrics;
 
@@ -80,6 +81,20 @@ export class SignalQualityIndex {
         skScore *= 14;
       }
       score += skScore;
+    }
+
+    // Kurtosis SQI (Elgendi 2016 — complementario a skewness)
+    if (kurtosis !== undefined) {
+      let kScore = 0;
+      if (kurtosis > VITAL_THRESHOLDS.QUALITY.KURTOSIS_SQI_HIGH) {
+        kScore = 6;
+      } else if (kurtosis > VITAL_THRESHOLDS.QUALITY.KURTOSIS_SQI_LOW) {
+        const t = (kurtosis - VITAL_THRESHOLDS.QUALITY.KURTOSIS_SQI_LOW) /
+          (VITAL_THRESHOLDS.QUALITY.KURTOSIS_SQI_HIGH - VITAL_THRESHOLDS.QUALITY.KURTOSIS_SQI_LOW);
+        kScore = VITAL_THRESHOLDS.QUALITY.KURTOSIS_SQI_FLOOR + (1 - VITAL_THRESHOLDS.QUALITY.KURTOSIS_SQI_FLOOR) * clamp(t, 0, 1);
+        kScore *= 6;
+      }
+      score += kScore;
     }
 
     // Relative power in cardiac band (0.5-4Hz)

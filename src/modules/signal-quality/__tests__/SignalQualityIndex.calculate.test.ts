@@ -84,6 +84,7 @@ function oracleCalculate(m: {
   fpsEffective: number;
   timestampJitterMs: number;
   skewness?: number;
+  kurtosis?: number;
   relativePower?: number;
   detectorAgreement?: number;
 }): number {
@@ -95,6 +96,18 @@ function oracleCalculate(m: {
   score += oraclePiScore(m.perfusionIndex);
   score += oracleSnrScore(m.snr ?? 0);
   score += oraclePeriodicityScore(m.periodicity ?? 0);
+  if (m.kurtosis !== undefined) {
+    let kScore = 0;
+    if (m.kurtosis > 1.0) {
+      kScore = 6;
+    } else if (m.kurtosis > -0.5) {
+      const t = (m.kurtosis + 0.5) / 1.5;
+      kScore = 0.5 + 0.5 * clamp(t, 0, 1);
+      kScore *= 6;
+    }
+    score += kScore;
+  }
+
   if (m.relativePower !== undefined && m.relativePower > 0) {
     score += oracleRpScore(m.relativePower);
   }
