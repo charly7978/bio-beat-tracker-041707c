@@ -54,6 +54,8 @@ Medición dual: finger (trasera+flash) vs gym (frontal POS Wang 2017, rPPG)
 | Estado de adquisición | `src/lib/acquisition/resolveAcquisitionStatus.ts` + `AcquisitionStabilizer.ts` |
 | Honestidad de onda | `src/lib/ui/waveHonesty.ts` (`realSignalStrength = perf×per` AND — prioridad no-lectura) |
 | Backpressure | `src/lib/perf/backpressureConfig.ts` (stride 3↔4, checked 1 s, hysteresis) |
+| Suavizado EMA adaptativo | `src/lib/measurement/adaptiveEma.ts` (núcleo único; wrappers: `displaySmoothing.ts` capa UI y `modules/vital-signs/DisplaySmoothing.ts` capa procesador) |
+| Servidores ICE (telemetría P2P) | `src/config/webrtc.ts` (consumido por `WebrtcCallWidget.tsx`) |
 
 CI ejecuta `npm run check:architecture` para impedir procesadores paralelos y rutas legacy.
 `check:orphans` verifica 0 huérfanos; `check:no-sim` prohibe Math.random/mock/synthetic sin allowlist auditada.
@@ -112,7 +114,7 @@ Reglas típicas:
 
 ## Supabase
 
-Se conservan intentos y mediciones con metadatos de calidad; **no** se deben persistir lecturas inválidas como resultados clínicos finales sin `status`/`reason`.
+Se conservan intentos y mediciones con metadatos de calidad; **no** se deben persistir lecturas inválidas como resultados clínicos finales sin `status`/`reason`. El edge function `secure-proxy` fue **eliminado** (dead code: sin referencias en el cliente); el único invocado desde `src/` es `analyze-vitals`.
 
 ## Tests y CI
 

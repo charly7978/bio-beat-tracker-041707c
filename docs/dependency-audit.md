@@ -67,3 +67,15 @@ Si en el futuro se necesita alguno (ej. `faker` para tests), debe quedar en `dev
 ## Conclusión
 
 El árbol de dependencias actual es **mínimo y auditado**. Ninguna librería puede contaminar el pipeline médico con valores sintéticos. El guardrail de CI bloquea automáticamente cualquier regresión.
+## Actualizacion 2026-09-20 - Poda de dependencias sin uso
+
+Auditoria de referencias (0 imports en src/ y supabase/, incluidas importaciones dinamicas). Eliminadas de package.json:
+
+- sonner (sistema de toasts activo: radix use-toast + components/ui/toast.tsx)
+- @huggingface/transformers (nunca importada)
+- @capacitor/network (el codigo usa navigator.onLine / evento online)
+- @capacitor/preferences (el codigo usa localStorage)
+- @capacitor/status-bar, @capacitor/filesystem, @capacitor/app (sin usos)
+- bun.lock eliminado (lockfile duplicado; npm + package-lock.json son los operativos)
+
+NOTA: la seccion historica de arriba mencionaba next-themes y @tanstack/react-query, que ya no existen en package.json. La lista canonica vigente es la de package.json.

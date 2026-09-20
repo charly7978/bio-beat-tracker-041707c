@@ -8,3 +8,4 @@ export { SignalProcessingErrorBoundary } from './SignalProcessingErrorBoundary';
 export { CameraErrorBoundary } from './CameraErrorBoundary';
 export { VitalSignsErrorBoundary } from './VitalSignsErrorBoundary';
 export { NetworkErrorBoundary } from './NetworkErrorBoundary';
+export { RootErrorBoundary } from './RootErrorBoundary';

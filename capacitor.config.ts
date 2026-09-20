@@ -22,10 +22,6 @@ const config: CapacitorConfig = {
   plugins: {
     Camera: { saveToGallery: false },
     Health: { enabled: true },
-    BackgroundTask: { enabled: true },
-    Filesystem: { enabled: true },
-    Preferences: { enabled: true },
-    Network: { enabled: true },
   },
 };
 

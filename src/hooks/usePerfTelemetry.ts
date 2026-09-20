@@ -7,7 +7,7 @@ import { bufferSnapshot, drainBuffer, deleteIds } from '@/lib/perf/indexedDbBuff
 type PerfSnapshotInsert = Database['public']['Tables']['perf_snapshots']['Insert'];
 
 const CONSENT_KEY = 'perf_telemetry_consent';
-const APP_VERSION = '1.0.0';
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
 
 export function getPerfConsent(): boolean {
   try { return localStorage.getItem(CONSENT_KEY) === '1'; } catch { return false; }
