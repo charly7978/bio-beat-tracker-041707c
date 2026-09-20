@@ -165,6 +165,63 @@ export const VITAL_THRESHOLDS = {
     WAVE_PI_FLOOR: 0.0004,
     WAVE_PI_REF: 0.003,
     WAVE_PERIODICITY_REF: 0.25,
+
+    /**
+     * SQI SCORING WEIGHTS — Elgendi 2016 (Bioengineering 3(4):21)
+     * Umbrales y escalas para el scoring SQI unificado en SignalQualityIndex.
+     * Cada métrica se normaliza: clamp((value - FLOOR) / SCALE, 0, 1) * MAX_POINTS.
+     * Todos los valores son específicos del dispositivo y ajustables.
+     */
+    SQI_SCORING: {
+      /** PI mínimo absoluto para calidad > 0 (señal pulsátil mínima) */
+      PI_FLOOR: 0.00008,
+      /** Saturación hard gate: ratio > GATE → SQI = 5 */
+      SATURATION_GATE: 0.8,
+      /** PI offset: clamp((PI - OFFSET) / SCALE) */
+      PI_SCORE_OFFSET: 0.00012,
+      /** PI scale: clamp((PI - OFFSET) / SCALE) */
+      PI_SCORE_SCALE: 0.002,
+      /** SNR scoring floor */
+      SNR_FLOOR: 0.12,
+      /** SNR scoring scale */
+      SNR_SCALE: 1.35,
+      /** Periodicity scoring floor */
+      PERIODICITY_FLOOR: 0.1,
+      /** Periodicity scoring scale */
+      PERIODICITY_SCALE: 0.38,
+      /** Relative power scoring floor */
+      RP_FLOOR: 0.15,
+      /** Relative power scoring scale */
+      RP_SCALE: 0.55,
+      /** Motion penalty threshold (motion > threshold → penalty) */
+      MOTION_PENALTY_THRESHOLD: 0.22,
+      /** Motion penalty floor */
+      MOTION_PENALTY_FLOOR: 0.55,
+      /** Jitter penalty floor (ms) */
+      JITTER_FLOOR_MS: 38,
+      /** Jitter penalty scale (ms) */
+      JITTER_SCALE_MS: 48,
+      /** FPS floor: fps < FLOOR → low FPS penalty */
+      FPS_FLOOR: 22,
+      /** FPS penalty scale */
+      FPS_SCALE: 3,
+      /** Bonus: SNR must exceed this */
+      BONUS_SNR_THRESHOLD: 0.55,
+      /** Bonus: periodicity must exceed this */
+      BONUS_PERIODICITY_THRESHOLD: 0.22,
+      /** Bonus: PI must exceed this */
+      BONUS_PI_THRESHOLD: 0.0005,
+      /** Max penalty points from frame drops */
+      DROP_PENALTY_MAX: 12,
+      /** Frame drop ratio → penalty scale */
+      DROP_RATIO_SCALE: 36,
+    },
+    /** PI mínimo para validación clínica (SQI >= MIN_FOR_CLINICAL) */
+    CLINICAL_PI_MIN: 0.0012,
+    /** SQI mínimo para mostrar vitales estimados (cámara+dedo, no certificable) */
+    ADEQUATE_SQI: 12,
+    /** PI mínimo para mostrar vitales estimados */
+    ADEQUATE_PI: 0.00028,
   },
 
   /**
@@ -180,6 +237,7 @@ export const VITAL_THRESHOLDS = {
    * dedo (frames iniciales ruidosos); un periodo de warm-up + persistencia
    * temporal del SQI es la práctica validada para PPG por smartphone.
    */
+
   ACQUISITION: {
     /** Frames mínimos con contacto antes de poder declarar READY (≈1,2 s @30 fps). */
     WARMUP_FRAMES: 36,

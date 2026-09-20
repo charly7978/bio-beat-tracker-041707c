@@ -50,22 +50,22 @@ export class SignalQualityIndex {
       relativePower,
     } = metrics;
 
-    if (perfusionIndex < 0.00008) return 0;
-    if (saturationRatio > 0.8) return 5;
+    if (perfusionIndex < VITAL_THRESHOLDS.QUALITY.SQI_SCORING.PI_FLOOR) return 0;
+    if (saturationRatio > VITAL_THRESHOLDS.QUALITY.SQI_SCORING.SATURATION_GATE) return 5;
     const under = metrics.underexposureRatio ?? 0;
-    if (under > 0.82) return 4;
+    if (under > VITAL_THRESHOLDS.ROUTER.UNDEREXPOSURE_FRAME_RATIO) return 4;
 
     let score = 0;
 
-    const piScore = clamp((perfusionIndex - 0.00012) / 0.002, 0, 1) * 26;
+    const piScore = clamp((perfusionIndex - VITAL_THRESHOLDS.QUALITY.SQI_SCORING.PI_SCORE_OFFSET) / VITAL_THRESHOLDS.QUALITY.SQI_SCORING.PI_SCORE_SCALE, 0, 1) * 26;
     score += piScore;
 
     const snrVal = snr ?? 0;
-    const snrScore = clamp((snrVal - 0.12) / 1.35, 0, 1) * 20;
+    const snrScore = clamp((snrVal - VITAL_THRESHOLDS.QUALITY.SQI_SCORING.SNR_FLOOR) / VITAL_THRESHOLDS.QUALITY.SQI_SCORING.SNR_SCALE, 0, 1) * 20;
     score += snrScore;
 
     const pVal = periodicity ?? 0;
-    const pScore = clamp((pVal - 0.1) / 0.38, 0, 1) * 18;
+    const pScore = clamp((pVal - VITAL_THRESHOLDS.QUALITY.SQI_SCORING.PERIODICITY_FLOOR) / VITAL_THRESHOLDS.QUALITY.SQI_SCORING.PERIODICITY_SCALE, 0, 1) * 18;
     score += pScore;
 
     // Skewness SQI (Elgendi 2016 — mejor predictor individual)
@@ -84,23 +84,23 @@ export class SignalQualityIndex {
 
     // Relative power in cardiac band (0.5-4Hz)
     if (relativePower !== undefined && relativePower > 0) {
-      const rpScore = clamp((relativePower - 0.15) / 0.55, 0, 1) * 10;
+      const rpScore = clamp((relativePower - VITAL_THRESHOLDS.QUALITY.SQI_SCORING.RP_FLOOR) / VITAL_THRESHOLDS.QUALITY.SQI_SCORING.RP_SCALE, 0, 1) * 10;
       score += rpScore;
     }
 
     const motion = motionScore ?? 0;
-    const motionPenalty = clamp((motion - 0.22) / 0.55, 0, 1) * 12;
-    const jitterPenalty = clamp((timestampJitterMs - 38) / 48, 0, 1) * 8;
-    const dropPenalty = Math.min(12, (frameDropRatio ?? 0) * 36);
-    const lowFpsPenalty = fpsEffective < 22 ? (22 - fpsEffective) * 3 : 0;
+    const motionPenalty = clamp((motion - VITAL_THRESHOLDS.QUALITY.SQI_SCORING.MOTION_PENALTY_THRESHOLD) / VITAL_THRESHOLDS.QUALITY.SQI_SCORING.MOTION_PENALTY_FLOOR, 0, 1) * 12;
+    const jitterPenalty = clamp((timestampJitterMs - VITAL_THRESHOLDS.QUALITY.SQI_SCORING.JITTER_FLOOR_MS) / VITAL_THRESHOLDS.QUALITY.SQI_SCORING.JITTER_SCALE_MS, 0, 1) * 8;
+    const dropPenalty = Math.min(VITAL_THRESHOLDS.QUALITY.SQI_SCORING.DROP_PENALTY_MAX, (frameDropRatio ?? 0) * VITAL_THRESHOLDS.QUALITY.SQI_SCORING.DROP_RATIO_SCALE);
+    const lowFpsPenalty = fpsEffective < VITAL_THRESHOLDS.QUALITY.SQI_SCORING.FPS_FLOOR ? (VITAL_THRESHOLDS.QUALITY.SQI_SCORING.FPS_FLOOR - fpsEffective) * VITAL_THRESHOLDS.QUALITY.SQI_SCORING.FPS_SCALE : 0;
 
     const agree = metrics.detectorAgreement ?? 0;
     const agreeBonus = agree > 0 ? clamp(agree, 0, 1) * 8 : 0;
 
     score = Math.max(0, score - motionPenalty - jitterPenalty - dropPenalty - lowFpsPenalty) + agreeBonus;
 
-    const bonus = (perfusionIndex > 0.0018 && snrVal > 0.55 ? 8 : 0) +
-                  (pVal > 0.22 && perfusionIndex > 0.0005 ? 6 : 0);
+    const bonus = (perfusionIndex > VITAL_THRESHOLDS.ACQUISITION.PI_TARGET && snrVal > VITAL_THRESHOLDS.QUALITY.SQI_SCORING.BONUS_SNR_THRESHOLD ? 8 : 0) +
+                  (pVal > VITAL_THRESHOLDS.QUALITY.SQI_SCORING.BONUS_PERIODICITY_THRESHOLD && perfusionIndex > VITAL_THRESHOLDS.QUALITY.SQI_SCORING.BONUS_PI_THRESHOLD ? 6 : 0);
     score += bonus;
 
     return Math.round(clamp(score, 0, 100));
@@ -175,7 +175,7 @@ export class SignalQualityIndex {
    * Determina si la señal es apta para cálculos clínicos de alta precisión
    */
   static isClinicallyValid(sqi: number, pi: number): boolean {
-    return sqi >= 55 && pi >= 0.0012;
+    return sqi >= VITAL_THRESHOLDS.QUALITY.MIN_FOR_CLINICAL && pi >= VITAL_THRESHOLDS.QUALITY.CLINICAL_PI_MIN;
   }
 
   /**
@@ -183,7 +183,7 @@ export class SignalQualityIndex {
    * en cámara+dedo cuando la señal es usable pero no “certificable”.
    */
   static isAdequateForLiveVitals(sqi: number, pi: number): boolean {
-    return sqi >= 12 && pi >= 0.00028;
+    return sqi >= VITAL_THRESHOLDS.QUALITY.ADEQUATE_SQI && pi >= VITAL_THRESHOLDS.QUALITY.ADEQUATE_PI;
   }
 
   /**
