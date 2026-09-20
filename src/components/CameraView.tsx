@@ -58,6 +58,35 @@ type ExtendedSettings = MediaTrackSettings & {
   exposureTime?: number;
 };
 
+interface SkinGuidePID {
+  prevError: number;
+  integral: number;
+}
+
+/**
+ * PID controller for smooth skin-guided ISO/exposure adjustment.
+ * Prevents frame-to-frame jumps; gradual convergence to target.
+ * Output: EV correction factor (approx).
+ */
+function computeSkinGuidePID(
+  state: SkinGuidePID,
+  targetRed: number,
+  measuredRed: number,
+): { output: number; newState: SkinGuidePID } {
+  const error = targetRed - measuredRed;
+  state.integral += error;
+  // Anti-windup
+  if (state.integral > 100) state.integral = 100;
+  if (state.integral < -100) state.integral = -100;
+  const derivative = error - state.prevError;
+  state.prevError = error;
+  const Kp = 0.4;
+  const Ki = 0.015;
+  const Kd = 0.12;
+  const output = Kp * error + Ki * state.integral + Kd * derivative;
+  return { output, newState: state };
+}
+
 async function requestCameraPermission(): Promise<boolean> {
   if (!isNative()) return true;
   try {
@@ -210,6 +239,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
   const streamRef = useRef<MediaStream | null>(null);
   const isStartingRef = useRef(false);
   const torchActiveRef = useRef(false);
+  const skinGuidePIDRef = useRef<SkinGuidePID>({ prevError: 0, integral: 0 });
   const onStreamReadyRef = useRef(onStreamReady);
   onStreamReadyRef.current = onStreamReady;
 
@@ -260,6 +290,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
       if (!track) return;
       void (async () => {
         try {
+          const pidResult: { output: number } = { output: 0 };
           const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
           const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
           const constraints: AdvancedConstraint[] = [];
@@ -280,28 +311,33 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
             constraints.push({ exposureMode: "manual" });
             const TARGET = 180;
             const ratio = clamp(TARGET / redLevel, 0.45, 2.2);
+            // PID skin-guided correction (smooth over frames)
+            const SKIN_RED_TARGET = 180;
+            pidResult.output = computeSkinGuidePID(skinGuidePIDRef.current, SKIN_RED_TARGET, redLevel).output;
+            const pidFactor = clamp(1 + pidResult.output * 0.005, 0.5, 2.2);
+            const effectiveRatio = ratio * pidFactor;
             if (caps.iso && typeof caps.iso.max === "number") {
               const isoMin = caps.iso.min ?? 25;
               const isoMax = caps.iso.max ?? 800;
               const curIso = settings.iso ?? (isoMin + isoMax) / 2;
-              constraints.push({ iso: clamp(Math.round(curIso * ratio), isoMin, isoMax) });
+              constraints.push({ iso: clamp(Math.round(curIso * effectiveRatio), isoMin, isoMax) });
             } else if (caps.exposureCompensation) {
               const evMin = caps.exposureCompensation.min ?? -2;
               const evMax = caps.exposureCompensation.max ?? 2;
               const curEv = settings.exposureCompensation ?? 0;
               constraints.push({
-                exposureCompensation: clamp(curEv + clamp(Math.log2(ratio), -1, 1), evMin, evMax),
+                exposureCompensation: clamp(curEv + clamp(Math.log2(effectiveRatio), -1, 1), evMin, evMax),
               });
             } else if (caps.exposureTime && typeof settings.exposureTime === "number") {
               const etMin = caps.exposureTime.min ?? settings.exposureTime;
               const etMax = caps.exposureTime.max ?? settings.exposureTime;
-              constraints.push({ exposureTime: clamp(settings.exposureTime * ratio, etMin, etMax) });
+              constraints.push({ exposureTime: clamp(settings.exposureTime * effectiveRatio, etMin, etMax) });
             }
           }
 
           if (constraints.length > 0) {
             await track.applyConstraints({ advanced: constraints });
-            log.info(`Cámara optimizada al dedo (red=${redLevel.toFixed(0)}, ${constraints.length} ajustes)`);
+            log.info(`Camera optimizada al dedo (red=${redLevel.toFixed(0)}, ${constraints.length} ajustes, pid=${pidResult?.output?.toFixed(2) ?? "0"})`);
           }
         } catch (e) {
           log.warn("optimizeForFinger falló (best-effort)", e);
