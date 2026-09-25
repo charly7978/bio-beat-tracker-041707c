@@ -441,7 +441,10 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     });
     if (stab.stabilized) acqReadyLatchRef.current = true;
     const acqStabilized = acqReadyLatchRef.current;
-    const bpmDisplay = acqStabilized ? bpmOut : (hasUsableContact && bpmLive > 0 ? bpmLive : 0);
+    // Honesto: sin estabilización por convergencia NO hay lectura. La versión
+    // anterior publicaba bpmLive pre-READY con estado WARMUP (fuga de número
+    // no estabilizado a la UI). BPM en `--` hasta convergencia real.
+    const bpmDisplay = acqStabilized ? bpmOut : 0;
 
     // Sobreescribe el stage/progress del diag con el criterio REAL de convergencia
     // (la UI revela la onda con ESTO, no con el warm-up por tiempo del procesador).

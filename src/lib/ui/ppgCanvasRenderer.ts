@@ -666,7 +666,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.font = `bold 9px ${FONT_MONO}`;
   ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
   ctx.textAlign = 'left';
-  ctx.fillText('SATURACIÓN O₂', card2X + 10, cardY + 18);
+  ctx.fillText('SATURACIÓN O₂ · EXP', card2X + 10, cardY + 18);
 
   ctx.save();
   ctx.font = `bold ${colW < 130 ? '42px' : '52px'} ${FONT_MONO}`;
@@ -683,12 +683,13 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   const pctX = card2X + 10 + (dispSpo2 > 0 ? (colW < 130 ? 54 : 64) : 40);
   ctx.fillText('%', pctX, cardY + (colW < 130 ? 56 : 64));
 
+  // Etiquetas de RANGO (no diagnósticas): SpO₂ es estimación experimental.
   let spLabel = '';
   if (dispSpo2 > 0) {
-    if (dispSpo2 >= 95) spLabel = 'NORMOXIA';
-    else if (dispSpo2 >= 90) spLabel = 'HIPOX. LEVE';
-    else if (dispSpo2 >= 85) spLabel = 'HIPOX. MOD.';
-    else spLabel = 'HIPOX. SEVERA';
+    if (dispSpo2 >= 95) spLabel = 'EN RANGO';
+    else if (dispSpo2 >= 90) spLabel = 'BAJA';
+    else if (dispSpo2 >= 85) spLabel = 'MUY BAJA';
+    else spLabel = 'FUERA DE RANGO';
   }
   ctx.font = `bold 9px ${FONT_MONO}`;
   ctx.fillStyle = spo2Color;
@@ -731,7 +732,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.font = `bold 9px ${FONT_MONO}`;
   ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
   ctx.textAlign = 'left';
-  ctx.fillText('PRESIÓN ART.', card3X + 10, cardY + 18);
+  ctx.fillText('PRESIÓN ART. · EXP', card3X + 10, cardY + 18);
 
   const bpPending =
     state.props.isMonitoring &&
@@ -764,11 +765,12 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.textAlign = 'right';
     ctx.fillText(`MAP ${map} · PP ${pp}`, card3X + colW - 8, cardY + 18);
 
+    // Etiqueta de RANGO (no diagnóstica): PA es estimación experimental.
     let bpLabel = '';
-    if (sys >= 140 || dia >= 90) bpLabel = 'HIPERTENSIÓN';
-    else if (sys >= 130 || dia >= 80) bpLabel = 'ELEVADA';
-    else if (sys < 90 || dia < 60) bpLabel = 'HIPOTENSIÓN';
-    else bpLabel = 'NORMAL';
+    if (sys >= 140 || dia >= 90) bpLabel = 'ALTA';
+    else if (sys >= 130 || dia >= 80) bpLabel = 'LIMÍTROFE';
+    else if (sys < 90 || dia < 60) bpLabel = 'BAJA';
+    else bpLabel = 'EN RANGO';
     ctx.font = `bold 9px ${FONT_MONO}`;
     ctx.fillStyle = bpColor;
     ctx.fillText(bpLabel, card3X + colW - 8, cardY + cardH - 8);
@@ -1200,9 +1202,11 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   const waveH = Math.max(40, plot.h - wavePadTop - wavePadBot);
   const waveBaseY = plot.y + wavePadTop + waveH;
 
+  // Antes del revelado (sin convergencia de la señal) la onda es PLANA:
+  // dibujar una forma gris "que parece señal" sería un placeholder ficticio.
   const strength = state.traceRevealed
     ? (state.signalStrength < 0 ? 0 : state.signalStrength > 1 ? 1 : state.signalStrength)
-    : 0.5;
+    : 0;
   const midValue = (stats.max + stats.min) / 2;
 
   let coordCount = 0;
@@ -2224,7 +2228,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
  */
 export function drawFooter(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { footer } = state.layout;
-  const { bpm, spo2, pressure, perfusionIndex: pi } = state.props;
+  const { bpm, perfusionIndex: pi } = state.props;
 
   ctx.fillStyle = 'rgba(6, 14, 28, 0.95)';
   ctx.fillRect(footer.x, footer.y, footer.w, footer.h);
@@ -2261,24 +2265,21 @@ export function drawFooter(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.fillText(c.value, cx, footer.y + 38);
   });
 
-  const map = pressure?.systolic && pressure?.diastolic
-    ? Math.round(pressure.diastolic + (pressure.systolic - pressure.diastolic) / 3)
-    : 0;
   const alarms: string[] = [];
   if (bpm != null && bpm > 0 && (bpm < 50 || bpm > 120)) alarms.push('HR');
-  if (spo2 > 0 && spo2 < 92) alarms.push('SpO₂');
-  if (map > 0 && (map < 65 || map > 110)) alarms.push('MAP');
+  // Sin avisos desde estimaciones experimentales: SpO₂/PA (MAP) nunca generan
+  // alarma; solo el pulso medido y la calidad de señal (PI) avisan de rango.
   if (pi > 0 && pi < 0.005) alarms.push('PI');
 
   ctx.textAlign = 'right';
   if (alarms.length > 0) {
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DANGER;
-    ctx.fillText(`⚠ ALARMA: ${alarms.join(' · ')}`, footer.x + footer.w - 12, footer.y + 16);
+    ctx.fillText(`⚠ AVISO: ${alarms.join(' · ')}`, footer.x + footer.w - 12, footer.y + 16);
   } else if (bpm != null && bpm > 0) {
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = '#4ade80';
-    ctx.fillText('● SIN ALARMAS', footer.x + footer.w - 12, footer.y + 16);
+    ctx.fillText('● NOMINAL', footer.x + footer.w - 12, footer.y + 16);
   }
 
   const beats = state.beatHistory;

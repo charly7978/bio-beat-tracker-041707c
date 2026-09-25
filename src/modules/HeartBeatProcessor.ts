@@ -181,14 +181,13 @@ export class HeartBeatProcessor {
   } {
     const now = timestamp ?? (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
-    // 1. Inserción Optimizada (Evita latidos retenidos infinitos)
+    // 1. Inserción honesta: solo muestras REALES del sensor.
+    // El "hold zero-drift" anterior inventaba continuidad (hold*0.999) cuando
+    // la señal filtrada era ~0 con contacto: fabricaba periodicidad donde no
+    // la había. Sin muestra real no hay muestra: el gap queda como ausencia
+    // de datos y el SQI/periodicidad caen como corresponde.
     if (Math.abs(filteredValue) > 1e-6) {
       this.pushSample(filteredValue, now);
-    } else if (this.fingerContactConfirmed && this.bufferCount > 0 && this.bufferCount < this.BUFFER_CAPACITY) {
-      // Hold zero-drift
-      const lastIdx = (this.bufferHead - 1 + this.BUFFER_CAPACITY) % this.BUFFER_CAPACITY;
-      const hold = this.signalBuffer[lastIdx] * 0.999;
-      this.pushSample(hold, now);
     }
 
     if (this.bufferCount < 20) {
@@ -272,16 +271,14 @@ export class HeartBeatProcessor {
 
       const motionSuppressed = this.ppgMotionScore > PEAK_DETECTION_DEFAULTS.peakEmitMotionSuppress;
 
-      // ---- Período Refractario Estricto Dinámico ---- //
-      // Bloqueamos la emisión si el tiempo transcurrido es menor a la mitad del RR esperado o absoluto 300ms
-      const expectedRR = this.smoothBPM > 0 ? 60000 / this.smoothBPM : 800;
-      const refractoryLimit = Math.max(280, expectedRR * 0.4); 
-      const inRefractory = decision.emit && (decision.peakTimeMs - this.lastEmittedPeakTime < refractoryLimit) && this.lastEmittedPeakTime > 0;
-
+      // Sin segunda capa refractaria aquí: `decidePeakEmit` ya aplica el
+      // refractario FIJO (~300 ms) + guarda anti-dícrota de lado bajo. La capa
+      // dinámica anterior (0.4×RR esperado) escalaba con el ritmo y bloqueaba
+      // latidos prematuros (a 50 bpm exigía 480 ms), contradiciendo el diseño
+      // arritmia-tolerante documentado en peakEmitPolicy.ts. Refractario doble
+      // y contradictorio = latidos reales perdidos tras extrasístoles.
       if (decision.emit && motionSuppressed) {
         emitReason = 'MOTION_SUPPRESSED';
-      } else if (inRefractory) {
-        emitReason = 'REFRACTORY_BLOCKED';
       } else if (decision.emit) {
         isPeak = true;
         emitReason = decision.reason;

@@ -16,10 +16,10 @@ describe('ppgMonitorClinical', () => {
     expect(hrZoneLabel(130).text).toContain('TAQUICARDIA');
   });
 
-  it('clasifica SpO2 y PA', () => {
-    expect(spo2ZoneLabel(96).text).toBe('NORMOXIA');
-    expect(bpZoneLabel(118, 76).text).toBe('NORMAL');
-    expect(bpZoneLabel(145, 92).text).toBe('HIPERTENSIÓN');
+  it('clasifica SpO2 y PA en rangos neutros experimentales (sin diagnósticos)', () => {
+    expect(spo2ZoneLabel(96).text).toBe('EN RANGO (EXP.)');
+    expect(bpZoneLabel(118, 76).text).toBe('EN RANGO (EXP.)');
+    expect(bpZoneLabel(145, 92).text).toBe('ALTA (EXP.)');
   });
 
   it('formatea contacto y colores', () => {

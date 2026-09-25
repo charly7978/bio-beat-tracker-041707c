@@ -47,6 +47,22 @@ export const useSignalProcessor = () => {
   // Throttle del snapshot UI (lastSignal): ~10 Hz es suficiente para HUD.
   const lastUiPushRef = useRef<number>(0);
   const UI_SNAPSHOT_INTERVAL_MS = 100;
+  /**
+   * CONTRAPRESIÓN EXPLÍCITA (cola acotada de capacidad 1 + descarte):
+   * `postMessage` al worker es una cola NO acotada: a 30 fps con un móvil
+   * lento el worker acumula mensajes y la latencia supera el borde vivo de
+   * emisión (1200 ms) → todos los picos caducan como NO_NEW_PEAK. Con un solo
+   * frame en vuelo, el productor (rAF/RVFC) descarta el frame nuevo mientras
+   * el worker procesa (drop-newest, O(1)): la latencia queda acotada a un
+   * tiempo de proceso y el FPS efectivo baja con elegancia en vez de
+   * acumular deuda. El descarte se contabiliza para diagnóstico.
+   */
+  const frameInFlightRef = useRef(false);
+  const frameInFlightAtRef = useRef(0);
+  const droppedFramesRef = useRef(0);
+  const lastDropLogAtRef = useRef(0);
+  /** El worker tarda > este tiempo ⇒ se considera atascado y se resincroniza. */
+  const IN_FLIGHT_STALE_MS = 500;
   const lastUiContactRef = useRef<{ finger: boolean; contact: string }>({
     finger: false,
     contact: 'NO_CONTACT',
@@ -84,6 +100,8 @@ export const useSignalProcessor = () => {
         } else if (type === 'signalReady') {
           if (initializationState.current !== 'READY') return;
           const { signal, rgbStats, backpressureState } = data;
+          // El worker terminó: la ranura de vuelo queda libre.
+          frameInFlightRef.current = false;
 
           // Actualizar las caches de telemetría
           if (rgbStats) rgbStatsRef.current = rgbStats;
@@ -216,6 +234,8 @@ export const useSignalProcessor = () => {
     };
     lastUiPushRef.current = 0;
     lastUiContactRef.current = { finger: false, contact: 'NO_CONTACT' };
+    // Liberar la ranura de vuelo: el reset del worker descarta trabajo previo.
+    frameInFlightRef.current = false;
     workerRef.current?.postMessage({ type: 'reset' });
   }, []);
 
@@ -223,6 +243,7 @@ export const useSignalProcessor = () => {
     pendingStartRef.current = false;
     isProcessingRef.current = false;
     setIsProcessing(false);
+    frameInFlightRef.current = false;
     if (workerRef.current) {
       workerRef.current.postMessage({ type: 'stop' });
     }
@@ -239,16 +260,40 @@ export const useSignalProcessor = () => {
     if (!workerRef.current || initializationState.current !== 'READY' || !isProcessingRef.current) {
       return;
     }
-    
+
+    // Contrapresión: si hay un frame en vuelo, descartar el nuevo (drop-newest)
+    // en vez de encolar deuda. Resincronizar si la ranura lleva demasiado
+    // tiempo ocupada (worker atascado o mensaje perdido).
+    const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (frameInFlightRef.current) {
+      if (nowMs - frameInFlightAtRef.current < IN_FLIGHT_STALE_MS) {
+        droppedFramesRef.current += 1;
+        if (nowMs - lastDropLogAtRef.current > 5000) {
+          lastDropLogAtRef.current = nowMs;
+          log.info(`Backpressure: ${droppedFramesRef.current} frames descartados (worker saturado)`);
+        }
+        return;
+      }
+      frameInFlightRef.current = false;
+    }
+    frameInFlightRef.current = true;
+    frameInFlightAtRef.current = nowMs;
+
     // Transferir el buffer de píxeles (Uint8ClampedArray.buffer) de forma eficiente sin copiar
     const buffer = imageData.data.buffer;
-    workerRef.current.postMessage({
-      type: 'processFrame',
-      data: {
-        imageData,
-        timestamp: frameTimestampMs
-      }
-    }, [buffer]);
+    try {
+      workerRef.current.postMessage({
+        type: 'processFrame',
+        data: {
+          imageData,
+          timestamp: frameTimestampMs
+        }
+      }, [buffer]);
+    } catch {
+      // El buffer puede estar detached si el frame se reutilizó: liberar ranura.
+      frameInFlightRef.current = false;
+      log.warn('processFrame postMessage failed (detached buffer) — frame descartado');
+    }
   }, []);
 
   const getRGBStats = useCallback(() => {
@@ -261,6 +306,11 @@ export const useSignalProcessor = () => {
 
   const getBackpressureConfig = useCallback((): BackpressureConfig => {
     return backpressureStateRef.current.config;
+  }, []);
+
+  /** Frames descartados por contrapresión (cola acotada) desde el arranque. */
+  const getDroppedFrames = useCallback((): number => {
+    return droppedFramesRef.current;
   }, []);
 
   const setCameraRuntimeHints = useCallback((diag: Record<string, unknown> | null | undefined) => {
@@ -290,6 +340,8 @@ export const useSignalProcessor = () => {
   const setMeasurementMode = useCallback((mode: MeasurementMode) => {
     measurementModeRef.current = mode;
     setMeasurementModeState(mode);
+    // El cambio de modo invalida el frame en vuelo del modo anterior.
+    frameInFlightRef.current = false;
     workerRef.current?.postMessage({
       type: 'setMeasurementMode',
       data: mode,
@@ -309,6 +361,7 @@ export const useSignalProcessor = () => {
     getRGBStats,
     getBackpressureState,
     getBackpressureConfig,
+    getDroppedFrames,
     setBackpressureConfig,
     setCameraRuntimeHints,
     setSignalCallback,

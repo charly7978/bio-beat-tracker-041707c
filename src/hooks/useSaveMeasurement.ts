@@ -22,15 +22,22 @@ interface MeasurementData {
 
 const LOCAL_STORAGE_KEY = 'local_measurements';
 
+/**
+ * Ofuscación local (NO almacenamiento seguro): la clave reside en el mismo
+ * `localStorage` que los datos y la semilla es derivable del dispositivo, así
+ * que cualquiera con acceso al dispositivo/perfil puede descifrar. Protege de
+ * miradas casuales, no de acceso forense. Nunca presentarlo como seguro.
+ */
 async function getEncryptionKey(): Promise<CryptoKey> {
   const raw = localStorage.getItem('bb-crypto-key');
   if (raw) {
     const keyData = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
+    // Acepta claves heredadas de 16 B (AES-128) y nuevas de 32 B (AES-256).
     return crypto.subtle.importKey('raw', keyData, 'AES-GCM', false, ['encrypt', 'decrypt']);
   }
   const seed = navigator.userAgent + navigator.language + 'bio-beat-2024';
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed));
-  const keyData = new Uint8Array(hash).slice(0, 16);
+  const keyData = new Uint8Array(hash).slice(0, 32);
   localStorage.setItem('bb-crypto-key', btoa(String.fromCharCode(...keyData)));
   return crypto.subtle.importKey('raw', keyData, 'AES-GCM', false, ['encrypt', 'decrypt']);
 }
@@ -170,7 +177,7 @@ export const useSaveMeasurement = () => {
       let savedLocally = false;
 
       if (authError || !user) {
-        console.log('⚠️ Guardando medición localmente (cifrado AES-GCM)...');
+        console.log('⚠️ Guardando medición localmente (ofuscación AES-GCM en dispositivo, no almacenamiento seguro)...');
         const localMeasurements = await decryptLocalMeasurements();
 
         const newRecord = {
@@ -190,8 +197,8 @@ export const useSaveMeasurement = () => {
         savedLocally = true;
 
         toast({
-          title: '✅ Guardado localmente (cifrado)',
-          description: 'Medición cifrada AES-256 guardada en este dispositivo.',
+          title: '✅ Guardado localmente (ofuscado)',
+          description: 'Medición ofuscada guardada en este dispositivo. No es almacenamiento seguro.',
           duration: 3000,
         });
       }
@@ -233,8 +240,8 @@ export const useSaveMeasurement = () => {
           localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
 
           toast({
-            title: '⚠️ Guardado localmente (cifrado)',
-            description: 'No se pudo subir a la nube. Cifrado AES-256 guardado localmente.',
+            title: '⚠️ Guardado localmente (ofuscado)',
+            description: 'No se pudo subir a la nube. Ofuscación local guardada (no es almacenamiento seguro).',
             duration: 4000,
           });
           return true;

@@ -23,7 +23,16 @@ interface CameraViewProps {
   isMonitoring: boolean;
   measurementMode?: 'finger' | 'gym';
   faceDetected?: boolean;
+  /**
+   * Se invoca cuando la adquisición se interrumpe por pérdida de visibilidad
+   * (pestaña oculta) o descarga de la página: las pistas ya fueron liberadas.
+   * El propietario debe resetear buffers/lecturas y no guardar la sesión.
+   */
+  onInterrupted?: () => void;
 }
+
+/** Tiempo máximo de espera a que el <video> presente el primer frame. */
+const WAIT_FOR_VIDEO_TIMEOUT_MS = 8000;
 
 type TorchCapableConstraint = MediaTrackConstraintSet & { torch?: boolean };
 type AdvancedConstraint = MediaTrackConstraintSet & {
@@ -106,6 +115,8 @@ type CameraErrorType =
   | 'not_readable'
   | 'overconstrained'
   | 'abort'
+  | 'timeout'
+  | 'interrupted'
   | 'unknown';
 
 function classifyCameraError(err: unknown): CameraErrorType {
@@ -116,6 +127,7 @@ function classifyCameraError(err: unknown): CameraErrorType {
     if (name === 'NotReadableError') return 'not_readable';
     if (name === 'OverconstrainedError') return 'overconstrained';
     if (name === 'AbortError') return 'abort';
+    if (name === 'VideoTimeoutError') return 'timeout';
   }
   return 'unknown';
 }
@@ -232,7 +244,7 @@ async function getBestEnvironmentCameraDeviceId(): Promise<string | undefined> {
 }
 
 const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
-  { onStreamReady, isMonitoring, measurementMode = 'finger', faceDetected },
+  { onStreamReady, isMonitoring, measurementMode = 'finger', faceDetected, onInterrupted },
   ref
 ) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -242,6 +254,15 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
   const skinGuidePIDRef = useRef<SkinGuidePID>({ prevError: 0, integral: 0 });
   const onStreamReadyRef = useRef(onStreamReady);
   onStreamReadyRef.current = onStreamReady;
+  const onInterruptedRef = useRef(onInterrupted);
+  onInterruptedRef.current = onInterrupted;
+  /**
+   * Generación de arranque: cada start/stop/desmontaje la incrementa. Los
+   * `await` intermedios capturan su generación y abortan si cambió, de modo
+   * que dos arranques concurrentes (toggle rápido, remontaje) nunca dejan
+   * dos streams vivos ni entregan un stream rancio como listo. O(1).
+   */
+  const startGenerationRef = useRef(0);
 
   useImperativeHandle(ref, () => ({
     getVideoElement: () => videoRef.current,
@@ -337,6 +358,14 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
           if (constraints.length > 0) {
             await track.applyConstraints({ advanced: constraints });
+            // Re-verificar el estado real del torch tras re-aplicar: si el
+            // hardware lo apagó, el ref debe reflejarlo (nunca asumir).
+            try {
+              const post = (track.getSettings?.() ?? {}) as ExtendedSettings;
+              torchActiveRef.current = post.torch === true;
+            } catch {
+              log.debug('Torch re-verification unavailable after optimizeForFinger');
+            }
             log.info(`Camera optimizada al dedo (red=${redLevel.toFixed(0)}, ${constraints.length} ajustes, pid=${pidResult?.output?.toFixed(2) ?? "0"})`);
           }
         } catch (e) {
@@ -349,7 +378,31 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
   useEffect(() => {
     const mountedRef = { current: true };
 
+    /**
+     * Liberación SÍNCRONA de pistas (sin await): usada en visibilitychange /
+     * pagehide, donde los await pueden no completarse. Apaga el torch de forma
+     * best-effort (sin esperar) y detiene cada track de inmediato. O(n_tracks).
+     */
+    const releaseTracksSync = () => {
+      torchActiveRef.current = false;
+      const stream = streamRef.current;
+      streamRef.current = null;
+      if (stream) {
+        for (const track of stream.getVideoTracks()) {
+          try {
+            track.applyConstraints({
+              advanced: [{ torch: false } as TorchCapableConstraint],
+            }).catch(() => undefined);
+          } catch { log.debug('Torch off sync failed (expected if unsupported)'); }
+          try { track.stop(); } catch { log.debug('track.stop() failed'); }
+        }
+      }
+      if (videoRef.current) videoRef.current.srcObject = null;
+    };
+
     const stopCamera = async () => {
+      // Invalidar arranques en vuelo: ningún `await` pendiente entregará stream.
+      startGenerationRef.current += 1;
       torchActiveRef.current = false;
       const stream = streamRef.current;
       if (stream) {
@@ -393,26 +446,53 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           }
         } catch { log.debug('Torch attempt failed — trying next syntax'); }
       }
-      // Último intento: sin verificar settings, confiar en que applyConstraints funcionó
-      try {
-        await track.applyConstraints({ advanced: [{ torch: true } as TorchCapableConstraint] });
-        torchActiveRef.current = true;
-        return true;
-      } catch { log.debug('Torch not available on this device'); }
-      log.warn("Torch no disponible en este dispositivo");
+      // Sin confirmación de `getSettings()` NO se declara éxito: un
+      // `applyConstraints` resuelto no garantiza que el LED esté encendido
+      // (MDN: el estado real solo lo confirma `track.getSettings()`).
+      log.warn("Torch no confirmado por getSettings() en este dispositivo");
       torchActiveRef.current = false;
       return false;
     };
 
-    const waitForVideo = (video: HTMLVideoElement): Promise<void> => {
-      return new Promise(resolve => {
+    /**
+     * Espera al primer frame con TIMEOUT y cancelación por generación.
+     * Rechaza con `VideoTimeoutError` si el vídeo no presenta frame en
+     * WAIT_FOR_VIDEO_TIMEOUT_MS, o con `AbortError` si un stop/desmontaje/
+     * nuevo arranque invalidó la generación en curso. Nunca espera
+     * indefinidamente (el `loadedmetadata` puede no llegar con la cámara
+     * bloqueada por otra app).
+     */
+    const waitForVideo = (video: HTMLVideoElement, generation: number): Promise<void> => {
+      return new Promise((resolve, reject) => {
         if (video.readyState >= 2 && video.videoWidth > 0) { resolve(); return; }
-        const onMeta = async () => {
+        let settled = false;
+        const timer = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
           video.removeEventListener("loadedmetadata", onMeta);
+          video.removeEventListener("canplay", onMeta);
+          const err = new DOMException("Video frame timeout", "VideoTimeoutError");
+          reject(err);
+        }, WAIT_FOR_VIDEO_TIMEOUT_MS);
+        const onMeta = async () => {
+          if (settled) return;
+          if (generation !== startGenerationRef.current || !mountedRef.current) {
+            settled = true;
+            window.clearTimeout(timer);
+            video.removeEventListener("loadedmetadata", onMeta);
+            video.removeEventListener("canplay", onMeta);
+            reject(new DOMException("Camera start superseded", "AbortError"));
+            return;
+          }
+          settled = true;
+          window.clearTimeout(timer);
+          video.removeEventListener("loadedmetadata", onMeta);
+          video.removeEventListener("canplay", onMeta);
           try { await video.play(); } catch { log.debug('Video play() rejected (autoplay policy)'); }
           resolve();
         };
         video.addEventListener("loadedmetadata", onMeta);
+        video.addEventListener("canplay", onMeta);
       });
     };
 
@@ -422,9 +502,18 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
       await stopCamera();
       if (!mountedRef.current) { isStartingRef.current = false; return; }
+      // Generación propia: cualquier stop/desmontaje/re-arranque posterior
+      // la invalida y este arranque aborta sin entregar streams rancios.
+      const generation = startGenerationRef.current + 1;
+      startGenerationRef.current = generation;
+      const alive = () => mountedRef.current && generation === startGenerationRef.current;
 
       // 1. Solicitar permiso nativo en APK antes de getUserMedia
       const permitted = await requestCameraPermission();
+      if (!alive()) {
+        isStartingRef.current = false;
+        return;
+      }
       if (!permitted) {
         log.error("Permiso de cámara denegado");
         window.dispatchEvent(new CustomEvent('camera-error', {
@@ -454,6 +543,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         } else {
           // 2. Cámara Trasera con preferencia a sensor principal con flash
           const preferredDeviceId = await getBestEnvironmentCameraDeviceId();
+          if (!alive()) { isStartingRef.current = false; return; }
           const videoConstraints: MediaTrackConstraints = {
             facingMode: preferredDeviceId ? undefined : { ideal: "environment" },
             deviceId: preferredDeviceId ? { ideal: preferredDeviceId } : undefined,
@@ -468,8 +558,8 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           });
         }
 
-        if (!mountedRef.current) {
-          stream.getTracks().forEach(t => t.stop());
+        if (!alive()) {
+          stream.getTracks().forEach(t => { try { t.stop(); } catch { log.debug('late stream track stop failed'); } });
           isStartingRef.current = false;
           return;
         }
@@ -478,47 +568,60 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          await waitForVideo(videoRef.current);
+          await waitForVideo(videoRef.current, generation);
+        }
+        if (!alive()) {
+          await stopCamera();
+          return;
         }
 
         const track = stream.getVideoTracks()[0];
         if (track && !isGym) {
           await stabilizeTrack(track, false);
+          if (!alive()) { await stopCamera(); return; }
           let torchOn = await activateTorch(track);
           if (!torchOn) {
             await new Promise(r => setTimeout(r, 400));
+            if (!alive()) { await stopCamera(); return; }
             torchOn = await activateTorch(track);
           }
-          if (torchOn) log.info("Flash activado");
+          if (torchOn) log.info("Flash activado y verificado por getSettings()");
           else log.warn("Flash no confirmado — se usará perfil de cámara tolerante");
           await applyTorchDependentParams(track, torchOn);
         } else if (track && isGym) {
           await stabilizeTrack(track, true);
           log.info("Cámara frontal lista para rPPG deportivo");
         }
+        if (!alive()) { await stopCamera(); return; }
 
         log.info(`Cámara ${isGym ? 'frontal (GYM)' : 'trasera'} lista ${videoRef.current?.videoWidth ?? "?"}x${videoRef.current?.videoHeight ?? "?"}`);
 
         onStreamReadyRef.current?.(stream);
 
       } catch (err) {
+        if (!alive()) {
+          // Arranque superado por otro: silenciar el error rancio.
+          isStartingRef.current = false;
+          return;
+        }
         const errType = classifyCameraError(err);
         log.error(`Error al inicializar cámara (${errType})`, err);
 
         // Reintentar con constraints relajados si es OverconstrainedError
-        if (errType === 'overconstrained' && mountedRef.current) {
+        if (errType === 'overconstrained' && alive()) {
           log.warn("Reintentando con constraints relajados...");
           try {
             const fallbackStream = await navigator.mediaDevices.getUserMedia({
               audio: false,
               video: { facingMode: isGym ? { ideal: "user" } : { ideal: "environment" } },
             });
-            if (mountedRef.current) {
+            if (alive()) {
               streamRef.current = fallbackStream;
               if (videoRef.current) {
                 videoRef.current.srcObject = fallbackStream;
-                await waitForVideo(videoRef.current);
+                await waitForVideo(videoRef.current, generation);
               }
+              if (!alive()) { await stopCamera(); return; }
               const track = fallbackStream.getVideoTracks()[0];
               if (track) await stabilizeTrack(track, isGym);
               log.info("Cámara iniciada con constraints relajados");
@@ -526,6 +629,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
               isStartingRef.current = false;
               return;
             }
+            fallbackStream.getTracks().forEach(t => { try { t.stop(); } catch { log.debug('fallback late stop failed'); } });
           } catch (fallbackErr) {
             log.error("Reintento con constraints relajados también falló", fallbackErr);
           }
@@ -539,6 +643,25 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
       }
     };
 
+    const handleInterrupted = (reason: 'hidden' | 'pagehide') => {
+      if (!streamRef.current) return;
+      log.warn(`Adquisición interrumpida (${reason}): liberando pistas y torch`);
+      // Bump de generación: invalida el arranque en vuelo.
+      startGenerationRef.current += 1;
+      releaseTracksSync();
+      isStartingRef.current = false;
+      window.dispatchEvent(new CustomEvent('camera-interrupted', {
+        detail: { reason },
+      }));
+      onInterruptedRef.current?.();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') handleInterrupted('hidden');
+    };
+    const onPageHide = () => handleInterrupted('pagehide');
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
+
     if (isMonitoring) {
       startCamera();
     } else {
@@ -547,6 +670,8 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
     return () => {
       mountedRef.current = false;
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
       stopCamera();
     };
   }, [isMonitoring, measurementMode]);
@@ -643,6 +768,56 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
             >
               {faceDetected ? "ROSTRO BLOQUEADO" : "ENFOCAR ROSTRO"}
             </div>
+          </div>
+        </div>
+      )}
+      {measurementMode !== 'gym' && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            paddingBottom: "18px",
+            zIndex: 10,
+          }}
+        >
+          {/* Guía de colocación del dedo sobre la cámara trasera */}
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              padding: "6px 14px",
+              borderRadius: "14px",
+              background: "rgba(0, 0, 0, 0.62)",
+              border: "1px solid rgba(255, 255, 255, 0.14)",
+              color: "#f4f4f5",
+              fontSize: "11px",
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+              textAlign: "center",
+              maxWidth: "86%",
+            }}
+          >
+            Cubre el lente trasero con el dedo · sin presionar
+          </div>
+          <div
+            style={{
+              marginTop: "6px",
+              fontSize: "10px",
+              color: "rgba(255,255,255,0.62)",
+              letterSpacing: "0.04em",
+              textAlign: "center",
+              maxWidth: "86%",
+            }}
+          >
+            Si el flash no está disponible, se usará luz ambiental y solo se
+            aceptará señal que pase los controles de calidad
           </div>
         </div>
       )}

@@ -1,5 +1,10 @@
 /**
- * Etiquetas y umbrales clínicos para el monitor PPG (solo presentación).
+ * Etiquetas y umbrales de rango para el monitor PPG (solo presentación).
+ *
+ * Pulso (HR): temporización de latidos medida → descriptores de zona estándar.
+ * SpO2/PA: ESTIMACIONES experimentales de cámara → etiquetas de RANGO neutras
+ * (nunca diagnósticas: sin NORMOXIA/HIPOXEMIA/HIPERTENSIÓN). El sufijo EXP.
+ * recuerda el origen en cada superficie que las use.
  */
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import { isPhysiologicalRR, calculateHRV } from '@/utils/physio';
@@ -26,18 +31,18 @@ export function hrZoneLabel(bpm: number): ClinicalLabel {
 
 export function spo2ZoneLabel(spo2: number): ClinicalLabel {
   if (spo2 <= 0) return { text: '—', level: 'dim' };
-  if (spo2 >= 95) return { text: 'NORMOXIA', level: 'normal' };
-  if (spo2 >= 90) return { text: 'HIPOXEMIA LEVE', level: 'warn' };
-  if (spo2 >= 85) return { text: 'HIPOXEMIA MOD.', level: 'danger' };
-  return { text: 'HIPOXEMIA SEVERA', level: 'danger' };
+  if (spo2 >= 95) return { text: 'EN RANGO (EXP.)', level: 'normal' };
+  if (spo2 >= 90) return { text: 'BAJA (EXP.)', level: 'warn' };
+  if (spo2 >= 85) return { text: 'MUY BAJA (EXP.)', level: 'danger' };
+  return { text: 'FUERA DE RANGO (EXP.)', level: 'danger' };
 }
 
 export function bpZoneLabel(sys: number, dia: number): ClinicalLabel {
   if (sys <= 0 || dia <= 0) return { text: '—', level: 'dim' };
-  if (sys >= 140 || dia >= 90) return { text: 'HIPERTENSIÓN', level: 'danger' };
-  if (sys >= 130 || dia >= 80) return { text: 'ELEVADA', level: 'warn' };
-  if (sys < 90 || dia < 60) return { text: 'HIPOTENSIÓN', level: 'warn' };
-  return { text: 'NORMAL', level: 'normal' };
+  if (sys >= 140 || dia >= 90) return { text: 'ALTA (EXP.)', level: 'danger' };
+  if (sys >= 130 || dia >= 80) return { text: 'LIMÍTROFE (EXP.)', level: 'warn' };
+  if (sys < 90 || dia < 60) return { text: 'BAJA (EXP.)', level: 'warn' };
+  return { text: 'EN RANGO (EXP.)', level: 'normal' };
 }
 
 export function formatContactState(state?: string): string {

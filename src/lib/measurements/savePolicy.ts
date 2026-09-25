@@ -1,6 +1,15 @@
 /**
  * Política única: qué se puede guardar como medición final vs solo intento auditable.
  * Incluye validación de artefactos (movimiento, saturación, subexposición).
+ *
+ * HONESTIDAD DE GUARDADO: solo el PULSO (HR VALID + SQI + artefactos) es
+ * exigible para una fila final. SpO₂ y PA son estimaciones experimentales de
+ * solo-dedo sujetas a sus propias puertas (señal suficiente y, para PA,
+ * referencia individual vigente): si faltan, se registran como no disponibles
+ * en `reasons`/diagnostics y la fila se guarda igualmente con el pulso.
+ * Métricas faltantes NUNCA se inventan: persisten como 0 y la UI/los
+ * exportadores las presentan como «no disponible». Exigir las tres a la vez
+ * descartaba pulsos fiables por estimaciones ausentes.
  */
 import type { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 import type { MeasurementStatus } from '@/types/measurements';
@@ -109,6 +118,7 @@ export function evaluateFinalMeasurementSave(
     spo2Val >= VITAL_THRESHOLDS.SPO2.MIN_VALID &&
     spo2Val <= VITAL_THRESHOLDS.SPO2.MAX_VALID;
 
+  // Informativo: la ausencia de SpO₂ no bloquea el guardado del pulso.
   if (!spo2Ok) {
     reasons.push('SPO2_NOT_VALID');
   }
@@ -121,6 +131,7 @@ export function evaluateFinalMeasurementSave(
     bpVal.systolic > 0 &&
     bpVal.diastolic > 0;
 
+  // Informativo: la ausencia de PA no bloquea el guardado del pulso.
   if (!bpOk) {
     reasons.push('BP_NOT_VALID');
   }
@@ -144,14 +155,15 @@ export function evaluateFinalMeasurementSave(
     }
   }
 
-  const canSaveFinal = hrOk && sqiOk && spo2Ok && bpOk && artifactOk;
+  // Solo el pulso fiable + calidad + artefactos deciden el guardado final.
+  // SpO₂/PA ausentes quedan en `reasons` como trazabilidad, sin bloquear.
+  const canSaveFinal = hrOk && sqiOk && artifactOk;
 
   let outcome: MeasurementAttemptOutcome = 'valid_saved';
   if (!canSaveFinal) {
-    if (!artifactOk) outcome = 'rejected_artifact';
+    if (!hrOk) outcome = 'rejected_status';
     else if (!sqiOk) outcome = 'rejected_low_quality';
-    else if (!hrOk) outcome = 'rejected_status';
-    else outcome = 'rejected_incomplete';
+    else outcome = 'rejected_artifact';
   }
 
   return { canSaveFinal, outcome, reasons };

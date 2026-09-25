@@ -308,27 +308,39 @@ const Index = () => {
       alert("No hay mediciones en el historial para exportar.");
       return;
     }
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += "Fecha,Origen,Pulso (bpm),SpO2 (%),Presion Sistolica (mmHg),Presion Diastolica (mmHg),Latidos Irregulares\n";
-    
+    // RFC 4180: comillas dobles escapadas como "" y campos siempre entrecomillados.
+    const esc = (v: unknown): string => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    // 0 = métrica no disponible (nunca se exporta como medición clínica).
+    const vitalsCell = (v: number | null | undefined): string =>
+      v != null && v > 0 ? String(Math.round(v)) : 'no disponible';
+    const rows: string[] = [
+      'Fecha,Origen,Pulso (bpm),SpO2 (%),Presion Sistolica (mmHg),Presion Diastolica (mmHg),Latidos Irregulares',
+    ];
+
     history.forEach((m) => {
       const date = new Date(m.measured_at).toISOString();
       const origin = m.isCloud ? "Nube" : "Local";
-      const hr = m.heart_rate ?? "";
-      const spo2 = m.spo2 ?? "";
-      const sys = m.systolic ?? "";
-      const dia = m.diastolic ?? "";
+      const hr = vitalsCell(m.heart_rate);
+      const spo2 = vitalsCell(m.spo2);
+      const sys = vitalsCell(m.systolic);
+      const dia = vitalsCell(m.diastolic);
       const arr = m.arrhythmia_count ?? 0;
-      csvContent += `"${date}","${origin}",${hr},${spo2},${sys},${dia},${arr}\n`;
+      rows.push([esc(date), esc(origin), hr, spo2, sys, dia, String(arr)].join(','));
     });
+    // Nota de honestidad: las estimaciones no equivalen a medición clínica.
+    rows.push(esc('NOTA: SpO2/PA son estimaciones experimentales de bienestar, no mediciones clinicas. "no disponible" = sin senal suficiente o sin referencia vigente.'));
 
-    const encodedUri = encodeURI(csvContent);
+    // BOM UTF-8 para que Excel/libros abran tildes correctamente.
+    const csvContent = '﻿' + rows.join('\r\n') + '\r\n';
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", url);
     link.setAttribute("download", `historial_bio_beat_${Date.now()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
   }, [history]);
 
   const handleAuth = useCallback(async (e: React.FormEvent) => {
@@ -428,15 +440,22 @@ const Index = () => {
     return () => window.removeEventListener('storage', check);
   }, []);
 
-  // Run risk analysis on current vitals
+  // Análisis de ritmo solo desde pulso MEDIDO (HR VALID): las estimaciones
+  // experimentales (SpO2/PA) nunca alimentan puntuaciones de riesgo.
   useEffect(() => {
-    if (lastValidResults && (lastValidResults.heartRate.value || lastValidResults.spo2.value)) {
+    if (
+      lastValidResults &&
+      lastValidResults.heartRate.status === 'VALID' &&
+      (lastValidResults.heartRate.value || 0) > 0
+    ) {
       import('@/lib/ml/riskAnalyzer').then(({ healthRiskAnalyzer }) => {
         const risk = healthRiskAnalyzer.analyze(lastValidResults);
         setRiskResult(risk.timeline);
       }).catch((err) => {
         log.warn('Risk analysis evaluation failed:', err);
       });
+    } else {
+      setRiskResult(null);
     }
   }, [lastValidResults]);
 
@@ -694,6 +713,8 @@ const Index = () => {
         not_readable: "Cámara en uso por otra aplicación",
         overconstrained: "Cámara no compatible",
         abort: "Inicio de cámara cancelado",
+        timeout: "La cámara no responde",
+        interrupted: "Medición interrumpida",
       };
       const descriptions: Record<string, string> = {
         permission_denied: "Concede el permiso en Ajustes > Aplicaciones > Bio-Beat Tracker > Permisos.",
@@ -701,6 +722,8 @@ const Index = () => {
         not_readable: "Cierra otras apps que usen la cámara e intenta de nuevo.",
         overconstrained: "Usando configuración por defecto.",
         abort: "Intenta nuevamente.",
+        timeout: "La cámara no presentó imagen a tiempo. Reintenta con buena luz.",
+        interrupted: "La pestaña se ocultó: la sesión se descartó sin guardar.",
       };
       toast({
         title: titles[errType] || "Cámara trasera no disponible",
@@ -708,8 +731,19 @@ const Index = () => {
         duration: 6000,
       });
     };
+    const interruptedHandler = () => {
+      toast({
+        title: "Medición interrumpida",
+        description: "La pestaña se ocultó: pistas liberadas y sesión descartada sin guardar.",
+        duration: 5000,
+      });
+    };
     window.addEventListener('camera-error', handler);
-    return () => window.removeEventListener('camera-error', handler);
+    window.addEventListener('camera-interrupted', interruptedHandler);
+    return () => {
+      window.removeEventListener('camera-error', handler);
+      window.removeEventListener('camera-interrupted', interruptedHandler);
+    };
   }, []);
 
   const handleToggleMonitoring = () => {
@@ -771,7 +805,7 @@ const Index = () => {
             <div className="flex items-center gap-1.5 p-1 bg-black/40 backdrop-blur-md rounded-2xl border border-white/10">
               <button
                 type="button"
-                onClick={() => setMeasurementMode('finger')}
+                onClick={() => { setMeasurementMode('finger'); resetProcessor(); }}
                 className={`px-3.5 py-1.5 rounded-xl text-[10px] font-mono font-bold tracking-wider transition-all duration-200 flex items-center gap-1.5 ${
                   measurementMode === 'finger'
                     ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/30'
@@ -783,7 +817,7 @@ const Index = () => {
               </button>
               <button
                 type="button"
-                onClick={() => setMeasurementMode('gym')}
+                onClick={() => { setMeasurementMode('gym'); resetProcessor(); }}
                 className={`px-3.5 py-1.5 rounded-xl text-[10px] font-mono font-bold tracking-wider transition-all duration-200 flex items-center gap-1.5 ${
                   measurementMode === 'gym'
                     ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/30'
@@ -891,6 +925,15 @@ const Index = () => {
               type="button"
               onClick={() => {
                 const nextMode = measurementMode === 'gym' ? 'finger' : 'gym';
+                // Cambio de sensor (frontal↔trasera): la sesión anterior queda
+                // invalidada. Reset completo si medía; si no, reset DSP para no
+                // arrastrar baselines del otro modo. Las pistas previas las
+                // libera CameraView al remontar con el nuevo modo.
+                if (session.isMonitoring) {
+                  session.handleReset();
+                } else {
+                  resetProcessor();
+                }
                 setMeasurementMode(nextMode);
                 toast({
                   title: nextMode === 'gym' ? "MODO GYM ACTIVADO" : "MODO CLÍNICO ACTIVADO",
@@ -1050,7 +1093,9 @@ const Index = () => {
                           <StatusIcon className={`w-5 h-5 ${textClass}`} />
                         </div>
                         <div>
-                          <h3 className="text-white text-sm font-bold font-heading tracking-wide">MEDICIÓN COMPLETADA</h3>
+                          <h3 className="text-white text-sm font-bold font-heading tracking-wide">
+                            {session.validationVerdict && !session.validationVerdict.accepted ? 'SESIÓN NO VÁLIDA' : 'MEDICIÓN COMPLETADA'}
+                          </h3>
                           <p className={`${textClass} text-[10px] font-semibold tracking-wider uppercase font-mono`}>{statusText}</p>
                         </div>
                       </div>
@@ -1082,7 +1127,18 @@ const Index = () => {
                           {router.vitalSigns.spo2.value != null && router.vitalSigns.spo2.value > 0 ? Math.round(router.vitalSigns.spo2.value) : '--'}
                           <span className="text-sm text-cyan-300/70 ml-0.5">%</span>
                         </div>
-                        <div className="text-zinc-400 text-[9px] mt-1 font-mono uppercase tracking-wider">SpO₂</div>
+                        <div className="text-zinc-400 text-[9px] mt-1 font-mono uppercase tracking-wider">SpO₂ · experimental</div>
+                        <div className="mt-1.5 flex justify-center">
+                          {router.vitalSigns.spo2.value != null && router.vitalSigns.spo2.value > 0 ? (
+                            router.vitalSigns.spo2.calibration?.available ? (
+                              <span className="text-[7px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">CALIBRADO</span>
+                            ) : (
+                              <span className="text-[7px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">ESTIMADO</span>
+                            )
+                          ) : (
+                            <span className="text-[7px] font-bold px-2 py-0.5 rounded-full bg-zinc-500/20 text-zinc-300 border border-zinc-500/30">NO DISPONIBLE</span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -1202,6 +1258,14 @@ const Index = () => {
                             {session.validationVerdict.rejectionReasons[0]}
                           </p>
                         )}
+                        {!session.validationVerdict.accepted && avgBpm === '--' && (
+                          <p className="text-[9px] font-mono text-amber-300/80 leading-tight">
+                            Sin pulso válido: no genera fila de historial (BPM en --).
+                          </p>
+                        )}
+                        <p className="text-[8px] font-mono text-zinc-500 leading-tight">
+                          SpO₂/PA son estimaciones experimentales de bienestar, no mediciones clínicas.
+                        </p>
                       </div>
                     )}
 
@@ -1565,11 +1629,11 @@ const Index = () => {
                                     <span className="text-white text-xs font-bold">{m.heart_rate || '--'} <span className="text-[8px] text-zinc-400">bpm</span></span>
                                   </div>
                                   <div className="bg-black/40 rounded-lg py-1 border border-zinc-950">
-                                    <span className="text-zinc-500 text-[8px] block font-bold">SpO₂</span>
+                                    <span className="text-zinc-500 text-[8px] block font-bold">SpO₂ <span className="text-amber-400/80">·EXP</span></span>
                                     <span className="text-white text-xs font-bold">{m.spo2 || '--'}<span className="text-[8px] text-zinc-400">%</span></span>
                                   </div>
                                   <div className="bg-black/40 rounded-lg py-1 border border-zinc-950">
-                                    <span className="text-zinc-500 text-[8px] block font-bold">PRESIÓN</span>
+                                    <span className="text-zinc-500 text-[8px] block font-bold">PRESIÓN <span className="text-amber-400/80">·EXP</span></span>
                                     <span className="text-white text-xs font-bold">
                                       {m.systolic && m.diastolic ? `${m.systolic}/${m.diastolic}` : '--'}
                                     </span>
@@ -1583,6 +1647,11 @@ const Index = () => {
                             <Activity className="w-8 h-8 text-slate-700 mx-auto animate-pulse" />
                             <p className="text-zinc-500 text-[10px] font-semibold">Aún no hay mediciones guardadas en este dispositivo.</p>
                           </div>
+                        )}
+                        {history.length > 0 && (
+                          <p className="text-zinc-600 text-[8px] font-mono leading-tight px-1">
+                            ·EXP = estimación experimental de bienestar, no medición clínica. «--» = no disponible (sin señal suficiente o sin referencia vigente).
+                          </p>
                         )}
                       </div>
                     </div>

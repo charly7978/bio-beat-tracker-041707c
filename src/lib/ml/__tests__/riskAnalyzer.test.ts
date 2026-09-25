@@ -62,7 +62,7 @@ describe('HealthRiskAnalyzer', () => {
     expect(score.recommendations.length).toBeGreaterThan(0);
   });
 
-  it('detecta y marca TAQUICARDIA y RIESGO_CARDIOVASCULAR_ELEVADO', () => {
+  it('detecta y marca TAQUICARDIA desde pulso medido', () => {
     const vitals = createMockVitals({
       heartRate: makeMeasurement('Heart Rate', 135, 'BPM'),
     });
@@ -81,44 +81,45 @@ describe('HealthRiskAnalyzer', () => {
     expect(score.flags).toContain('BRADICARDIA');
   });
 
-  it('detecta CRISIS_HIPERTENSIVA y asigna timeline IMMEDIATE', () => {
+  it('NO puntúa PA experimental: sin banderas de hipertensión aunque sys/dia altos', () => {
     const vitals = createMockVitals({
       bloodPressure: makeMeasurement('Blood Pressure', { systolic: 195, diastolic: 125 }, 'mmHg'),
     });
     const score = healthRiskAnalyzer.analyze(vitals);
 
-    expect(score.flags).toContain('CRISIS_HIPERTENSIVA');
-    expect(score.flags).toContain('HIPERTENSION_SEVERA');
-    expect(score.timeline).toBe('IMMEDIATE');
+    expect(score.flags).not.toContain('CRISIS_HIPERTENSIVA');
+    expect(score.flags).not.toContain('HIPERTENSION_SEVERA');
+    expect(score.flags).not.toContain('HIPERTENSION_MODERADA');
+    expect(score.categories.hypertension).toBe(0);
   });
 
-  it('detecta DESATURACION_CRITICA y evalúa hipoxia severa', () => {
+  it('NO puntúa SpO2 experimental: sin banderas de hipoxia aunque SpO2 baja', () => {
     const vitals = createMockVitals({
       spo2: makeMeasurement('SpO2', 84, '%'),
     });
     const score = healthRiskAnalyzer.analyze(vitals);
 
-    expect(score.flags).toContain('DESATURACION_CRITICA');
-    expect(score.flags).toContain('HIPOXIA_SEVERA');
-    expect(score.timeline).toBe('IMMEDIATE');
+    expect(score.flags).not.toContain('DESATURACION_CRITICA');
+    expect(score.flags).not.toContain('HIPOXIA_SEVERA');
+    expect(score.categories.hypoxia).toBe(0);
   });
 
-  it('evalúa frecuencia respiratoria fisiológica real: TAQUIPNEA y BRADIPNEA', () => {
+  it('NO puntúa respiración experimental: sin banderas TAQUIPNEA/BRADIPNEA', () => {
     // Taquipnea
     const vitalsTachypnea = createMockVitals({
       respiration: makeMeasurement('Respiration', 28, 'RPM'),
     });
     const scoreTach = healthRiskAnalyzer.analyze(vitalsTachypnea);
-    expect(scoreTach.flags).toContain('TAQUIPNEA');
-    expect(scoreTach.categories.respiratory).toBeGreaterThan(0.4);
+    expect(scoreTach.flags).not.toContain('TAQUIPNEA');
+    expect(scoreTach.categories.respiratory).toBe(0);
 
     // Bradipnea
     const vitalsBradypnea = createMockVitals({
       respiration: makeMeasurement('Respiration', 8, 'RPM'),
     });
     const scoreBrad = healthRiskAnalyzer.analyze(vitalsBradypnea);
-    expect(scoreBrad.flags).toContain('BRADIPNEA');
-    expect(scoreBrad.categories.respiratory).toBeGreaterThan(0.4);
+    expect(scoreBrad.flags).not.toContain('BRADIPNEA');
+    expect(scoreBrad.categories.respiratory).toBe(0);
   });
 
   it('NO inventa lecturas falsas ni dispara falsas alarmas ante signos ausentes o nulos', () => {

@@ -197,3 +197,63 @@
 .animate-scanline {
   animation: scanline-pass 8s linear infinite;
 }
+
+/* Acquisition-state tokens: color semántico único para cada estado de
+   cámara/señal en vivo, resultado, historial y cuenta. */
+@layer utilities {
+  .acq-valid {
+    color: #34d399;
+    border-color: rgba(52, 211, 153, 0.45);
+  }
+
+  .acq-warmup {
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.45);
+  }
+
+  .acq-nofinger {
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.45);
+  }
+
+  .acq-torch {
+    color: #fcd34d;
+    border-color: rgba(252, 211, 77, 0.45);
+  }
+
+  .acq-motion {
+    color: #fb923c;
+    border-color: rgba(251, 146, 60, 0.45);
+  }
+
+  /* Etiqueta persistente de estimación experimental (bienestar, no médica). */
+  .badge-exp {
+    font-size: 7px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    letter-spacing: 0.06em;
+    background: rgba(245, 158, 11, 0.2);
+    color: #fcd34d;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+}
+
+/* Accesibilidad: foco visible y respeto a movimiento reducido. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-cardiac,
+  .animate-ripple,
+  .animate-hologram,
+  .animate-scanline {
+    animation: none;
+  }
+}

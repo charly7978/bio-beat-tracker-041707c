@@ -174,10 +174,13 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const waveGainRef = useRef(4.2);
 
   useImperativeHandle(ref, () => ({
-    pushSignal: (val: number, _ts: number) => {
+    pushSignal: (val: number, ts?: number) => {
       if (!dataBufferRef.current) return;
       const scaledValue = val * waveGainRef.current;
-      const now = Date.now();
+      // Dominio temporal del canvas: reloj de pared (coherente con `state.now`
+      // y la ventana de tendencia del renderer). Se honra el timestamp
+      // provisto cuando es finito; antes se ignoraba siempre.
+      const now = typeof ts === 'number' && Number.isFinite(ts) ? ts : Date.now();
       const isArrhythmia = now < arrActiveUntilRef.current;
       dataBufferRef.current.push({
         time: now,

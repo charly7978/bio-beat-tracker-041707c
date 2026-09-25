@@ -76,12 +76,26 @@ describe('evaluateFinalMeasurementSave', () => {
     expect(r.canSaveFinal).toBe(false);
   });
 
-  it('rechaza SpO2 no VALID aunque HR sea válido', () => {
+  it('guarda HR válido aunque SpO2 no esté disponible (estimación experimental ausente)', () => {
     const vs = makeVs('VALID', 60);
     vs.spo2 = { ...vs.spo2, value: 0, status: 'NO_VALID_SIGNAL' };
     const r = evaluateFinalMeasurementSave(vs, 60);
-    expect(r.canSaveFinal).toBe(false);
+    expect(r.canSaveFinal).toBe(true);
+    expect(r.outcome).toBe('valid_saved');
     expect(r.reasons).toContain('SPO2_NOT_VALID');
+  });
+
+  it('guarda HR válido aunque PA no esté disponible (sin referencia vigente)', () => {
+    const vs = makeVs('VALID', 60);
+    vs.bloodPressure = {
+      ...vs.bloodPressure,
+      value: { systolic: 0, diastolic: 0 },
+      status: 'NO_VALID_SIGNAL',
+    };
+    const r = evaluateFinalMeasurementSave(vs, 60);
+    expect(r.canSaveFinal).toBe(true);
+    expect(r.outcome).toBe('valid_saved');
+    expect(r.reasons).toContain('BP_NOT_VALID');
   });
 
   it('acepta HR en el límite inferior fisiológico (30 BPM)', () => {
