@@ -22,7 +22,7 @@
  *
  * Referencias:
  *   - Abramowitz & Stegun, "Handbook of Mathematical Functions" (9th ed.) §19.6
- *   - Zverev, "Handbook of Filter Synthesis" (1967) // anti-sim-allow: reason="Filter design handbook citation" ref="PR-123"
+   *   - Zverev, "Handbook of Filter Synthesis" (1967) // anti-sim-allow: reason="Filter design handbook citation" ref="AUDIT-2026-10-15"
  *   - Williams & Taylor, "Electronic Filter Design Handbook" (4th ed.) Ch. 11
  */
 import { DSP_CONSTANTS } from '../../../config/signalProcessing';

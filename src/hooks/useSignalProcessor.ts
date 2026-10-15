@@ -1,6 +1,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ProcessedSignal, ProcessingError, MeasurementMode } from '../types/signal';
+import { PPGSignalProcessor } from '../modules/signal-processing/PPGSignalProcessor';
 import {
   loadBackpressureConfig,
   saveBackpressureConfig,
@@ -71,6 +72,62 @@ export const useSignalProcessor = () => {
   // Single-instance lifecycle guard.
   const initializationState = useRef<'IDLE' | 'INITIALIZING' | 'READY' | 'ERROR'>('IDLE');
   const pendingStartRef = useRef(false);
+  /** true cuando el pipeline corre en el hilo principal (worker no disponible). */
+  const fallbackModeRef = useRef(false);
+  /** Procesador del fallback main-thread (mutuamente excluyente con el worker). */
+  const fallbackProcessorRef = useRef<PPGSignalProcessor | null>(null);
+
+  /**
+   * Manejo UNIFICADO de señal lista — compartido por el camino worker
+   * (`signalReady`) y el camino fallback main-thread (`onSignalReady` directo).
+   * Mantiene un único punto de verdad para telemetría, hot-path callback y
+   * snapshot de UI.
+   */
+  const handleSignalReady = useCallback((data: {
+    signal: ProcessedSignal;
+    rgbStats: unknown;
+    backpressureState: unknown;
+  }) => {
+    if (initializationState.current !== 'READY') return;
+    const { signal, rgbStats, backpressureState } = data;
+    // El worker terminó: la ranura de vuelo queda libre.
+    frameInFlightRef.current = false;
+
+    // Actualizar las caches de telemetría
+    if (rgbStats) rgbStatsRef.current = rgbStats as typeof rgbStatsRef.current;
+    if (backpressureState) {
+      backpressureStateRef.current = backpressureState as typeof backpressureStateRef.current;
+      setCurrentStride((prev) => {
+        const stride = (backpressureState as typeof backpressureStateRef.current).pixelStride;
+        return prev !== stride ? stride : prev;
+      });
+    }
+
+    // 1) Hot path: callback síncrono (DSP, ringbuffers, refs en Index).
+    const cb = realtimeCbRef.current;
+    if (cb) {
+      try { cb(signal); } catch {
+        log.warn('Realtime callback threw — signal may be stale');
+      }
+    }
+
+    // 2) Snapshot UI throttleado a ~10 Hz para HUD/diagnóstico.
+    const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const contactChanged =
+      signal.fingerDetected !== lastUiContactRef.current.finger ||
+      signal.contactState !== lastUiContactRef.current.contact;
+    if (contactChanged) {
+      lastUiContactRef.current = {
+        finger: signal.fingerDetected,
+        contact: signal.contactState,
+      };
+      lastUiPushRef.current = nowMs;
+      setLastSignal(signal);
+    } else if (nowMs - lastUiPushRef.current >= UI_SNAPSHOT_INTERVAL_MS) {
+      lastUiPushRef.current = nowMs;
+      setLastSignal(signal);
+    }
+  }, []);
 
   useEffect(() => {
     if (initializationState.current !== 'IDLE') {
@@ -98,42 +155,7 @@ export const useSignalProcessor = () => {
             log.info('PPG Web Worker inicializado y arrancado por solicitud pendiente');
           }
         } else if (type === 'signalReady') {
-          if (initializationState.current !== 'READY') return;
-          const { signal, rgbStats, backpressureState } = data;
-          // El worker terminó: la ranura de vuelo queda libre.
-          frameInFlightRef.current = false;
-
-          // Actualizar las caches de telemetría
-          if (rgbStats) rgbStatsRef.current = rgbStats;
-          if (backpressureState) {
-            backpressureStateRef.current = backpressureState;
-            setCurrentStride((prev) => (prev !== backpressureState.pixelStride ? backpressureState.pixelStride : prev));
-          }
-
-          // 1) Hot path: callback síncrono (DSP, ringbuffers, refs en Index).
-          const cb = realtimeCbRef.current;
-          if (cb) {
-            try { cb(signal); } catch {
-              log.warn('Realtime callback threw — signal may be stale');
-            }
-          }
-
-          // 2) Snapshot UI throttleado a ~10 Hz para HUD/diagnóstico.
-          const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
-          const contactChanged =
-            signal.fingerDetected !== lastUiContactRef.current.finger ||
-            signal.contactState !== lastUiContactRef.current.contact;
-          if (contactChanged) {
-            lastUiContactRef.current = {
-              finger: signal.fingerDetected,
-              contact: signal.contactState,
-            };
-            lastUiPushRef.current = nowMs;
-            setLastSignal(signal);
-          } else if (nowMs - lastUiPushRef.current >= UI_SNAPSHOT_INTERVAL_MS) {
-            lastUiPushRef.current = nowMs;
-            setLastSignal(signal);
-          }
+          handleSignalReady(data);
         } else if (type === 'backpressureConfigChanged') {
           if (data) {
             backpressureStateRef.current.config = data;
@@ -151,19 +173,57 @@ export const useSignalProcessor = () => {
           backpressureConfig: loadBackpressureConfig()
         }
       });
-    } catch (e) {
-      log.error('Failed to initialize PPG Web Worker:', e);
-      initializationState.current = 'ERROR';
+    } catch {
+      // ── FALLBACK MAIN-THREAD (contrato real, no degradación silenciosa) ──
+      // Worker no disponible (CSP, WebView antiguo, modo offline del bundler).
+      // El MISMO procesador corre en el hilo principal con el mismo contrato:
+      // onSignalReady → handleSignalReady. Sin worker no hay contrapresión
+      // drop-newest (todo se procesa en el mismo hilo); se marca el modo para
+      // diagnóstico y la UI muestra el aviso correspondiente.
+      fallbackModeRef.current = true;
+      try {
+        const processor = new PPGSignalProcessor(
+          (signal) => {
+            handleSignalReady({
+              signal,
+              rgbStats: processor.getRGBStats(),
+              backpressureState: processor.getBackpressureState(),
+            });
+          },
+          (error) => {
+            console.error(`PPGSignalProcessor main-thread fallback error: ${error.code} ${error.message}`);
+          },
+        );
+        processor.setBackpressureConfig(loadBackpressureConfig());
+        fallbackProcessorRef.current = processor;
+        initializationState.current = 'READY';
+        log.warn('PPG Web Worker no disponible — pipeline en main thread (fallback activo)');
+        if (pendingStartRef.current && !isProcessingRef.current) {
+          isProcessingRef.current = true;
+          setIsProcessing(true);
+          processor.start();
+        }
+      } catch (fallbackErr) {
+        // Si tampoco el main-thread puede iniciar, error explícito (no simular).
+        initializationState.current = 'ERROR';
+        console.error('PPGSignalProcessor fallback init failed:', fallbackErr);
+      }
     }
 
     return () => {
       if (workerRef.current) {
+        workerRef.current.onmessage = null;
         workerRef.current.terminate();
         workerRef.current = null;
       }
+      if (fallbackProcessorRef.current) {
+        fallbackProcessorRef.current.stop();
+        fallbackProcessorRef.current = null;
+      }
+      fallbackModeRef.current = false;
       initializationState.current = 'IDLE';
     };
-  }, []);
+  }, [handleSignalReady]);
 
   // Listener de movimiento en el hilo principal
   useEffect(() => {
@@ -214,8 +274,8 @@ export const useSignalProcessor = () => {
 
   const startProcessing = useCallback(() => {
     pendingStartRef.current = true;
-    if (!workerRef.current || initializationState.current !== 'READY') {
-      log.info('startProcessing solicitado mientras worker inicializa — encolado');
+    if (initializationState.current !== 'READY') {
+      log.info('startProcessing solicitado mientras el pipeline inicializa — encolado');
       return;
     }
     if (isProcessingRef.current) {
@@ -223,7 +283,11 @@ export const useSignalProcessor = () => {
     }
     isProcessingRef.current = true;
     setIsProcessing(true);
-    workerRef.current.postMessage({ type: 'start' });
+    if (fallbackProcessorRef.current) {
+      fallbackProcessorRef.current.start();
+    } else {
+      workerRef.current?.postMessage({ type: 'start' });
+    }
   }, []);
 
   /** Reset duro del procesador (fin de sesión o cambio de cámara). */
@@ -236,7 +300,11 @@ export const useSignalProcessor = () => {
     lastUiContactRef.current = { finger: false, contact: 'NO_CONTACT' };
     // Liberar la ranura de vuelo: el reset del worker descarta trabajo previo.
     frameInFlightRef.current = false;
-    workerRef.current?.postMessage({ type: 'reset' });
+    if (fallbackProcessorRef.current) {
+      fallbackProcessorRef.current.resetSession();
+    } else {
+      workerRef.current?.postMessage({ type: 'reset' });
+    }
   }, []);
 
   const stopProcessing = useCallback(() => {
@@ -244,8 +312,10 @@ export const useSignalProcessor = () => {
     isProcessingRef.current = false;
     setIsProcessing(false);
     frameInFlightRef.current = false;
-    if (workerRef.current) {
-      workerRef.current.postMessage({ type: 'stop' });
+    if (fallbackProcessorRef.current) {
+      fallbackProcessorRef.current.stop();
+    } else {
+      workerRef.current?.postMessage({ type: 'stop' });
     }
     setLastSignal(null);
     lastUiPushRef.current = 0;
@@ -257,9 +327,22 @@ export const useSignalProcessor = () => {
   }, []);
 
   const processFrame = useCallback((imageData: ImageData, frameTimestampMs?: number) => {
-    if (!workerRef.current || initializationState.current !== 'READY' || !isProcessingRef.current) {
+    if (initializationState.current !== 'READY' || !isProcessingRef.current) {
       return;
     }
+
+    // ── Camino fallback main-thread: proceso sincrónico directo ──
+    const fallback = fallbackProcessorRef.current;
+    if (fallback) {
+      try {
+        fallback.processFrame(imageData, frameTimestampMs);
+      } catch (e) {
+        log.warn('processFrame fallback threw — frame descartado', e);
+      }
+      return;
+    }
+
+    if (!workerRef.current) return;
 
     // Contrapresión: si hay un frame en vuelo, descartar el nuevo (drop-newest)
     // en vez de encolar deuda. Resincronizar si la ranura lleva demasiado
@@ -314,6 +397,10 @@ export const useSignalProcessor = () => {
   }, []);
 
   const setCameraRuntimeHints = useCallback((diag: Record<string, unknown> | null | undefined) => {
+    if (fallbackProcessorRef.current) {
+      fallbackProcessorRef.current.setCameraRuntimeHints(diag);
+      return;
+    }
     workerRef.current?.postMessage({
       type: 'setCameraRuntimeHints',
       data: diag
@@ -324,12 +411,16 @@ export const useSignalProcessor = () => {
     const nextCfg = { ...backpressureStateRef.current.config, ...partial };
     saveBackpressureConfig(nextCfg);
     backpressureStateRef.current.config = nextCfg;
-    
-    workerRef.current?.postMessage({
-      type: 'setBackpressureConfig',
-      data: partial
-    });
-    
+
+    if (fallbackProcessorRef.current) {
+      fallbackProcessorRef.current.setBackpressureConfig(partial);
+    } else {
+      workerRef.current?.postMessage({
+        type: 'setBackpressureConfig',
+        data: partial
+      });
+    }
+
     return nextCfg;
   }, []);
 
@@ -342,11 +433,15 @@ export const useSignalProcessor = () => {
     setMeasurementModeState(mode);
     // El cambio de modo invalida el frame en vuelo del modo anterior.
     frameInFlightRef.current = false;
-    workerRef.current?.postMessage({
-      type: 'setMeasurementMode',
-      data: mode,
-    });
-    log.info(`useSignalProcessor: Modo enviado al worker: ${mode}`);
+    if (fallbackProcessorRef.current) {
+      fallbackProcessorRef.current.setMeasurementMode(mode);
+    } else {
+      workerRef.current?.postMessage({
+        type: 'setMeasurementMode',
+        data: mode,
+      });
+    }
+    log.info(`useSignalProcessor: Modo enviado al procesador: ${mode} (${fallbackModeRef.current ? 'main-thread' : 'worker'})`);
   }, []);
 
   return {
@@ -366,5 +461,7 @@ export const useSignalProcessor = () => {
     setCameraRuntimeHints,
     setSignalCallback,
     resetProcessor,
+    /** true si el pipeline corre en el hilo principal (worker no disponible). */
+    isFallbackMode: fallbackModeRef.current,
   };
 };

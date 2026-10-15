@@ -19,10 +19,10 @@ useSignalProcessor → PPGSignalProcessor  ─┐
     │  + pulsatilidad CV + ensemble)      │  → PPGSignalProcessor en worker
     │ AC/DC preciso, Bandpass Butterworth│     (init/start/stop/processFrame/motion/
     │ 4º orden + Bessel 0.5–12 Hz morfo   │      setCameraRuntimeHints/setMeasurementMode)
-    │ activeStabilizer + pulseAgc + SQI  │  Si worker no disponible: fallback sync
-    │ AdaptiveRuntimePolicy (roiScale/    │  en main thread (backpressure stride 3→4)
-    │  bandLow/Hi, sourceHysteresis)     │
-    ▼                                     │
+    │ activeStabilizer + pulseAgc + SQI  │  Si worker no disponible (CSP/WebView):
+    │ AdaptiveRuntimePolicy (roiScale/    │  FALLBACK main-thread REAL — el mismo
+    │  bandLow/Hi, sourceHysteresis)      │  PPGSignalProcessor en el hilo principal
+    ▼                                     │  con contrato idéntico (handleSignalReady)
 ProcessedSignal (con splitter: hr/spo2/morph/resp/arr)
     ├─► useHeartBeatProcessor → HeartBeatProcessor
     │       PeakDetectionEnsemble (Elgendi MApeak/MAbeat + scorePeakCandidate)
@@ -40,6 +40,15 @@ Index.tsx → PPGSignalMeter (Canvas 2D Catmull-Rom + 3D ribbon)
           + useMeasurementSession (60 s, 60 s trend)
 Medición dual: finger (trasera+flash) vs gym (frontal POS Wang 2017, rPPG)
 ```
+
+**Fallback worker → main-thread (implementado 2026-10-15):** si `new Worker`
+falla (CSP, WebView antiguo), `useSignalProcessor` instancia `PPGSignalProcessor`
+en el hilo principal con el mismo pipeline y contrato (`onSignalReady` →
+`handleSignalReady`, telemetría RGB/backpressure, hot-path callback). La
+contrapresión drop-newest solo aplica al modo worker (en main-thread todo se
+procesa sincrónico). Expuesto como `isFallbackMode` para diagnóstico. Nunca se
+degrada a "señal inventada": si tampoco el main-thread inicia, el estado es
+`ERROR` explícito.
 
 ## Fuentes de verdad (anti-duplicación)
 
@@ -115,6 +124,19 @@ Reglas típicas:
 ## Supabase
 
 Se conservan intentos y mediciones con metadatos de calidad; **no** se deben persistir lecturas inválidas como resultados clínicos finales sin `status`/`reason`. El edge function `secure-proxy` fue **eliminado** (dead code: sin referencias en el cliente); el único invocado desde `src/` es `analyze-vitals`.
+
+### Secretos y almacenamiento local (auditado 2026-10-15)
+
+- `.env` **eliminado del control de versiones** (`git rm --cached .env`, 2026-10-15):
+  seguía trackeado desde commits antiguos pese a `.gitignore`. El archivo local
+  se conserva para desarrollo. Si el repo fue público, la anon/publishable key
+  debe rotarse (RLS verificado en las 7 migraciones: `auth.uid() = user_id`).
+- Ninguna `service_role` key en `src/` (verificado: 0 coincidencias).
+- Mediciones locales y dataset de validación se guardan **cifrados** con
+  `src/lib/storage/localEncryptedStorage.ts` (AES-GCM, clave en dispositivo).
+  Semántica honesta documentada en el módulo: **ofuscación local, no
+  almacenamiento seguro** — sin `crypto.subtle` (HTTP no seguro) el sistema
+  NO escribe en plano, degrada a no-guardar.
 
 ## Tests y CI
 

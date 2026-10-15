@@ -79,9 +79,11 @@ interface VitalSignsProcessorAPI {
         dcBlue?: number;
       };
     },
-    faceBvp?: number,
-    faceBpm?: number,
-    faceQuality?: number,
+    /**
+     * Respiración del acelerómetro (modalidad ACC de la Smart Fusion, Karlen
+     * 2013) — pre-estimada en el procesador porque vive con el listener
+     * DeviceMotion; se propaga aquí para que llegue a VitalSignsProcessor.
+     */
     accelRespiration?: { rpm: number; quality: number },
   ) => VitalSignsResult;
   setPlacementMode: (mode: FingerPlacementMode) => void;
@@ -611,7 +613,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
                 heartRate: { ...prev.heartRate, value: 0, status: "NO_VALID_SIGNAL" },
                 spo2: { ...prev.spo2, value: 0, status: "NO_VALID_SIGNAL" },
                 bloodPressure: { ...prev.bloodPressure, value: { systolic: 0, diastolic: 0 }, status: "NO_VALID_SIGNAL" },
-                arrhythmia: { ...prev.arrhythmia, value: { count: 0, status: "NORMAL" } },
+                arrhythmia: { ...prev.arrhythmia, value: { count: 0, status: "CALIBRANDO..." } },
                 signalQuality: 0,
               }
         ));
@@ -738,7 +740,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         lastSignal.perfusionIndex,
         enrichedSqm,
         lastSignal.morphologyValue ?? lastSignal.filteredValue,
-        splitterChannels
+        splitterChannels,
+        lastSignal.accelRespiration,
       );
 
       vitalSignsRef.current = vitals;

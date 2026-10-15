@@ -72,7 +72,11 @@ export class VitalSignsProcessor {
     systolicPressure: 0,
     diastolicPressure: 0,
     arrhythmiaCount: 0,
-    arrhythmiaStatus: "SIN ARRITMIAS|0",
+    // Estado inicial HONESTO: sin RR válidos aún no se puede afirmar ritmo
+    // normal ni ausencia de arritmias (regla "sin lectura" sobre lectura falsa).
+    // El ArrhythmiaProcessor transiciona CALIBRANDO... → APRENDIENDO RITMO...
+    // → RITMO NORMAL / ARRITMIA DETECTADA sobre evidencia real.
+    arrhythmiaStatus: "CALIBRANDO...",
     arrhythmiaScore: 0,
     lastArrhythmiaData: null as { timestamp: number; rmssd: number; rrVariation: number; } | null,
     signalQuality: 0
@@ -215,9 +219,6 @@ export class VitalSignsProcessor {
         dcBlue?: number;
       };
     },
-    faceBvp?: number,
-    faceBpm?: number,
-    faceQuality?: number,
     /** Respiración pre-estimada del acelerómetro (IMU) — 4ª modalidad de la Smart Fusion. */
     accelRespiration?: { rpm: number; quality: number },
   ): VitalSignsResult {
@@ -310,15 +311,7 @@ export class VitalSignsProcessor {
     // Validar pulso real (BP y arritmias; SpO2 usa ratio RGB y no depende de RR)
     this.validateRealPulse(rrData);
 
-    // Fusionar BPM de dedo y rostro usando pesos de calidad
-    let fusedBpm = currentBPM;
-    if (typeof faceBpm === 'number' && faceBpm > 45 && faceBpm < 200 && typeof faceQuality === 'number' && faceQuality > 15) {
-      const fingerWeight = Math.max(5, signalQuality);
-      const faceWeight = Math.max(5, faceQuality);
-      fusedBpm = (currentBPM * fingerWeight + faceBpm * faceWeight) / (fingerWeight + faceWeight);
-    }
-
-    this.calculateVitalSigns(signalValue, effectiveSqi, fusedBpm, rrData);
+    this.calculateVitalSigns(signalValue, effectiveSqi, currentBPM, rrData);
 
     return this.getFormattedResult();
   }
@@ -810,7 +803,7 @@ export class VitalSignsProcessor {
     this.validPulseCount = 0;
     this.arrhythmiaProcessor.reset();
     this.measurements.arrhythmiaCount = 0;
-    this.measurements.arrhythmiaStatus = "SIN ARRITMIAS|0";
+    this.measurements.arrhythmiaStatus = "CALIBRANDO...";
     this.measurements.lastArrhythmiaData = null;
     this.spo2Calculator.reset();
     this.lastPpgPerfusionIndex = 0;
@@ -840,7 +833,7 @@ export class VitalSignsProcessor {
       systolicPressure: 0,
       diastolicPressure: 0,
       arrhythmiaCount: 0,
-      arrhythmiaStatus: "SIN ARRITMIAS|0",
+      arrhythmiaStatus: "CALIBRANDO...",
       arrhythmiaScore: 0,
       lastArrhythmiaData: null,
       signalQuality: 0

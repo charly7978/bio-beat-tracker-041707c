@@ -1,6 +1,26 @@
 # Auditoría Anti-Simulación — Pipeline PPG
 
-**Fecha de auditoría:** 2026-05-09 — **RE-VERIFICADA y ampliada: 2026-10-15** (auditoría exhaustiva)
+**Fecha de auditoría:** 2026-05-09 — **RE-VERIFICADA y ampliada: 2026-10-15 (2ª pasada, auditoría completa)**
+
+> **Delta de la re-verificación 2026-10-15 — pasada 2 (arreglos integrales ejecutados):**
+> - ✅ **§6 SpO2 — eliminado el clamp inferior forzado.** El modelo cuadrático ya
+>   no se clampea a `MIN_VALID` (75): una lectura cruda <75 se devuelve tal cual
+>   y el gate de publicación (`VitalSignsProcessor`, banda [70,100]) decide
+>   mostrar o `--`. El offset del perfil de calibración tampoco clampea. El
+>   único límite que permanece es el físico superior (100%).
+> - ✅ **§8 Arritmias — estado inicial honesto implementado.** El claim de la
+>   pasada 1 era prematuro: el código arrancaba en `"SIN ARRITMIAS|0"`. Ahora
+>   el estado inicial/reset es `"CALIBRANDO..."` (VitalSignsProcessor,
+>   defaultVitalSignsResult y limpieza de sesión del router) — sin RR válidos
+>   NO se afirma ritmo normal ni ausencia de arritmia.
+> - ➕ **Añadido 2026-10-15:** la modalidad ACC (respiración por acelerómetro,
+>   Karlen 2013) estaba calculada en el worker y descartada por wiring ausente.
+>   Ahora se propaga `ProcessedSignal.accelRespiration` → useSignalRouter →
+>   VitalSignsProcessor y participa en la Smart Fusion (verificado por test).
+> - ➕ **Añadido 2026-10-15:** la fusión dual finger/rostro (`faceBpm`/`faceBvp`)
+>   era inalcanzable (ningún caller la pasaba). Eliminada como código muerto en
+>   lugar de cablear datos inexistentes. En modo gym el BPM sale del ensemble
+>   sobre la señal POS facial (camino real).
 **Alcance:** cámara → procesamiento → BPM → SpO₂ → Presión Arterial → Arritmias → UI
 **Resultado:** ✅ **Sin simulaciones, sin valores artificiales, sin generadores aleatorios en `src/`.**
 
@@ -63,7 +83,9 @@
 
 ### 6. SpO₂ (`VitalSignsProcessor` / SpO2 head)
 - Calculado vía ratio R/G real (AC/DC). Si SQI insuficiente → `spo2=0` → UI muestra `--`.
-- Sin floor `90%`, sin clamping fisiológico forzado.
+- **Sin clamp inferior fisiológico forzado** (verificado 2026-10-15): el modelo
+  devuelve el valor crudo; las lecturas fuera de [70,100] simplemente no se
+  publican (el gate las rechaza), nunca se ajustan a un piso "bonito".
 
 ### 7. Presión arterial (`BloodPressureProcessor.ts`)
 - Modelo de regresión PWA sobre 74 features morfológicos reales (APG b/a, d/a, AIx, SI, dicrotic notch).
@@ -73,7 +95,7 @@
 
 ### 8. Arritmias (`arrhythmia-processor.ts`)
 - Detectadas exclusivamente desde RR-intervals reales obtenidos de los picos del HeartBeatProcessor.
-- Estados: `CALIBRANDO...` → `APRENDIENDO RITMO...` (8–18 s) → `RITMO NORMAL` / `ARRITMIA DETECTADA`. El contador de confirmación exige evidencia SOSTENIDA (integrador con fugas); no se incrementa sin evento RR genuino ni contador sembrado.
+- Estados: `CALIBRANDO...` → `APRENDIENDO RITMO...` (8–18 s) → `RITMO NORMAL` / `ARRITMIA DETECTADA`. El estado inicial del procesador y de la UI es `CALIBRANDO...` (nunca "SIN ARRITMIAS" sin evidencia — verificado 2026-10-15). El contador de confirmación exige evidencia SOSTENIDA (integrador con fugas); no se incrementa sin evento RR genuino ni contador sembrado.
 
 ### 9. Capa de UI (`Index.tsx`, `PPGSignalMeter.tsx`, `ppgCanvasRenderer.ts`, `waveHonesty.ts`)
 - Todos los componentes muestran `--` cuando el valor es `0` o `null` proveniente del pipeline.

@@ -80,6 +80,8 @@ interface ROIMetrics {
   rawGreen: number;
   rawBlue: number;
   coverageRatio: number;
+  /** Fracción de píxeles muestreados del ROI con canal rojo saturado (>250). */
+  saturationRatio: number;
   fingerScore: number;
   fingerTileCount: number;
   roiX: number;
@@ -131,8 +133,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private backpressureConfig: BackpressureConfig = { ...DEFAULT_BACKPRESSURE_CONFIG };
 
   // Buffer reutilizable de tiles (evita Array.from + map por frame).
-  private readonly tileBuffer: { red: number; green: number; blue: number; count: number }[] =
-    Array.from({ length: this.TILE_COLUMNS * this.TILE_ROWS }, () => ({ red: 0, green: 0, blue: 0, count: 0 }));
+  private readonly tileBuffer: { red: number; green: number; blue: number; sat: number; count: number }[] =
+    Array.from({ length: this.TILE_COLUMNS * this.TILE_ROWS }, () => ({ red: 0, green: 0, blue: 0, sat: 0, count: 0 }));
 
   // Buffer pre-asignado para tile metrics (evita map/filter chain en hot path).
   // Cada slot corresponde a un tile; se reutiliza cada frame.
@@ -518,27 +520,18 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.lastKnownBpm,
     );
 
-    // 7. Métricas de periodicidad y calidad de señal facial
+    // 7. Métricas de periodicidad y calidad — SQI CENTRAL (mismo motor que
+    // finger: SignalQualityIndex, sin fórmula paralela). Métricas honestas
+    // disponibles en modo facial: fuerza de la señal POS como SNR proxy del
+    // pulso, movimiento del tracker y saturación del canal rojo del rostro.
     const endSqi = ppgPerf.start('sqi');
-    this.periodicitySkip++;
-    if (this.periodicitySkip >= 4 || this.filteredBuffer.length < 90) {
-      this.periodicitySkip = 0;
-      const pInstant = this.calculatePeriodicity();
-      this.periodicityEma =
-        this.periodicityEma <= 0
-          ? pInstant
-          : this.periodicityEma * 0.72 + pInstant * 0.28;
-    }
-    this.cachedPeriodicity = this.periodicityEma;
-
-    const snapPerf = ppgPerf.snapshot();
-    const rawSqi = clamp(
-      Math.round((1 - face.motionScore * 0.45) * (this.cachedPeriodicity * 65 + 35)),
-      10,
-      98,
-    );
-    this.cachedSqi = rawSqi;
-    this.signalQuality = rawSqi;
+    this.refreshSlowWindows();
+    const { snapPerf } = this.computeCentralSqi({
+      perfusionIndex: this.cachedPI,
+      snr: Math.abs(cleanedPos),
+      motionScore: face.motionScore,
+      saturationRatio: face.rawRed > 250 ? 1 : 0,
+    });
 
     this.displaySqiEma = SignalQualityIndex.smoothDisplayedSqi(
       this.displaySqiEma,
@@ -731,7 +724,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const underInstant = r < 12 && g < 10 ? 1 : 0;
     this.underexposureEma = this.underexposureEma * 0.92 + underInstant * 0.08;
     
+    // Gates de rechazo: smoothed RGB (respuesta lenta, estable) + ratio de
+    // saturación REAL del ROI (reacción inmediata ante flash con dedo apretando
+    // el lente: >80% de píxeles recortados = señal inservible, no lecturas).
     if (r > 253 && g > 252) rejectionStatus = "SATURATED";
+    else if (roi.saturationRatio > VITAL_THRESHOLDS.QUALITY.SQI_SCORING.SATURATION_GATE) {
+      rejectionStatus = "SATURATED";
+    }
     else if (
       r < (this.cameraHints.constrained ? 8 : 15) &&
       g < (this.cameraHints.constrained ? 6 : 10)
@@ -842,56 +841,17 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     );
 
     const endSqi = ppgPerf.start('sqi');
-    this.periodicitySkip++;
-    if (this.periodicitySkip >= 4 || this.filteredBuffer.length < 90) {
-      this.periodicitySkip = 0;
-      const pInstant = this.calculatePeriodicity();
-      this.periodicityEma =
-        this.periodicityEma <= 0
-          ? pInstant
-          : this.periodicityEma * 0.72 + pInstant * 0.28;
-    }
-    this.cachedPeriodicity = this.periodicityEma;
+    this.refreshSlowWindows();
 
-    this.sqiMetricsCounter++;
-    if (this.sqiMetricsCounter >= 8 && this.filteredBuffer.length >= 60) {
-      this.sqiMetricsCounter = 0;
-      const fLen = this.filteredBuffer.length;
-      const fTail = this.filteredBuffer.tail(fLen);
-      if (fTail.length >= 30) {
-        // Momentos de la ventana filtrada (una pasada, testeada en dsp.test).
-        // skewness/kurtosis en convención Fisher-Pearson; kurtosis en EXCESO
-        // (β₂−3) — requerido por los umbrales KURTOSIS_SQI_* (ver computeWindowMoments).
-        const moments = computeWindowMoments(fTail);
-        this.cachedSkewness = moments.skewness;
-        this.cachedKurtosis = moments.kurtosis;
-        this.cachedRelativePower = this.cachedPeriodicity;
-      }
-    }
-
-    const snapPerf = ppgPerf.snapshot();
-    const metrics: SignalQualityMetrics = {
-      sqi: 0,
+    // SQI CENTRAL (SignalQualityIndex) — mismo motor que el modo gym; el único
+    // snapshot de perf del frame se toma aquí y se reutiliza en sqm y log.
+    const { snapPerf } = this.computeCentralSqi({
       perfusionIndex: this.cachedPI,
       snr: pulseSource.strength,
-      periodicity: this.cachedPeriodicity,
       motionScore: this.motionScore,
-      saturationRatio: roi.rawRed > 250 ? 1 : 0,
-      underexposureRatio: this.underexposureEma,
-      frameDropRatio: snapPerf.droppedEstimate / Math.max(1, this.frameCount),
-      fpsEffective: this.estimatedSampleRate,
-      timestampJitterMs: snapPerf.jitterMs,
-      skewness: this.cachedSkewness,
-      kurtosis: this.cachedKurtosis,
-      relativePower: this.cachedRelativePower,
-    };
+      saturationRatio: roi.saturationRatio,
+    });
 
-    this.cachedSqi = SignalQualityIndex.calculate(metrics);
-    this.signalQuality = this.cachedSqi;
-
-    // === DECISIONES ADAPTATIVAS EN TIEMPO REAL (relativas a la sesión) ===
-    // Actualiza ROI, banda del filtro, histéresis de fuente y rango de calidad
-    // a partir de la distribución online de SQI/movimiento (sin umbrales fijos).
     updateAdaptivePolicy(this.adaptivePolicy, {
       sqi: this.cachedSqi,
       motion: Math.max(this.motionScore, this.signalMotionScore),
@@ -958,7 +918,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const now = timestamp;
     if (now - this.lastLogTime >= 2000) {
       this.lastLogTime = now;
-      const snap = ppgPerf.snapshot();
+      const snap = snapPerf;
       log.info(
         `[${pulseSource.label}] Filt=${enhanced.toFixed(3)} agc=${this.pulseAgcState.scale.toFixed(2)} Q=${displayQuality} raw=${this.signalQuality} ` +
         `PI=${perfusionIndex.toFixed(4)} P=${this.cachedPeriodicity.toFixed(2)} Contact=${this.contactState} ` +
@@ -1029,11 +989,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           periodicity: this.cachedPeriodicity,
           // Movimiento efectivo = max(IMU, micro-movimiento del dedo desde la señal).
           motionScore: Math.max(this.motionScore, this.signalMotionScore),
-          saturationRatio: (roi.rawRed > 250 ? 1 : 0),
+          saturationRatio: roi.saturationRatio,
           underexposureRatio: this.underexposureEma,
           fpsEffective: this.estimatedSampleRate,
-          frameDropRatio: ppgPerf.snapshot().droppedEstimate / Math.max(1, this.frameCount),
-          timestampJitterMs: ppgPerf.snapshot().jitterMs,
+          frameDropRatio: snapPerf.droppedEstimate / Math.max(1, this.frameCount),
+          timestampJitterMs: snapPerf.jitterMs,
         } as SignalQualityMetrics,
       },
     });
@@ -1313,7 +1273,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       Math.min(width, height) *
       VITAL_THRESHOLDS.FINGER.ROI_SIZE_FRACTION *
       this.adaptivePolicy.roiScale;
-    const side = Math.floor(roiSize);
+    // El ROI nunca puede exceder el lado menor del frame: si lo hiciera, el
+    // clamp de startX con min>max produciría offsets negativos y lecturas
+    // fuera del buffer de píxeles (NaN en tiles).
+    const side = Math.max(1, Math.min(Math.floor(roiSize), Math.min(width, height)));
     
     const centerX = Math.floor(width * this.trackedCentroid.x);
     const centerY = Math.floor(height * this.trackedCentroid.y);
@@ -1421,7 +1384,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const tiles = this.tileBuffer;
     for (let i = 0; i < tiles.length; i++) {
       const t = tiles[i];
-      t.red = 0; t.green = 0; t.blue = 0; t.count = 0;
+      t.red = 0; t.green = 0; t.blue = 0; t.sat = 0; t.count = 0;
     }
 
     const roiWidth = Math.max(1, endX - startX);
@@ -1439,6 +1402,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         tile.red += data[i];
         tile.green += data[i + 1];
         tile.blue += data[i + 2];
+        if (data[i] > 250) tile.sat++;
         tile.count++;
       }
     }
@@ -1453,6 +1417,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     let sumWeight = 0;
     let sumX = 0;
     let sumY = 0;
+    let totalSampled = 0;
+    let saturatedSamples = 0;
 
     for (let i = 0; i < N; i++) {
       const t = tiles[i];
@@ -1462,6 +1428,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         m.isFinger = false;
         continue;
       }
+      totalSampled += t.count;
+      saturatedSamples += t.sat;
       const red = t.red / t.count;
       const green = t.green / t.count;
       const blue = t.blue / t.count;
@@ -1573,12 +1541,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.trackedCentroid.y = this.trackedCentroid.y * (1 - alphaDrift) + 0.5 * alphaDrift;
     }
 
+    const saturationRatio = totalSampled > 0 ? saturatedSamples / totalSampled : 0;
+
     if (validCount === 0) {
       return {
         rawRed: 0,
         rawGreen: 0,
         rawBlue: 0,
         coverageRatio: 0,
+        saturationRatio,
         fingerScore: 0,
         fingerTileCount: 0,
         roiX: startX,
@@ -1650,6 +1621,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       rawGreen: finalRawGreen,
       rawBlue: finalRawBlue,
       coverageRatio: fingerCount / validCount,
+      saturationRatio,
       fingerScore: fingerCount > 0 ? fingerScoreSum / fingerCount : 0,
       fingerTileCount: fingerCount,
       roiX: startX,
@@ -1974,6 +1946,71 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return 0;
   }
 
+  /**
+   * PERIODICIDAD + MOMENTOS DE VENTANA (throttled) — refresco compartido por
+   * ambos modos (finger y gym). Los momentos (skewness/kurtosis en exceso) se
+   * recalculan cada 8 frames; la periodicidad cada 4.
+   */
+  private refreshSlowWindows(): void {
+    this.periodicitySkip++;
+    if (this.periodicitySkip >= 4 || this.filteredBuffer.length < 90) {
+      this.periodicitySkip = 0;
+      const pInstant = this.calculatePeriodicity();
+      this.periodicityEma =
+        this.periodicityEma <= 0
+          ? pInstant
+          : this.periodicityEma * 0.72 + pInstant * 0.28;
+    }
+    this.cachedPeriodicity = this.periodicityEma;
+
+    this.sqiMetricsCounter++;
+    if (this.sqiMetricsCounter >= 8 && this.filteredBuffer.length >= 60) {
+      this.sqiMetricsCounter = 0;
+      const fLen = this.filteredBuffer.length;
+      const fTail = this.filteredBuffer.tail(fLen);
+      if (fTail.length >= 30) {
+        const moments = computeWindowMoments(fTail);
+        this.cachedSkewness = moments.skewness;
+        this.cachedKurtosis = moments.kurtosis;
+        this.cachedRelativePower = this.cachedPeriodicity;
+      }
+    }
+  }
+
+  /**
+   * SQI CENTRAL — única fuente de verdad para finger y gym (ARCHITECTURE.md).
+   * Recibe las métricas que cada modo puede aportar honestamente (snr y
+   * saturationRatio son modo-específicos; el resto es común) y delega el
+   * scoring a SignalQualityIndex, nunca a una fórmula paralela.
+   */
+  private computeCentralSqi(metrics: {
+    perfusionIndex: number;
+    snr: number | null;
+    motionScore: number;
+    saturationRatio: number;
+  }): { sqi: number; snapPerf: ReturnType<typeof ppgPerf.snapshot> } {
+    const snapPerf = ppgPerf.snapshot();
+    const sqiMetrics: SignalQualityMetrics = {
+      sqi: 0,
+      perfusionIndex: metrics.perfusionIndex,
+      snr: metrics.snr,
+      periodicity: this.cachedPeriodicity,
+      motionScore: metrics.motionScore,
+      saturationRatio: metrics.saturationRatio,
+      underexposureRatio: this.underexposureEma,
+      frameDropRatio: snapPerf.droppedEstimate / Math.max(1, this.frameCount),
+      fpsEffective: this.estimatedSampleRate,
+      timestampJitterMs: snapPerf.jitterMs,
+      skewness: this.cachedSkewness,
+      kurtosis: this.cachedKurtosis,
+      relativePower: this.cachedRelativePower,
+    };
+    const sqi = SignalQualityIndex.calculate(sqiMetrics);
+    this.cachedSqi = sqi;
+    this.signalQuality = sqi;
+    return { sqi, snapPerf };
+  }
+
   /** PI proxy desde CV temporal del ROI (antes de que ACDC llene la ventana). */
   private estimatePulsePiFromRoi(): number {
     const snap = this.rgbSnapshotFromSmoothed();
@@ -2074,7 +2111,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   reset(): void {
     this.resetSignalTrackingBuffers();
-    this.tileConfidence = new Array(25).fill(0);
+    this.tileConfidence = new Array(this.TILE_COLUMNS * this.TILE_ROWS).fill(0);
     this.frameIntervalBuffer.reset();
     this.estimatedSampleRate = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
     this.fingerDetected = false;

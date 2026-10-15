@@ -50,7 +50,7 @@ export const useVitalSignsProcessor = () => {
     value: number, 
     quality: number,
     bpm: number,
-    rrData?: { intervals: number[], lastPeakTime: number | null, timestampNow?: number },
+    rrData?: { intervals: number[], lastPeakTime: number | null; timestampNow?: number },
     /** PI (AC/DC) del PPGSignalProcessor — alinea SpO2/“clínico” con la perfusión real del dedo */
     perfusionIndexFromPpg?: number,
     sqmBundle?: Partial<SignalQualityMetrics>,
@@ -68,6 +68,8 @@ export const useVitalSignsProcessor = () => {
         dcBlue?: number;
       };
     },
+    /** Respiración del acelerómetro (IMU) — 4ª modalidad de la Smart Fusion (Karlen 2013). */
+    accelRespiration?: { rpm: number; quality: number },
   ): VitalSignsResult => {
     if (!processorRef.current) return createDefaultVitalSignsResult();
 
@@ -80,6 +82,7 @@ export const useVitalSignsProcessor = () => {
       sqmBundle,
       morphologyValue,
       splitterChannels,
+      accelRespiration,
     );
     
     // Guardar la última ventana realmente válida para cierre/exportación en ref para evitar re-renderizados constantes

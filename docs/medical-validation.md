@@ -15,11 +15,15 @@ muestra `--` (regla "prioridad a *sin lectura* sobre lectura falsa").
 
 | Dimensión | Evidencia | Estado |
 |---|---|---|
-| Corrección numérica del pipeline | 353 tests (Vitest), oráculos independientes para SQI y detector de picos | ✅ Verde (`npm run test`) |
+| Corrección numérica del pipeline | 360 tests (Vitest), oráculos independientes para SQI y detector de picos | ✅ Verde (`npm run test`) |
 | Anti-simulación | `npm run check:no-sim` + `check:no-sim:dist` (0 violaciones en `src/`) | ✅ Verde |
 | Arquitectura / duplicación | `npm run check:architecture` (10 módulos canónicos), `check:orphans` (0 huérfanos) | ✅ Verde |
 | Build producción | `npm run build` + guardrail dist | ✅ Verde |
 | Banda fisiológica HR | 30–220 bpm, RR 270–2200 ms (`VITAL_THRESHOLDS.HR`) con rechazo, no clampeo | ✅ Implementado |
+| SQI central único | `SignalQualityIndex.calculate` es el único motor (finger y gym; 2026-10-15 se eliminó la fórmula paralela del modo gym) | ✅ Implementado |
+| Saturación | `saturationRatio` = fracción REAL de píxeles recortados del ROI (2026-10-15; antes binaria) + gate de rechazo >0.8 | ✅ Implementado |
+| SpO2 sin piso forzado | Lectura cruda del modelo; fuera de [70,100] no se publica (`--`), nunca se ajusta a 75% (2026-10-15) | ✅ Implementado |
+| Estado arritmia | Inicial/reset = `CALIBRANDO...`; sin RR válidos no se afirma ritmo (2026-10-15) | ✅ Implementado |
 | Bases de los modelos SQI/picos | Elgendi 2016 (Bioengineering 3(4):21), Wang 2017 (IEEE TBME 64(7):1479 POS), Karlen 2013 (respiración) | ✅ Documentadas en código |
 | HRV | RMSSD/SDNN/pNN50 sobre RR reales del ensemble | ⚠️ Implementado, sin validación clínica externa |
 
@@ -30,7 +34,9 @@ muestra `--` (regla "prioridad a *sin lectura* sobre lectura falsa").
    No existen métricas de error (MAE, límites de concordancia) publicadas.
 2. **SpO2 (verde como proxy IR).** Modelo ratio-of-ratios con calibración
    empírica de smartphone (`SPO2.R_MODEL_A/B/C`, gamma de cámara d=2.2).
-   Precisión no validada; **no presentar como saturación clínica**.
+   Precisión no validada; **no presentar como saturación clínica**. El valor
+   crudo del modelo se publica solo dentro de [70,100]; fuera de banda la UI
+   muestra `--` (sin piso forzado desde 2026-10-15).
 3. **PA.** Fusión Windkessel-PDA + MLP. El MLP (`mlpWeights.ts`) fue entrenado
    sobre datos **sintéticos** (fórmulas sobre features aleatorios, seed 42 —
    ver cabecera del archivo). Sin calibración individual el estado es

@@ -39,7 +39,7 @@ export function createDefaultVitalSignsResult(): VitalSignsResult {
     arrhythmia: {
       ...base,
       name: 'Arrhythmia',
-      value: { count: 0, status: 'NORMAL' },
+      value: { count: 0, status: 'CALIBRANDO...' },
       unit: 'event',
     },
     signalQuality: 0,

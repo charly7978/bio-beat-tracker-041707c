@@ -287,6 +287,11 @@ export class SpO2Calculator {
     const piFactor = clamp(avgPI / 0.5, 0.7, 1.3);
 
     // ── Modelo Cuadrático de SpO2 Mejorado (Task 4) ──
+    // SIN clamp inferior fisiológico forzado: si el modelo dice 68%, devuelve 68
+    // y el gating de publicación (VitalSignsProcessor: [70,100]) decide mostrar
+    // o '--'. Un Math.max(MIN_VALID) enmascararía una desaturación real — la
+    // regla del proyecto es "sin lectura" sobre lectura falseada.
+    // El CAP superior sí es físico: la saturación no puede superar 100%.
     const A = spoCfg.R_MODEL_A ?? -3.5;
     const B = spoCfg.R_MODEL_B ?? -7.5;
     const C = spoCfg.R_MODEL_C ?? 104;
@@ -296,17 +301,16 @@ export class SpO2Calculator {
 
     let spo2 = Math.min(
       spoCfg.DISPLAY_CAP,
-      Math.max(
-        spoCfg.MIN_VALID,
-        C + adjB * medianR + adjA * medianR * medianR,
-      ),
+      C + adjB * medianR + adjA * medianR * medianR,
     );
 
     const calib = CalibrationManager.getInstance();
     const activeSpo2Profile = calib.getActiveProfile('SPO2');
     if (spo2 > 0 && activeSpo2Profile) {
       const spo2Offset = activeSpo2Profile.coefficients.spo2Offset ?? 0;
-      spo2 = clamp(spo2 + spo2Offset, spoCfg.MIN_VALID, spoCfg.DISPLAY_CAP);
+      // Offset de calibración SIN piso: el gaging de publicación filtra fuera de
+      // banda ([70,100]); el offset solo corrige el sesgo del perfil de referencia.
+      spo2 = Math.min(spoCfg.DISPLAY_CAP, spo2 + spo2Offset);
     }
 
     if (frameCount % 30 === 0) {

@@ -10,6 +10,11 @@ import {
 } from '@/lib/measurements/savePolicy';
 import { ValidationDataset } from '@/modules/vital-signs/ValidationDataset';
 import { CalibrationManager } from '@/modules/vital-signs/CalibrationManager';
+import {
+  decryptLocal,
+  encryptLocal,
+  getOrCreateLocalKey,
+} from '@/lib/storage/localEncryptedStorage';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('useSaveMeasurement');
@@ -21,36 +26,23 @@ interface MeasurementData {
 }
 
 const LOCAL_STORAGE_KEY = 'local_measurements';
+const LOCAL_KEY_STORAGE_KEY = 'bb-crypto-key';
 
 /**
  * Ofuscación local (NO almacenamiento seguro): la clave reside en el mismo
  * `localStorage` que los datos y la semilla es derivable del dispositivo, así
  * que cualquiera con acceso al dispositivo/perfil puede descifrar. Protege de
  * miradas casuales, no de acceso forense. Nunca presentarlo como seguro.
+ * Semántica completa en `src/lib/storage/localEncryptedStorage.ts`.
  */
-async function getEncryptionKey(): Promise<CryptoKey> {
-  const raw = localStorage.getItem('bb-crypto-key');
-  if (raw) {
-    const keyData = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
-    // Acepta claves heredadas de 16 B (AES-128) y nuevas de 32 B (AES-256).
-    return crypto.subtle.importKey('raw', keyData, 'AES-GCM', false, ['encrypt', 'decrypt']);
-  }
-  const seed = navigator.userAgent + navigator.language + 'bio-beat-2024';
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed));
-  const keyData = new Uint8Array(hash).slice(0, 32);
-  localStorage.setItem('bb-crypto-key', btoa(String.fromCharCode(...keyData)));
-  return crypto.subtle.importKey('raw', keyData, 'AES-GCM', false, ['encrypt', 'decrypt']);
+async function getEncryptionKey(): Promise<CryptoKey | null> {
+  return getOrCreateLocalKey(LOCAL_KEY_STORAGE_KEY);
 }
 
-async function encryptLocalMeasurements(data: unknown): Promise<string> {
+async function encryptLocalMeasurements(data: unknown): Promise<string | null> {
   const key = await getEncryptionKey();
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = new TextEncoder().encode(JSON.stringify(data));
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
-  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
-  combined.set(iv);
-  combined.set(new Uint8Array(ciphertext), iv.length);
-  return btoa(String.fromCharCode(...combined));
+  if (!key) return null;
+  return encryptLocal(key, data);
 }
 
 export async function decryptLocalMeasurements(): Promise<unknown[]> {
@@ -58,18 +50,11 @@ export async function decryptLocalMeasurements(): Promise<unknown[]> {
   if (!raw) return [];
   try {
     const key = await getEncryptionKey();
-    const combined = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
-    const iv = combined.slice(0, 12);
-    const ciphertext = combined.slice(12);
-    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
-    return JSON.parse(new TextDecoder().decode(decrypted));
-  } catch {
-    try {
-      const fallback = JSON.parse(raw);
-      if (Array.isArray(fallback)) return fallback;
-    } catch (e) {
-      log.debug('Fallback raw JSON parse failed:', e);
-    }
+    if (!key) return [];
+    const parsed = await decryptLocal<unknown[]>(key, raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    log.debug('Local measurements decrypt failed:', e);
     return [];
   }
 }
@@ -141,7 +126,7 @@ export const useSaveMeasurement = () => {
         const bpProfile = calib.getActiveProfile('BP');
         const spo2Profile = calib.getActiveProfile('SPO2');
 
-        ValidationDataset.addEntry({
+        await ValidationDataset.addEntry({
           timestamp: new Date().toISOString(),
           device: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
           quality: {
@@ -193,14 +178,24 @@ export const useSaveMeasurement = () => {
 
         localMeasurements.push(newRecord);
         const encrypted = await encryptLocalMeasurements(localMeasurements);
-        localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
-        savedLocally = true;
+        if (encrypted == null) {
+          // Sin crypto.subtle no se escribe en plano: se informa y no se marca
+          // como guardado (regla "sin lectura falsa" también aplica al almacén).
+          toast({
+            title: '⚠️ No se pudo cifrar localmente',
+            description: 'Este entorno no permite cifrado (requiere HTTPS/localhost). La medición no se guardó en el dispositivo.',
+            duration: 5000,
+          });
+        } else {
+          localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
+          savedLocally = true;
 
-        toast({
-          title: '✅ Guardado localmente (ofuscado)',
-          description: 'Medición ofuscada guardada en este dispositivo. No es almacenamiento seguro.',
-          duration: 3000,
-        });
+          toast({
+            title: '✅ Guardado localmente (ofuscado)',
+            description: 'Medición ofuscada guardada en este dispositivo. No es almacenamiento seguro.',
+            duration: 3000,
+          });
+        }
       }
 
       if (!savedLocally && user) {
@@ -237,7 +232,9 @@ export const useSaveMeasurement = () => {
             measured_at: new Date().toISOString(),
           });
           const encrypted = await encryptLocalMeasurements(localMeasurements);
-          localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
+          if (encrypted != null) {
+            localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
+          }
 
           toast({
             title: '⚠️ Guardado localmente (ofuscado)',

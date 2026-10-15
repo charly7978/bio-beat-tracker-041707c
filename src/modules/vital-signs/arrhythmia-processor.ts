@@ -411,7 +411,7 @@ export class ArrhythmiaProcessor {
 
   /**
    * Proper Sample Entropy via template matching (Richman & Moorman 2000).
-   * Counts模板 matches of length m and m+1 within tolerance r.
+   * Counts template matches of length m and m+1 within tolerance r.
    */
   private computeSampleEntropy(data: number[], m: number, r: number): number {
     const N = data.length;
