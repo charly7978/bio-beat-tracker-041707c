@@ -774,8 +774,12 @@ const Index = () => {
       WebkitTouchCallout: 'none',
       WebkitUserSelect: 'none'
     }}>
-      {/* SPLASH / BOOT SCREEN — Puerta de entrada a pantalla completa inmersiva */}
-      {!session.isFullscreen && (
+      {/* SPLASH / BOOT SCREEN — Puerta de entrada a pantalla completa inmersiva.
+          Solo tras aceptar el descargo médico: el flujo legal es
+          disclaimer → splash → uso. Antes competían por el mismo espacio con
+          stacking contexts distintos (splash z-[100] vs contenedor z-10) y el
+          splash interceptaba el click del disclaimer. */}
+      {disclaimerAccepted && !session.isFullscreen && (
         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-gradient-to-b from-zinc-950 via-black to-zinc-950 animate-in fade-in duration-700">
           <div className="relative flex flex-col items-center max-w-xs text-center space-y-10 px-4">
             
@@ -1743,59 +1747,64 @@ const Index = () => {
             </div>
           )}
 
-          {/* DESCARGO DE RESPONSABILIDAD MÉDICA */}
-          {!disclaimerAccepted && (
-            <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/95 backdrop-blur-md animate-fade-in p-4 overflow-y-auto">
-              <div className="bg-black border border-zinc-900/80 rounded-2xl max-w-sm w-full shadow-2xl p-5 space-y-5 animate-in zoom-in-95 duration-300 max-h-[90vh] flex flex-col">
-                <div className="text-center space-y-2">
-                  <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto">
-                    <AlertTriangle className="w-6 h-6 text-red-500" />
-                  </div>
-                  <h3 className="text-white text-base font-bold tracking-wide uppercase">DESCARGO DE RESPONSABILIDAD MÉDICA</h3>
-                  <p className="text-red-400 text-[10px] font-bold tracking-wider uppercase">IMPORTANTE LEER ANTES DE USAR</p>
-                </div>
-
-                <div className="flex-1 overflow-y-auto text-zinc-400 text-[11px] leading-relaxed space-y-3.5 pr-1 border-y border-zinc-950 py-4">
-                  <p>
-                    Esta aplicación utiliza fotopletismografía (PPG) a través de la cámara y el flash de su smartphone para estimar el pulso, la variabilidad de la frecuencia cardíaca, la saturación de oxígeno ($SpO_2$) y la presión arterial.
-                  </p>
-                  <p className="font-semibold text-white">
-                    Esta aplicación NO es un dispositivo médico y NO ha sido certificada por la FDA, EMA ni ninguna entidad reguladora de salud.
-                  </p>
-                  <p>
-                    Los resultados mostrados son aproximaciones con fines informativos y de bienestar personal. No deben utilizarse para autodiagnóstico, prevención o tratamiento de ninguna condición médica.
-                  </p>
-                  <p>
-                    Si usted tiene antecedentes de hipertensión, arritmia u otras afecciones cardiovasculares, debe utilizar dispositivos clínicos de grado médico validados y consultar con su médico antes de tomar cualquier decisión clínica.
-                  </p>
-                  <p>
-                    Al hacer clic en "Aceptar y Continuar", usted confirma que comprende y acepta que el uso de esta app es bajo su propio riesgo y discreción.
-                  </p>
-                </div>
-
-                <button
-                  onClick={handleAcceptDisclaimer}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-bold text-xs tracking-wider transition-all hover:scale-[1.02] active:scale-[0.98]"
-                >
-                  ACEPTAR Y CONTINUAR
-                </button>
-                <p className="text-center text-zinc-500 text-[10px] leading-relaxed">
-                  Al continuar acepta los{" "}
-                  <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-emerald-400 underline">
-                    Términos de Uso
-                  </a>{" "}
-                  y la{" "}
-                  <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-emerald-400 underline">
-                    Política de Privacidad
-                  </a>
-                  . Producto de bienestar: no es dispositivo médico.
-                </p>
-              </div>
-            </div>
-          )}
-
         </div>
       </div>
+
+      {/* DESCARGO DE RESPONSABILIDAD MÉDICA — puerta de entrada.
+          Debe vivir FUERA de cualquier contenedor con z-index propio: dentro de
+          `relative z-10 h-full` su z-[110] queda atrapado en ese stacking context
+          (z=10) y el splash (z-[100]) intercepta todos los clics → el botón
+          ACEPTAR queda inclickeable ("pantalla negra"). Aquí, como hijo del root,
+          z-[110] gana sin competir. */}
+      {!disclaimerAccepted && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/95 backdrop-blur-md animate-fade-in p-4 overflow-y-auto">
+          <div className="bg-black border border-zinc-900/80 rounded-2xl max-w-sm w-full shadow-2xl p-5 space-y-5 animate-in zoom-in-95 duration-300 max-h-[90vh] flex flex-col">
+            <div className="text-center space-y-2">
+              <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto">
+                <AlertTriangle className="w-6 h-6 text-red-500" />
+              </div>
+              <h3 className="text-white text-base font-bold tracking-wide uppercase">DESCARGO DE RESPONSABILIDAD MÉDICA</h3>
+              <p className="text-red-400 text-[10px] font-bold tracking-wider uppercase">IMPORTANTE LEER ANTES DE USAR</p>
+            </div>
+
+            <div className="flex-1 overflow-y-auto text-zinc-400 text-[11px] leading-relaxed space-y-3.5 pr-1 border-y border-zinc-950 py-4">
+              <p>
+                Esta aplicación utiliza fotopletismografía (PPG) a través de la cámara y el flash de su smartphone para estimar el pulso, la variabilidad de la frecuencia cardíaca, la saturación de oxígeno ($SpO_2$) y la presión arterial.
+              </p>
+              <p className="font-semibold text-white">
+                Esta aplicación NO es un dispositivo médico y NO ha sido certificada por la FDA, EMA ni ninguna entidad reguladora de salud.
+              </p>
+              <p>
+                Los resultados mostrados son aproximaciones con fines informativos y de bienestar personal. No deben utilizarse para autodiagnóstico, prevención o tratamiento de ninguna condición médica.
+              </p>
+              <p>
+                Si usted tiene antecedentes de hipertensión, arritmia u otras afecciones cardiovasculares, debe utilizar dispositivos clínicos de grado médico validados y consultar con su médico antes de tomar cualquier decisión clínica.
+              </p>
+              <p>
+                Al hacer clic en "Aceptar y Continuar", usted confirma que comprende y acepta que el uso de esta app es bajo su propio riesgo y discreción.
+              </p>
+            </div>
+
+            <button
+              onClick={handleAcceptDisclaimer}
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-bold text-xs tracking-wider transition-all hover:scale-[1.02] active:scale-[0.98]"
+            >
+              ACEPTAR Y CONTINUAR
+            </button>
+            <p className="text-center text-zinc-500 text-[10px] leading-relaxed">
+              Al continuar acepta los{" "}
+              <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-emerald-400 underline">
+                Términos de Uso
+              </a>{" "}
+              y la{" "}
+              <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-emerald-400 underline">
+                Política de Privacidad
+              </a>
+              . Producto de bienestar: no es dispositivo médico.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
