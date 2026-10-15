@@ -67,7 +67,7 @@ import {
   resetActiveStabilizer,
 } from '../../lib/signal/activeStabilizer';
 import { BioTremorAbsorber } from './BioTremorAbsorber';
-import { bandLimitedDominantFreq } from './shared/dsp';
+import { bandLimitedDominantFreq, computeWindowMoments } from './shared/dsp';
 import { RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
 import { GymFaceTracker, type GymFaceTrackingResult } from '../../lib/gym/gymFaceTracker';
 import { GymMotionCancellation } from '../../lib/gym/gymMotionCancellation';
@@ -859,23 +859,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const fLen = this.filteredBuffer.length;
       const fTail = this.filteredBuffer.tail(fLen);
       if (fTail.length >= 30) {
-        const n = fTail.length;
-        let s1 = 0, s2 = 0, s3 = 0, s4 = 0;
-        for (let i = 0; i < n; i++) {
-          const v = fTail[i];
-          s1 += v;
-          s2 += v * v;
-          s3 += v * v * v;
-          s4 += v * v * v * v;
-        }
-        const mean = s1 / n;
-        const var_ = s2 / n - mean * mean;
-        const std = Math.sqrt(var_);
-        if (std > 1e-8) {
-          this.cachedSkewness = (s3 / n - 3 * mean * (s2 / n) + 2 * mean * mean * mean) / (std * std * std);
-          this.cachedKurtosis = (s4 / n - 4 * mean * (s3 / n) + 6 * mean * mean * (s2 / n) - 3 * mean * mean * mean * mean) / (var_ * var_);
-          this.cachedRelativePower = this.cachedPeriodicity;
-        }
+        // Momentos de la ventana filtrada (una pasada, testeada en dsp.test).
+        // skewness/kurtosis en convención Fisher-Pearson; kurtosis en EXCESO
+        // (β₂−3) — requerido por los umbrales KURTOSIS_SQI_* (ver computeWindowMoments).
+        const moments = computeWindowMoments(fTail);
+        this.cachedSkewness = moments.skewness;
+        this.cachedKurtosis = moments.kurtosis;
+        this.cachedRelativePower = this.cachedPeriodicity;
       }
     }
 

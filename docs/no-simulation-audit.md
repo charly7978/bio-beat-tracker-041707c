@@ -1,8 +1,32 @@
 # Auditoría Anti-Simulación — Pipeline PPG
 
-**Fecha de auditoría:** 2026-05-09
+**Fecha de auditoría:** 2026-05-09 — **RE-VERIFICADA y ampliada: 2026-10-15** (auditoría exhaustiva)
 **Alcance:** cámara → procesamiento → BPM → SpO₂ → Presión Arterial → Arritmias → UI
-**Resultado:** ✅ **Sin simulaciones, sin valores artificiales, sin generadores aleatorios.**
+**Resultado:** ✅ **Sin simulaciones, sin valores artificiales, sin generadores aleatorios en `src/`.**
+
+> **Delta de la re-verificación 2026-10-15** (todo el pipeline cambió sustancialmente
+> desde mayo: commits `04591fd` honest-ppg, `11807bc`, `d64b9ab`, `5620f38`…):
+> - ✅ Re-verificados: detección de dedo por píxeles, ROI→ceros sin tiles válidos,
+>   filtros sin reset "plausible", BPM=0 sin picos reales, SpO2=0 sin señal,
+>   PA `{0,0,INSUFFICIENT}` + `REQUIRES_CALIBRATION`, `waveHonesty` perf×per.
+> - ⚠️ **Corregido claim obsoleto:** arritmias ya no arrancan en `"SIN ARRITMIAS|0"`;
+>   el estado inicial es ahora `CALIBRANDO...` → `APRENDIENDO RITMO...` →
+>   `RITMO NORMAL`/`ARRITMIA DETECTADA` con confirmación temporal
+>   (`arrhythmia-processor.ts`). Sin contadores sembrados: solo RR reales.
+> - ⚠️ **Corregido claim obsoleto:** el suavizado EMA doble cambió
+>   (`VITAL_EMA_SECONDARY` permanece; las constantes STABLE/DYNAMIC se eliminaron
+>   en `d64b9ab`). Sigue siendo display-only.
+> - ➕ **Añadido 2026-10-15:** `training/generate_synthetic_ppg.py` es un generador
+>   sintético de EJEMPLO para entrenamiento OFFLINE: nunca se importa desde
+>   `src/` ni se empaqueta en la app (verificado: 0 referencias en `src/`).
+>   El MLP de PA (`mlpWeights.ts`) se entrenó con datos sintéticos — procedencia
+>   divulgada en su cabecera y en `docs/medical-validation.md`.
+> - ➕ **Añadido 2026-10-15:** el término de kurtosis del SQI se alimenta ahora
+>   con EXCESO de kurtosis (β₂−3) vía `computeWindowMoments` (`shared/dsp.ts`),
+>   alineado con los umbrales `KURTOSIS_SQI_*` y con `utils/stats.ts`.
+>   Antes se entregaba β₂ cruda → el término saturaba (+6) en cualquier ventana,
+>   incluido ruido puro (hallazgo de auditoría, corregido y con test).
+
 
 ## Búsquedas ejecutadas
 
@@ -49,13 +73,13 @@
 
 ### 8. Arritmias (`arrhythmia-processor.ts`)
 - Detectadas exclusivamente desde RR-intervals reales obtenidos de los picos del HeartBeatProcessor.
-- Estado inicial: `"SIN ARRITMIAS|0"`. No se incrementa el contador sin evento RR genuino.
+- Estados: `CALIBRANDO...` → `APRENDIENDO RITMO...` (8–18 s) → `RITMO NORMAL` / `ARRITMIA DETECTADA`. El contador de confirmación exige evidencia SOSTENIDA (integrador con fugas); no se incrementa sin evento RR genuino ni contador sembrado.
 
 ### 9. Capa de UI (`Index.tsx`, `PPGSignalMeter.tsx`, `ppgCanvasRenderer.ts`, `waveHonesty.ts`)
 - Todos los componentes muestran `--` cuando el valor es `0` o `null` proveniente del pipeline.
 - `waveHonesty.realSignalStrength = perf×per` (AND) — sin periodicidad cardíaca la onda queda plana; evita "ondas hermosas" de ruido bandpass (verificada en `waveHonesty.test.ts` — objeto movido sin periodicidad → <0.1).
 - Redondeo a entero **solo en presentación** (`Math.round(heartRate)`); precisión float preservada en cálculos internos.
-- Suavizado EMA doble (primary 0.15/0.25 + secondary 0.08, `VITAL_THRESHOLDS.QUALITY`) solo para estabilidad visual, nunca para enmascarar pérdida de señal.
+- Suavizado EMA (`VITAL_THRESHOLDS.QUALITY.VITAL_EMA_SECONDARY`) solo para estabilidad visual, nunca para enmascarar pérdida de señal (tras el commit `d64b9ab` solo permanece el secundario; las variantes STABLE/DYNAMIC se eliminaron).
 - `ppgCanvasRenderer` usa `RingF32`/`CircularBuffer` con honestidad de rango (transform `pow 1.05`) y Catmull-Rom sin extrapolación.
 
 ### 10. Edge function de IA (`supabase/functions/analyze-vitals`)

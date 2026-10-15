@@ -275,6 +275,63 @@ export function bandLimitedDominantFreq(
   return { freqHz: bestF, quality };
 }
 
+/**
+ * Momentos estadísticos de una ventana de señal (una sola pasada, sin allocations).
+ *
+ * Convenciones (idénticas a `src/utils/stats.ts`, fuente única de semántica):
+ *  - `skewness`  = asimetría de Fisher-Pearson g1 = m3 / m2^{3/2} (0 = simétrica).
+ *  - `kurtosis`  = EXCESO de kurtosis (β₂ − 3; 0 = gaussiana, >0 = leptocúrtica
+ *    con picos agudos, <0 = platicúrtica/aplanada). NUNCA devuelve la kurtosis
+ *    cruda de Pearson β₂: los umbrales de scoring SQI
+ *    (VITAL_THRESHOLDS.QUALITY.KURTOSIS_SQI_LOW/HIGH, Elgendi 2016) están
+ *    definidos sobre el EXCESO. Alimentar β₂ cruda (≥0 siempre, ≈3 para ruido
+ *    gaussiano) saturaba el término en puntuación máxima para cualquier ventana,
+ *    incluido ruido puro → inflaba el SQI de señales inválidas.
+ *
+ * Ventana degenerada (varianza ≈ 0): devuelve todos los momentos en 0.
+ */
+export function computeWindowMoments(values: readonly number[]): {
+  mean: number;
+  variance: number;
+  std: number;
+  skewness: number;
+  kurtosis: number;
+} {
+  const n = values.length;
+  if (n < 3) {
+    return { mean: 0, variance: 0, std: 0, skewness: 0, kurtosis: 0 };
+  }
+  let s1 = 0;
+  let s2 = 0;
+  let s3 = 0;
+  let s4 = 0;
+  for (let i = 0; i < n; i++) {
+    const v = values[i]!;
+    s1 += v;
+    s2 += v * v;
+    s3 += v * v * v;
+    s4 += v * v * v * v;
+  }
+  const mean = s1 / n;
+  const m2 = s2 / n - mean * mean;
+  if (!(m2 > 1e-18)) {
+    return { mean, variance: Math.max(0, m2), std: 0, skewness: 0, kurtosis: 0 };
+  }
+  const m3 = s3 / n - 3 * mean * (s2 / n) + 2 * mean * mean * mean;
+  const m4 =
+    s4 / n - 4 * mean * (s3 / n) + 6 * mean * mean * (s2 / n) - 3 * mean * mean * mean * mean;
+  const std = Math.sqrt(m2);
+  return {
+    mean,
+    variance: m2,
+    std,
+    skewness: m3 / (std * std * std),
+    // Exceso de kurtosis (β₂ − 3): convención compartida con stats.ts y con los
+    // umbrales KURTOSIS_SQI_* de vitalThresholds.
+    kurtosis: m4 / (m2 * m2) - 3,
+  };
+}
+
 export function bandpassOffline(signal: number[], fs: number): number[] {
   const f = new BandpassFilter(fs);
   f.reset();

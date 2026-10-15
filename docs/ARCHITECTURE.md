@@ -48,7 +48,7 @@ Medición dual: finger (trasera+flash) vs gym (frontal POS Wang 2017, rPPG)
 | Contrato de medición | `src/types/measurements.ts` (`VitalMeasurement`, `PeakDetectionResult`) |
 | Umbrales fisiológicos | `src/config/vitalThresholds.ts` (HR 30–220, RR 270–2200 ms, SQI, PLACEMENT) |
 | DSP / picos (ventanas, BPM min/max) | `src/config/signalProcessing.ts` (PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS) |
-| Filtros y utilidades DSP | `src/modules/signal-processing/shared/dsp.ts` + `BandpassFilter.ts` (Butterworth 4º) / `BesselFilter.ts` (Bessel 4º fase lineal) |
+| Filtros y utilidades DSP | `src/modules/signal-processing/shared/dsp.ts` + `BandpassFilter.ts` (Butterworth 4º) / `BesselFilter.ts` (Bessel 4º fase lineal). Momentos de ventana (skewness/kurtosis en exceso) en `shared/dsp.ts:computeWindowMoments` |
 | SQI central | `src/modules/signal-quality/SignalQualityIndex.ts` (skewness SQI óptimo Elgendi 2016, perfusión, PI) |
 | Calibración | `src/modules/vital-signs/CalibrationManager.ts` (SPO2/BP antropométrico + offset por referencia) |
 | Estado de adquisición | `src/lib/acquisition/resolveAcquisitionStatus.ts` + `AcquisitionStabilizer.ts` |
@@ -93,7 +93,7 @@ Basado en medias móviles de evento (MApeak / MAbeat), offset adaptativo, un pic
 
 ## SQI y vitales
 
-`SignalQualityIndex` calcula SQI a partir de perfusión, SNR, periodicidad, clipping, saturación, movimiento, FPS y jitter.
+`SignalQualityIndex` calcula SQI a partir de perfusión, SNR (amplitud de modulación ×1000), periodicidad, skewness y kurtosis en exceso (Elgendi 2016), clipping, saturación, movimiento, FPS y jitter.
 
 `enrichMetrics()` combina el SQI de frame con el acuerdo Elgendi para que SpO2, PA y respiración no traten como “buena” una señal con picos incoherentes.
 
@@ -143,10 +143,12 @@ Tests relevantes: `Detectors.test.ts`, `PPGSignalProcessor.test.ts`, `fingerRoiP
 - Variabilidad entre dispositivos (sensor RG-Bayer, torch, FPS, AE/WB).
 - No sustituye un pulsioxímetro ni un tensiómetro certificado.
 - SpO2 usa verde como proxy IR (Beer–Lambert) — requiere calibración para uso clínico.
-- BP estimado por PWA solo orientativo sin referencia de tensiómetro; `REQUIRES_CALIBRATION` si no hay perfil vigente.
+- BP estimado por PWA solo orientativo sin referencia de tensiómetro; `REQUIRES_CALIBRATION` si no hay perfil vigente. **El regresor MLP se entrenó sobre datos sintéticos (fórmulas sobre features aleatorios, `training/train_bp_mlp.py`); precisión clínica no validada — ver `docs/medical-validation.md`.**
 - rPPG frontal (gym) MAE competitivo 4–5 bpm (POS-SSA Wang 2026 JAIT 17(4):788) pero sensible a iluminación/movimiento facial.
 
 ## Referencias internas
 
+- `docs/medical-validation.md` — estado de validación por métrica (qué existe, qué NO existe, procedimiento Bland–Altman pendiente)
 - `docs/repository-cleanup.md` — depuración previa y mapa histórico
 - `docs/no-simulation-audit.md` — política anti-simulación en runtime
+- `training/README.md` — pipelines de entrenamiento (solo el MLP de PA está integrado)
