@@ -64,6 +64,17 @@ This project is built with .
 
 Simply open [Lovable](https://lovable.dev/projects/d19c3295-2b5b-4a30-ba82-d64b04ac6a03) and click on Share -> Publish.
 
+### Variables de entorno (obligatorias para nube; sin ellas la app arranca en MODO LOCAL)
+
+El cliente de Sup requiere dos variables **en el dashboard del deploy** (Lovable → Project Settings → Environment Variables, o Vercel → Settings → Environment Variables). **No** se leen desde `.env` del repo (está excluido del control de versiones por seguridad):
+
+| Variable | Dónde obtenerla |
+|---|---|
+| `VITE_SUPABASE_URL` | Supabase → Project Settings → API → Project URL |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase → Project Settings → API → `anon` / publishable key (clave pública, protegida por RLS; **nunca** la `service_role`) |
+
+Desde 2026-10-15 un deploy **sin** estas variables no queda con pantalla negra: la app arranca en modo local (mediciones cifradas en el dispositivo) y lo advierte por consola. Con ellas, se sincronizan a la nube.
+
 ## I want to use a custom domain - is that possible?
 
 We don't support custom domains (yet). If you want to deploy your project under your own domain then we recommend using Netlify. Visit our docs for more details: [Custom domains](https://docs.lovable.dev/tips-tricks/custom-domain/)

@@ -2,17 +2,45 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 import { brokeredPreviewStorage } from './previewAuthStorage';
+import { createLogger } from '@/utils/logger';
+
+const log = createLogger('supabase-client');
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-// Import the supabase client like this:
-// import { supabase } from "@/integrations/supabase/client";
+/**
+ * true solo si el deploy configuró las variables VITE_SUPABASE_* (Vercel /
+ * Lovable dashboard → Environment Variables). Si es false la app arranca en
+ * MODO LOCAL: el cliente apunta a un endpoint inerte y todas las operaciones
+ * de nube fallan con error de red controlado, cayendo al guardado local
+ * cifrado. NUNCA se lanza al importar: un deploy sin configurar no debe
+ * quedar con pantalla negra (React no montaría).
+ */
+export const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY);
 
-export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-  auth: {
-    storage: brokeredPreviewStorage(),
-    persistSession: true,
-    autoRefreshToken: true,
+if (!isSupabaseConfigured && typeof window !== 'undefined') {
+  log.warn(
+    'VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY no configuradas — ' +
+    'modo LOCAL: sin sync en nube, las mediciones se guardan cifradas en el dispositivo. ' +
+    'Configura las variables en el dashboard de Vercel/Lovable para habilitar la nube.',
+  );
+}
+
+// Placeholder inerte: createClient exige una URL válida sintácticamente. Con
+// configuración ausente NO se inventa sesión ni datos: las peticiones fallan
+// y los callers ya degradan a localStorage cifrado (useSaveMeasurement).
+const FALLBACK_URL = 'http://supabase-not-configured.local';
+const FALLBACK_ANON_KEY = 'not-configured';
+
+export const supabase = createClient<Database>(
+  isSupabaseConfigured ? SUPABASE_URL : FALLBACK_URL,
+  isSupabaseConfigured ? SUPABASE_PUBLISHABLE_KEY : FALLBACK_ANON_KEY,
+  {
+    auth: {
+      storage: brokeredPreviewStorage(),
+      persistSession: true,
+      autoRefreshToken: false,
+    }
   }
-});
+);

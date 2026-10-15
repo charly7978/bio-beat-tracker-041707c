@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { supabase, isSupabaseConfigured } from '@/integrations/supabase/client';
 import type { Json, TablesInsert } from '@/integrations/supabase/types';
 import { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 import { toast } from '@/hooks/use-toast';
@@ -162,6 +162,10 @@ export const useSaveMeasurement = () => {
       let savedLocally = false;
 
       if (authError || !user) {
+        if (!isSupabaseConfigured) {
+          // Deploy sin VITE_SUPABASE_* configuradas: modo local explícito.
+          console.warn('⚠️ Supabase no configurado en este deploy — guardando solo en el dispositivo (modo local).');
+        }
         console.log('⚠️ Guardando medición localmente (ofuscación AES-GCM en dispositivo, no almacenamiento seguro)...');
         const localMeasurements = await decryptLocalMeasurements();
 
