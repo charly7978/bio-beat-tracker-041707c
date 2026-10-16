@@ -173,3 +173,44 @@ export const RESP_SMART_FUSION = {
   /** Mínimo de muestras en una serie de modalidad para estimar */
   MIN_SERIES_SAMPLES: 24,
 } as const;
+
+/**
+ * Parámetros del banco de filtros PPG (PPGSignalSplitter) por canal vital.
+ * Fuente única: evita literales dispersos en el splitter.
+ */
+export const PPG_SPLITTER_DEFAULTS = {
+  hr: {
+    highCutHz: 4.5,
+    hampelWindow: 7,
+    hampelSigma: 3.0,
+  },
+  spo2: {
+    highCutHz: 3.5,
+    hampelWindow: 5,
+    hampelSigma: 2.5,
+    dcEmaAlpha: 0.015,
+  },
+  morphology: {
+    lowHz: 0.5,
+    highHz: 12.0,
+    detrendWindow: 180,
+    hampelWindow: 7,
+    hampelSigma: 2.8,
+    hpfCutoffHz: 0.5,
+  },
+  respiration: {
+    lowCutHz: 0.55,
+    hpfCutoffHz: 0.08,
+    riivWindowFactor: 2.0,
+    pulseStrengthScale: 10,
+    pulseStrengthMix: 0.4,
+  },
+  arrhythmia: {
+    highCutHz: 3.5,
+    notchHarmonic: 18,
+    hampelWindow: 11,
+    hampelSigma: 3.5,
+    mwiWindowFactor: 0.18,
+    mwiMinFrames: 3,
+  },
+} as const;

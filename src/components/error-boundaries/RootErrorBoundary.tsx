@@ -1,4 +1,7 @@
 import React from 'react';
+import { createLogger } from '@/utils/logger';
+
+const log = createLogger('RootErrorBoundary');
 
 /**
  * Error boundary raíz: última línea de defensa cuando falla el renderizado
@@ -24,7 +27,7 @@ export class RootErrorBoundary extends React.Component<RootErrorBoundaryProps, R
   }
 
   componentDidCatch(error: Error) {
-    console.error('ErrorBoundary caught:', error.message);
+    log.error('ErrorBoundary caught:', error.message);
   }
 
   render() {

@@ -26,15 +26,7 @@ function resolveLevel(): LogLevel {
   return 'info';
 }
 
-let currentLevel: LogLevel = resolveLevel();
-
-export function setLogLevel(level: LogLevel) {
-  currentLevel = level;
-}
-
-export function getLogLevel(): LogLevel {
-  return currentLevel;
-}
+const currentLevel: LogLevel = resolveLevel();
 
 function emit(level: LogLevel, scope: string, args: unknown[]) {
   if (ORDER[level] < ORDER[currentLevel]) return;
@@ -49,16 +41,6 @@ function emit(level: LogLevel, scope: string, args: unknown[]) {
 /** Lightweight one-shot warning without creating a logger instance. */
 export function logWarn(scope: string, ...args: unknown[]) {
   emit('warn', scope, args);
-}
-
-/** Lightweight one-shot error without creating a logger instance. */
-export function logError(scope: string, ...args: unknown[]) {
-  emit('error', scope, args);
-}
-
-/** Lightweight one-shot debug without creating a logger instance. */
-export function logDebug(scope: string, ...args: unknown[]) {
-  emit('debug', scope, args);
 }
 
 export function createLogger(scope: string) {

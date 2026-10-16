@@ -74,11 +74,3 @@ export function loadBackpressureConfig(): BackpressureConfig {
     return { ...DEFAULT_BACKPRESSURE_CONFIG };
   }
 }
-
-export function saveBackpressureConfig(cfg: BackpressureConfig): void {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(sanitizeBackpressureConfig(cfg)));
-  } catch {
-    // Ignore error if localStorage is disabled
-  }
-}

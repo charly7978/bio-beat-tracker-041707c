@@ -161,7 +161,7 @@ export const useSignalProcessor = () => {
           }
         } else if (type === 'error') {
           const err = data as ProcessingError;
-          console.error(`PPGSignalProcessor Web Worker error: ${err.code} ${err.message}`);
+          log.error(`PPGSignalProcessor Web Worker error: ${err.code} ${err.message}`);
         }
       };
 
@@ -190,7 +190,7 @@ export const useSignalProcessor = () => {
             });
           },
           (error) => {
-            console.error(`PPGSignalProcessor main-thread fallback error: ${error.code} ${error.message}`);
+            log.error(`PPGSignalProcessor main-thread fallback error: ${error.code} ${error.message}`);
           },
         );
         processor.setBackpressureConfig(loadBackpressureConfig());
@@ -205,7 +205,7 @@ export const useSignalProcessor = () => {
       } catch (fallbackErr) {
         // Si tampoco el main-thread puede iniciar, error explícito (no simular).
         initializationState.current = 'ERROR';
-        console.error('PPGSignalProcessor fallback init failed:', fallbackErr);
+        log.error('PPGSignalProcessor fallback init failed:', fallbackErr);
       }
     }
 

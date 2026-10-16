@@ -1,5 +1,8 @@
 import { CalibrationInfo } from '../../types/measurements';
 import type { AnthropometricProfile } from '@/lib/vitals/pwaPhysiologicalBpEngine';
+import { createLogger } from '@/utils/logger';
+
+const log = createLogger('CalibrationManager');
 
 export type CalibrationType = 'SPO2' | 'BP' | 'DEVICE' | 'PPG_BASELINE';
 
@@ -48,7 +51,7 @@ export class CalibrationManager {
       }
       this.activeProfileId = localStorage.getItem('active_calibration_id');
     } catch (e) {
-      console.error('Error loading calibrations:', e);
+      log.error('Error loading calibrations:', e);
     }
   }
 
@@ -64,7 +67,7 @@ export class CalibrationManager {
         localStorage.setItem('active_calibration_id', this.activeProfileId);
       }
     } catch (e) {
-      console.error('Error saving calibrations:', e);
+      log.error('Error saving calibrations:', e);
     }
   }
 

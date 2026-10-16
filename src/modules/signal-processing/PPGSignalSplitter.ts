@@ -80,7 +80,7 @@ import {
   type AdaptiveNotchState,
 } from './shared/AdaptiveNotch';
 import { clamp } from '../../utils/math';
-import { DSP_CONSTANTS } from '../../config/signalProcessing';
+import { DSP_CONSTANTS, PPG_SPLITTER_DEFAULTS as SPLIT } from '../../config/signalProcessing';
 
 // ─── Tipos de salida ──────────────────────────────────────────────────────────
 
@@ -256,37 +256,37 @@ export class PPGSignalSplitter {
     this.fs = sampleRate;
 
     // Canal 1 — HR
-    this.hrBP = new BandpassFilter(sampleRate, 4.5);
-    this.hrHampel = createHampelState(7);
+    this.hrBP = new BandpassFilter(sampleRate, SPLIT.hr.highCutHz);
+    this.hrHampel = createHampelState(SPLIT.hr.hampelWindow);
 
     // Canal 2 — SpO2
-    const spo2HighCut = 3.5;
+    const spo2HighCut = SPLIT.spo2.highCutHz;
     this.spo2BpRed = new BandpassFilter(sampleRate, spo2HighCut);
     this.spo2BpGreen = new BandpassFilter(sampleRate, spo2HighCut);
     this.spo2BpBlue = new BandpassFilter(sampleRate, spo2HighCut);
-    this.spo2DcRed = new DoubleEmaTracker(0.015);
-    this.spo2DcGreen = new DoubleEmaTracker(0.015);
-    this.spo2DcBlue = new DoubleEmaTracker(0.015);
-    this.spo2HampelRed = createHampelState(5);
-    this.spo2HampelGreen = createHampelState(5);
+    this.spo2DcRed = new DoubleEmaTracker(SPLIT.spo2.dcEmaAlpha);
+    this.spo2DcGreen = new DoubleEmaTracker(SPLIT.spo2.dcEmaAlpha);
+    this.spo2DcBlue = new DoubleEmaTracker(SPLIT.spo2.dcEmaAlpha);
+    this.spo2HampelRed = createHampelState(SPLIT.spo2.hampelWindow);
+    this.spo2HampelGreen = createHampelState(SPLIT.spo2.hampelWindow);
 
     // Canal 3 — Morfología/PA (Bessel para fase lineal)
-    this.morphBessel = new BesselFilter(sampleRate, 0.5, 12.0);
-    this.morphDcMa = new RunningMean(180);
-    this.morphHampel = createHampelState(7);
-    this.morphHPF = new SimpleHPF(0.5, sampleRate);
+    this.morphBessel = new BesselFilter(sampleRate, SPLIT.morphology.lowHz, SPLIT.morphology.highHz);
+    this.morphDcMa = new RunningMean(SPLIT.morphology.detrendWindow);
+    this.morphHampel = createHampelState(SPLIT.morphology.hampelWindow);
+    this.morphHPF = new SimpleHPF(SPLIT.morphology.hpfCutoffHz, sampleRate);
 
     // Canal 4 — Respiración (BP muy bajo: 0.08–0.55 Hz)
-    this.respLP = new BandpassFilter(sampleRate, 0.55);
-    this.respHPF = new SimpleHPF(0.08, sampleRate);
-    this.riivMa = new RunningMean(Math.round(sampleRate * 2)); // ventana 2 s
+    this.respLP = new BandpassFilter(sampleRate, SPLIT.respiration.lowCutHz);
+    this.respHPF = new SimpleHPF(SPLIT.respiration.hpfCutoffHz, sampleRate);
+    this.riivMa = new RunningMean(Math.round(sampleRate * SPLIT.respiration.riivWindowFactor)); // ventana 2 s
 
     // Canal 5 — Arritmias
-    this.arrBP = new BandpassFilter(sampleRate, 3.5);
-    this.arrNotch = createAdaptiveNotchState(sampleRate, 18);
-    this.arrHampel = createHampelState(11);
+    this.arrBP = new BandpassFilter(sampleRate, SPLIT.arrhythmia.highCutHz);
+    this.arrNotch = createAdaptiveNotchState(sampleRate, SPLIT.arrhythmia.notchHarmonic);
+    this.arrHampel = createHampelState(SPLIT.arrhythmia.hampelWindow);
     // MWI: ventana ~180 ms a fs=30 Hz → 6 frames
-    this.arrMwi = new RunningMean(Math.max(3, Math.round(sampleRate * 0.18)));
+    this.arrMwi = new RunningMean(Math.max(SPLIT.arrhythmia.mwiMinFrames, Math.round(sampleRate * SPLIT.arrhythmia.mwiWindowFactor)));
   }
 
   /**
@@ -306,22 +306,22 @@ export class PPGSignalSplitter {
 
     // Canal 1: HR — Butterworth BP + Hampel, filtrado independiente (sin ANC).
     // Uso interno: alimenta la envolvente RIIV del canal de respiración.
-    const rHampel = applyHampelOnline(this.hrHampel, r, 3.0);
+    const rHampel = applyHampelOnline(this.hrHampel, r, SPLIT.hr.hampelSigma);
     const hrChannel = safeFilter(() => this.hrBP.filter(rHampel));
 
     // Canal 2: SpO2
     const dcRed = this.spo2DcRed.push(r);
     const dcGreen = this.spo2DcGreen.push(g);
     const dcBlue = this.spo2DcBlue.push(b);
-    const rHampelSpo2 = applyHampelOnline(this.spo2HampelRed, r, 2.5);
-    const gHampelSpo2 = applyHampelOnline(this.spo2HampelGreen, g, 2.5);
+    const rHampelSpo2 = applyHampelOnline(this.spo2HampelRed, r, SPLIT.spo2.hampelSigma);
+    const gHampelSpo2 = applyHampelOnline(this.spo2HampelGreen, g, SPLIT.spo2.hampelSigma);
     const acRed = safeFilter(() => this.spo2BpRed.filter(rHampelSpo2));
     const acGreen = safeFilter(() => this.spo2BpGreen.filter(gHampelSpo2));
 
     // Canal 3: Morfología/PA
     const morphDc = this.morphDcMa.push(r);
     const morphDetrended = r - morphDc;
-    const morphHampeled = applyHampelOnline(this.morphHampel, morphDetrended, 2.8);
+    const morphHampeled = applyHampelOnline(this.morphHampel, morphDetrended, SPLIT.morphology.hampelSigma);
     let morphology = safeFilter(() => this.morphBessel.filter(morphHampeled));
     morphology = this.morphHPF.filter(morphology);
 
@@ -333,14 +333,14 @@ export class PPGSignalSplitter {
     const riivInstant = Math.abs(hrChannel);
     const riivSmoothed = this.riivMa.push(riivInstant);
     const respPathB = riivSmoothed;
-    const pulseStrength = clamp(Math.abs(hrChannel) / 10, 0, 1);
-    const respiration = respPathA * (1 - pulseStrength * 0.4) + respPathB * (pulseStrength * 0.4);
+    const pulseStrength = clamp(Math.abs(hrChannel) / SPLIT.respiration.pulseStrengthScale, 0, 1);
+    const respiration = respPathA * (1 - pulseStrength * SPLIT.respiration.pulseStrengthMix) + respPathB * (pulseStrength * SPLIT.respiration.pulseStrengthMix);
 
     // Canal 5: Arritmias
     updateNotchFromBpm(this.arrNotch, currentBpm);
     const arrBpFiltered = safeFilter(() => this.arrBP.filter(r));
     const arrNotched = applyAdaptiveNotch(this.arrNotch, arrBpFiltered);
-    const arrHampeled = applyHampelOnline(this.arrHampel, arrNotched, 3.5);
+    const arrHampeled = applyHampelOnline(this.arrHampel, arrNotched, SPLIT.arrhythmia.hampelSigma);
     const arrhythmia = this.arrMwi.push(arrHampeled);
 
     return {

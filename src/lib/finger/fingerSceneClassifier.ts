@@ -8,12 +8,6 @@ import {
 } from './fingerContactSignature';
 import { passesUnifiedFingerAcquire } from './fingerPlacementProfile';
 
-let lastEnsemble: FingerEnsembleMetrics | null = null;
-
-export function getLastEnsemble(): FingerEnsembleMetrics | null {
-  return lastEnsemble;
-}
-
 export function isOpenFlashWithoutContact(s: FingerRgbSnapshot): boolean {
   const r = s.red;
   const g = Math.max(1, s.green);
@@ -192,7 +186,6 @@ export function updateFingerDetection(
   temporalVariance: number,
 ): { fingerDetected: boolean; ensemble: FingerEnsembleMetrics } {
   const ensemble = computeFingerEnsemble(raw, grayPixels, temporalVariance);
-  lastEnsemble = ensemble;
   const fingerDetected = isFingerPresentByEnsemble(ensemble);
   return { fingerDetected, ensemble };
 }

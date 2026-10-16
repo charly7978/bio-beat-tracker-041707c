@@ -168,9 +168,9 @@ export const useSaveMeasurement = () => {
       if (authError || !user) {
         if (!isSupabaseConfigured) {
           // Deploy sin VITE_SUPABASE_* configuradas: modo local explícito.
-          console.warn('⚠️ Supabase no configurado en este deploy — guardando solo en el dispositivo (modo local).');
+          log.warn('⚠️ Supabase no configurado en este deploy — guardando solo en el dispositivo (modo local).');
         }
-        console.log('⚠️ Guardando medición localmente (ofuscación AES-GCM en dispositivo, no almacenamiento seguro)...');
+        log.info('⚠️ Guardando medición localmente (ofuscación AES-GCM en dispositivo, no almacenamiento seguro)...');
         const localMeasurements = await decryptLocalMeasurements();
 
         const newRecord = {
