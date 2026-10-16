@@ -725,6 +725,28 @@ const Index = () => {
     session.handleReset();
   };
 
+  const pressureValue = useMemo(() => ({
+    ...(router.vitalSigns.bloodPressure.value ?? { systolic: 0, diastolic: 0 }),
+    confidence: router.vitalSigns.bloodPressure.status,
+    featureQuality:
+      typeof router.vitalSigns.bloodPressure.diagnostics?.featureQuality === 'number'
+        ? router.vitalSigns.bloodPressure.diagnostics.featureQuality
+        : undefined,
+  }), [router.vitalSigns.bloodPressure.value, router.vitalSigns.bloodPressure.status, router.vitalSigns.bloodPressure.diagnostics?.featureQuality]);
+
+  const contactStateValue = useMemo(() => (
+    lastSignal?.contactState ??
+    (lastSignal?.fingerDetected || lastSignal?.faceDetected ? 'UNSTABLE_CONTACT' : 'NO_CONTACT')
+  ), [lastSignal?.contactState, lastSignal?.fingerDetected, lastSignal?.faceDetected]);
+
+  const isFingerDetectedValue = useMemo(() => (
+    measurementMode === 'gym'
+      ? !!lastSignal?.faceDetected
+      : (!!lastSignal?.fingerDetected && lastSignal?.contactState !== 'NO_CONTACT')
+  ), [measurementMode, lastSignal?.faceDetected, lastSignal?.fingerDetected, lastSignal?.contactState]);
+
+  const diagnosticsValue = useMemo(() => router.currentDiagnostics, [router.currentDiagnostics]);
+
   return (
     <div className="fixed inset-0 flex flex-col bg-black" style={{ 
       height: '100svh',
@@ -911,11 +933,7 @@ const Index = () => {
               ref={ppgMeterRef}
               value={router.heartbeatSignal}
               quality={lastSignal?.quality || 0}
-              isFingerDetected={
-                measurementMode === 'gym'
-                  ? !!lastSignal?.faceDetected
-                  : (!!lastSignal?.fingerDetected && lastSignal?.contactState !== 'NO_CONTACT')
-              }
+              isFingerDetected={isFingerDetectedValue}
               measurementMode={measurementMode}
               faceDetected={lastSignal?.faceDetected}
               onStartMeasurement={handleToggleMonitoring}
@@ -931,25 +949,15 @@ const Index = () => {
               rrIntervals={router.rrIntervals}
               elapsedTime={session.elapsedTime}
               perfusionIndex={lastSignal?.perfusionIndex || 0}
-              pressure={{
-                ...(router.vitalSigns.bloodPressure.value ?? { systolic: 0, diastolic: 0 }),
-                confidence: router.vitalSigns.bloodPressure.status,
-                featureQuality:
-                  typeof router.vitalSigns.bloodPressure.diagnostics?.featureQuality === 'number'
-                    ? router.vitalSigns.bloodPressure.diagnostics.featureQuality
-                    : undefined,
-              }}
+              pressure={pressureValue}
               bpStatus={router.vitalSigns.bloodPressure.status}
-              contactState={
-                lastSignal?.contactState ??
-                (lastSignal?.fingerDetected || lastSignal?.faceDetected ? 'UNSTABLE_CONTACT' : 'NO_CONTACT')
-              }
+              contactState={contactStateValue}
               acquisitionStatus={acquisitionStatusLabel}
               getVideoElement={() => cameraRef.current?.getVideoElement() ?? canvasRef.current ?? null}
               encryptionReady={encryptionReady}
               healthAvail={healthAvail}
               riskResult={riskResult}
-              diagnostics={router.currentDiagnostics as unknown as import('@/components/PPGSignalMeter').PPGSignalMeterProps['diagnostics']}
+              diagnostics={diagnosticsValue as unknown as import('@/components/PPGSignalMeter').PPGSignalMeterProps['diagnostics']}
             />
           </div>
 

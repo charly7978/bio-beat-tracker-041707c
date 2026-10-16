@@ -525,4 +525,4 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   );
 });
 
-export default PPGSignalMeter;
+export default React.memo(PPGSignalMeter);
