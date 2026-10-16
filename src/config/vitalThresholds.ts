@@ -468,6 +468,22 @@ export const VITAL_THRESHOLDS = {
     MODERATE_THRESHOLD: 0.45,
     SEVERE_THRESHOLD: 0.65,
     DETECTION_THRESHOLD: 0.50,
+
+    // ── Noise rejection (rejectNoisePattern) ──
+    NOISE_REJECTION: {
+      /** All intervals < this threshold → noise (ms) */
+      ALL_SHORT_MS: 450,
+      /** Median < this threshold → check CV (ms) */
+      MEDIAN_SHORT_MS: 450,
+      /** CV > this threshold → noise */
+      CV_EXTREME: 0.30,
+      /** Successive diffs > this count → large (ms) */
+      LARGE_DIFF_MS: 50,
+      /** Median < this AND large fraction > threshold → noise (ms) */
+      MEDIAN_SATURATION_MS: 500,
+      /** Fraction of large diffs → saturation */
+      LARGE_FRACTION: 0.90,
+    },
   },
 
   // FINGER + ROI (cámara trasera + dedo; hemoglobina + pulsación temporal)

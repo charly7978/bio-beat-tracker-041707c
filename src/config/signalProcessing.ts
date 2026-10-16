@@ -112,8 +112,9 @@ export const PEAK_DETECTION_DEFAULTS = {
 } as const;
 
 /**
- * Constantes DSP centralizadas — única fuente de verdad.
- * Evita valores duplicados ({@link HeartBeatProcessor}, {@link PPGSignalProcessor}, etc.).
+ * Constantes DSP centralizadas — fuente primaria para parámetros DSP.
+ * Algunos módulos pueden tener constantes locales específicas de su dominio
+ * (ej: HeartBeatProcessor tiene MIN_PEAK_INTERVAL_MS derivado de VITAL_THRESHOLDS).
  */
 export const DSP_CONSTANTS = {
   /** Tamaño de búfer para señal PPG cruda y filtrada (≈10 s @ 30 fps). */

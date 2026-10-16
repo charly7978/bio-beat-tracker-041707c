@@ -55,7 +55,7 @@ export class SpO2Calculator {
   private readonly ICA_WINDOW_SIZE = 64;
 
   /** Calcula SpO2 a partir de los canales RGB. Retorna 0 si no hay señal válida. */
-  calculate(raw: RGBData, frameCount: number, sampleRate = 30, currentHr?: number): number {
+  calculate(raw: RGBData, frameCount: number, sampleRate = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE, currentHr?: number): number {
     const spoCfg = VITAL_THRESHOLDS.SPO2;
     let { redAC, redDC, greenAC, greenDC, blueAC, blueDC } = raw;
 

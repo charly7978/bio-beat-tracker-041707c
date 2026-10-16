@@ -1,3 +1,5 @@
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
+
 /**
  * GYM MOTION CANCELLATION & KALMAN FREQUENCY TRACKER
  *
@@ -59,7 +61,7 @@ export class GymMotionCancellation {
   private readonly qF = 0.0004;
   private readonly qDf = 0.0001;
 
-  constructor(sampleRate: number = 30) {
+  constructor(sampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE) {
     this.sampleRate = Math.max(15, Math.min(60, sampleRate));
   }
 

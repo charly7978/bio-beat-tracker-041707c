@@ -36,8 +36,10 @@ interface CameraViewProps {
   onInterrupted?: () => void;
 }
 
+import { CAMERA_CONFIG } from '@/config/ui';
+
 /** Tiempo máximo de espera a que el <video> presente el primer frame. */
-const WAIT_FOR_VIDEO_TIMEOUT_MS = 8000;
+const WAIT_FOR_VIDEO_TIMEOUT_MS = CAMERA_CONFIG.WAIT_FOR_VIDEO_TIMEOUT_MS;
 
 type TorchCapableConstraint = MediaTrackConstraintSet & { torch?: boolean };
 type AdvancedConstraint = MediaTrackConstraintSet & {
@@ -94,9 +96,9 @@ function computeSkinGuidePID(
   if (state.integral < -100) state.integral = -100;
   const derivative = error - state.prevError;
   state.prevError = error;
-  const Kp = 0.4;
-  const Ki = 0.015;
-  const Kd = 0.12;
+  const Kp = CAMERA_CONFIG.PID_KP;
+  const Ki = CAMERA_CONFIG.PID_KI;
+  const Kd = CAMERA_CONFIG.PID_KD;
   const output = Kp * error + Ki * state.integral + Kd * derivative;
   return { output, newState: state };
 }

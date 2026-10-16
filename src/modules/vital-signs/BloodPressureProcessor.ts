@@ -1,5 +1,6 @@
 import { PPGFeatureExtractor, CycleFeatures } from './PPGFeatureExtractor';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { isPhysiologicalRR, RR_MIN_MS } from '../../utils/physio';
 import { median } from '../../utils/stats';
 import type { FingerPlacementMode } from '../../types/signal';
@@ -58,7 +59,7 @@ export class BloodPressureProcessor {
   estimate(
     signalBuffer: number[],
     rrIntervals: number[],
-    sampleRate: number = 30,
+    sampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE,
     externalHr?: number,
   ): BPEstimate {
     const insufficient: BPEstimate = {

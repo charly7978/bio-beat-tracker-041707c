@@ -101,6 +101,8 @@ function getSafeAreaBottom(): number {
   }
 }
 
+const TRACE_REVEALED_DEFAULT = false;
+
 const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProps>(({
   value,
   quality,
@@ -147,7 +149,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const lastPeakProcessedRef = useRef(0);
   const arrActiveUntilRef = useRef(0);
   /** Latch: la onda se revela solo cuando la adquisición llega a READY (señal estable). */
-  const traceRevealedRef = useRef(false);
+  const traceRevealedRef = useRef(TRACE_REVEALED_DEFAULT);
 
   const lastArrhythmiaCountRef = useRef(0);
   const beatHistoryRef = useRef<{ isArrhythmia: boolean; time: number; rr: number }[]>([]);

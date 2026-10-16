@@ -3,9 +3,9 @@
  *
  * SEMÁNTICA HONESTA (léase antes de usar): es OFUSCACIÓN LOCAL, no almacenamiento
  * seguro. La clave se genera en el dispositivo y se guarda en el propio
- * `localStorage` junto a los datos, y la semilla es derivable del perfil del
- * navegador. Protege de miradas casuales y de copias accidentales del store,
- * NO de acceso forense al dispositivo. Nunca presentarlo como seguro.
+ * `localStorage` junto a los datos. Protege de miradas casuales y de copias
+ * accidentales del store, NO de acceso forense al dispositivo. Nunca presentarlo
+ * como seguro.
  *
  * Solo `crypto.subtle` (Contexto seguro: https o localhost). Si no está
  * disponible, los callers deben degradar a "no guardar" en vez de guardar plano.
@@ -14,7 +14,7 @@
 const IV_LENGTH = 12;
 
 /**
- * Claves de `localStorage` del almacenamiento local cifrado. Única fuente de
+ * Claves de `localStorage` del almacenamiento local cifrada. Única fuente de
  * verdad: Index (limpieza/estado de cifrado) y useSaveMeasurement las importan.
  */
 export const STORAGE_KEYS = {
@@ -37,8 +37,9 @@ async function importKey(keyData: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
 }
 
 /**
- * Obtiene (o crea) la clave local asociada a `keyStorageKey`. Misma derivación
- * para todos los stores: semilla estable del dispositivo → SHA-256 → 32 B.
+ * Obtiene (o crea) la clave local asociada a `keyStorageKey`.
+ * La clave se genera con crypto.getRandomValues (CSPRNG) y se almacena en
+ * localStorage. No se deriva de datos predecibles del navegador.
  */
 export async function getOrCreateLocalKey(keyStorageKey: string): Promise<CryptoKey | null> {
   if (typeof localStorage === 'undefined' || !crypto?.subtle) return null;
@@ -52,9 +53,7 @@ export async function getOrCreateLocalKey(keyStorageKey: string): Promise<Crypto
       localStorage.removeItem(keyStorageKey);
     }
   }
-  const seed = `${navigator.userAgent}${navigator.language}bio-beat-local-v1:${keyStorageKey}`;
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed));
-  const keyData = new Uint8Array(hash).slice(0, 32);
+  const keyData = crypto.getRandomValues(new Uint8Array(32));
   try {
     localStorage.setItem(keyStorageKey, btoa(String.fromCharCode(...keyData)));
   } catch {

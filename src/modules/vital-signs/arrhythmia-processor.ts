@@ -553,21 +553,22 @@ export class ArrhythmiaProcessor {
    *      AF has some consecutive beats with similar timing).
    */
   private rejectNoisePattern(intervals: number[], median: number): boolean {
+    const NR = this.A.NOISE_REJECTION;
     if (intervals.length < 4) return false;
 
-    if (intervals.every(r => r < 450)) {
-      log.debug('Noise reject (a): all <450ms');
+    if (intervals.every(r => r < NR.ALL_SHORT_MS)) {
+      log.debug(`Noise reject (a): all <${NR.ALL_SHORT_MS}ms`);
       return true;
     }
 
-    if (median < 450) {
+    if (median < NR.MEDIAN_SHORT_MS) {
       let sum = 0;
       for (const r of intervals) sum += r;
       const mean = sum / intervals.length;
       let sqSum = 0;
       for (const r of intervals) sqSum += (r - mean) ** 2;
       const cv = Math.sqrt(sqSum / intervals.length) / mean;
-      if (cv > 0.30) {
+      if (cv > NR.CV_EXTREME) {
         log.debug(`Noise reject (b): median=${median} cv=${cv.toFixed(3)}`);
         return true;
       }
@@ -575,10 +576,10 @@ export class ArrhythmiaProcessor {
 
     let large = 0;
     for (let i = 1; i < intervals.length; i++) {
-      if (Math.abs(intervals[i] - intervals[i - 1]) > 50) large++;
+      if (Math.abs(intervals[i] - intervals[i - 1]) > NR.LARGE_DIFF_MS) large++;
     }
-    if (median < 500 && large / (intervals.length - 1) > 0.90) {
-      log.debug(`Noise reject (c): median=${median} ${large}/${intervals.length - 1} diffs >50ms`);
+    if (median < NR.MEDIAN_SATURATION_MS && large / (intervals.length - 1) > NR.LARGE_FRACTION) {
+      log.debug(`Noise reject (c): median=${median} ${large}/${intervals.length - 1} diffs >${NR.LARGE_DIFF_MS}ms`);
       return true;
     }
 

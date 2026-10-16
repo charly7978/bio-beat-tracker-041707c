@@ -747,25 +747,6 @@ export class VitalSignsProcessor {
   }
 
   /**
-   * SpO2 - FÓRMULA RATIO-OF-RATIOS
-   * 
-   * Basado en Beer-Lambert / TI SLAA655, calibrado para cámara smartphone:
-   * R = (AC_red/DC_red) / (AC_green/DC_green)
-   * SpO2 = 112 - 28 * R   (coeficientes empíricos para green como proxy IR)
-   * 
-   * Verde se usa como proxy de IR porque ofrece mejor SNR en la yema del dedo
-   * con LED flash blanco que el canal azul.
-   * 
-   * Mejoras implementadas:
-   * - Filtrado de mediana sobre ventana de R para estabilidad
-   * - Gating por PI mínimo (perfusión) antes de calcular
-   * - Validación del rango físico de R (0.2-2.5 para tejido humano)
-   *
-   * NOTA: La implementación concreta se delegó a SpO2Calculator (importado arriba).
-   * Este comentario y el método huérfano calculateSpO2Raw se eliminaron en la
-   * optimización 2026 para evitar duplicación de lógica.
-   */
-
   /**
    * Segundo pase EMA sobre un valor ya suavizado por {@link DisplaySmoothing}.
    * El primer pase (ponderado por confianza) lo hace displaySmoothing;

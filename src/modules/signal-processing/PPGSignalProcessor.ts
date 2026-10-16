@@ -626,6 +626,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   processFrame(imageData: ImageData, frameTimestampMs?: number): void {
     if (!this.isProcessing || !this.onSignalReady) return;
+    // Prevenir condición de carrera: si reset() se ejecuta durante processFrame,
+    // los buffers quedarían en estado inconsistente. Se verifica isProcessing.
+    if (this.frameCount === 0 && this.redBuffer.length > 0) {
+      this.resetSignalTrackingBuffers();
+    }
 
     this.frameCount++;
     const timestamp = typeof frameTimestampMs === 'number' && Number.isFinite(frameTimestampMs)
