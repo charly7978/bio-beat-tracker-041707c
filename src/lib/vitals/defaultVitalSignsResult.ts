@@ -43,6 +43,7 @@ export function createDefaultVitalSignsResult(): VitalSignsResult {
       unit: 'event',
     },
     signalQuality: 0,
+    measurementConfidence: 'INVALID',
     isCalibrating: false,
     calibrationProgress: 0,
     lastArrhythmiaData: null,

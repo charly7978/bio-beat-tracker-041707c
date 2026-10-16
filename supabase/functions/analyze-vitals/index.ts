@@ -17,6 +17,8 @@ interface VitalSignsInput {
   confidence?: string;
 }
 
+// Límites fisiológicos alineados con el canónico de la app (src/config/vitalThresholds.ts):
+// HR 30–220, SpO2 75–100, sistólica 20–280, diastólica 40–130. Mantener en sincronía.
 function validateInput(data: unknown): { valid: boolean; error?: string; parsed?: VitalSignsInput } {
   if (!data || typeof data !== "object") {
     return { valid: false, error: "Missing request body" };
@@ -34,17 +36,17 @@ function validateInput(data: unknown): { valid: boolean; error?: string; parsed?
   const systolic = d.systolic ? Number(d.systolic) : undefined;
   const diastolic = d.diastolic ? Number(d.diastolic) : undefined;
 
-  if (heartRate !== undefined && (heartRate < 20 || heartRate > 300)) {
-    return { valid: false, error: "heartRate must be between 20 and 300" };
+  if (heartRate !== undefined && (heartRate < 30 || heartRate > 220)) {
+    return { valid: false, error: "heartRate must be between 30 and 220" };
   }
-  if (spo2 !== undefined && (spo2 < 50 || spo2 > 100)) {
-    return { valid: false, error: "spo2 must be between 50 and 100" };
+  if (spo2 !== undefined && (spo2 < 75 || spo2 > 100)) {
+    return { valid: false, error: "spo2 must be between 75 and 100" };
   }
-  if (systolic !== undefined && (systolic < 50 || systolic > 300)) {
-    return { valid: false, error: "systolic must be between 50 and 300" };
+  if (systolic !== undefined && (systolic < 20 || systolic > 280)) {
+    return { valid: false, error: "systolic must be between 20 and 280" };
   }
-  if (diastolic !== undefined && (diastolic < 30 || diastolic > 200)) {
-    return { valid: false, error: "diastolic must be between 30 and 200" };
+  if (diastolic !== undefined && (diastolic < 40 || diastolic > 130)) {
+    return { valid: false, error: "diastolic must be between 40 and 130" };
   }
 
   const quality = Number(d.quality) || 0;

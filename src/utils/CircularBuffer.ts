@@ -31,22 +31,6 @@ export class CircularBuffer {
     }
   }
 
-  /**
-   * Devuelve los puntos en orden cronológico.
-   * Asigna un Array nuevo solo si es necesario (cuando hay wrap-around).
-   */
-  getPoints(): readonly PPGDataPoint[] {
-    if (this.size === 0) return [];
-    if (this.head === 0) {
-      return this.buffer.slice(0, this.size) as PPGDataPoint[];
-    }
-    const out: PPGDataPoint[] = new Array(this.size);
-    for (let i = 0; i < this.size; i++) {
-      out[i] = this.buffer[(this.head + i) % this.capacity] as PPGDataPoint;
-    }
-    return out;
-  }
-
   getPointsCount(): number {
     return this.size;
   }

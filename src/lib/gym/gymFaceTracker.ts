@@ -19,6 +19,7 @@
  * - Verkruysse et al. (Remote plethysmographic imaging using ambient light)
  * - de Haan & Jeanne (Robust pulse rate from chrominance-based rPPG, IEEE TBME 2013)
  */
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
 
 export interface FaceBoundingBox {
   x: number;
@@ -112,7 +113,9 @@ export class GymFaceTracker {
   ): GymFaceTrackingResult {
     const { width, height, data } = imageData;
     const now = timestampMs > 0 ? timestampMs : performance.now();
-    const dt = this.lastTimestamp > 0 ? Math.max(0.016, (now - this.lastTimestamp) / 1000) : 0.033;
+    const dt = this.lastTimestamp > 0
+      ? Math.max(0.016, (now - this.lastTimestamp) / 1000)
+      : 1 / DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
     this.lastTimestamp = now;
 
     // === PASO 1: ANÁLISIS GLOBAL DINÁMICO DE ILUMINACIÓN ===

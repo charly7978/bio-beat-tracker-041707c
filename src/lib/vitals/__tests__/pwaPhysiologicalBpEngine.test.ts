@@ -5,7 +5,6 @@ import {
   enforceHemodynamicCoherence,
   estimatePhysiologicalBp,
   isPhysiologicalBp,
-  morphologyPressures,
   type PwaMedianFeatures,
 } from '../pwaPhysiologicalBpEngine';
 
@@ -53,17 +52,6 @@ describe('pwaPhysiologicalBpEngine (SOTA Bio-PWA 2026)', () => {
     expect(sbp).toBeLessThanOrEqual(VITAL_THRESHOLDS.BP.SYSTOLIC_MAX);
     expect(sbp - dbp).toBeGreaterThanOrEqual(VITAL_THRESHOLDS.BP.PP_MIN);
     expect(sbp - dbp).toBeLessThanOrEqual(VITAL_THRESHOLDS.BP.PP_MAX);
-  });
-
-  it('estimación morfológica PWA directa dentro de límites', () => {
-    const morph = morphologyPressures(baseFeatures, {
-      hr: 72,
-      rmssd: 35,
-      cyclePeriodMs: 830,
-    });
-    expect(morph.sbp).toBeGreaterThan(morph.dbp);
-    expect(morph.sbp).toBeGreaterThanOrEqual(VITAL_THRESHOLDS.BP.SYSTOLIC_MIN);
-    expect(morph.dbp).toBeLessThanOrEqual(VITAL_THRESHOLDS.BP.DIASTOLIC_MAX);
   });
 
   it('rechaza presión fuera de rango fisiológico', () => {

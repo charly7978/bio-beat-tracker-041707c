@@ -3,6 +3,9 @@ import type { AnthropometricProfile } from '@/lib/vitals/pwaPhysiologicalBpEngin
 
 export type CalibrationType = 'SPO2' | 'BP' | 'DEVICE' | 'PPG_BASELINE';
 
+/** Identificador de dispositivo de la fuente PPG por cámara (perfiles de calibración). */
+export const CALIBRATION_DEVICE_ID = 'camera_ppg';
+
 export interface CalibrationProfile {
   id: string;
   type: CalibrationType;
@@ -99,10 +102,6 @@ export class CalibrationManager {
     this.saveToStorage();
   }
 
-  public getProfile(id: string): CalibrationProfile | undefined {
-    return this.profiles.get(id);
-  }
-
   public getActiveProfile(type: CalibrationType): CalibrationProfile | undefined {
     if (this.activeProfileId) {
       const p = this.profiles.get(this.activeProfileId);
@@ -140,22 +139,21 @@ export class CalibrationManager {
     };
   }
 
-  /** Aplica offsets de perfil BP vigente (referencia tensiómetro). */
-  public applyBloodPressureCalibration(
-    systolic: number,
-    diastolic: number,
-  ): { systolic: number; diastolic: number; applied: boolean } {
+  /** Offsets de PA del perfil BP vigente (null si no hay calibración activa). */
+  public getActiveBpOffsets(): { sbpOffset: number; dbpOffset: number } | null {
     const profile = this.getActiveProfile('BP');
-    if (!profile || profile.expiresAt <= Date.now()) {
-      return { systolic, diastolic, applied: false };
-    }
-    const sbpOff = profile.coefficients.sbpOffset ?? profile.coefficients.systolicOffset ?? 0;
-    const dbpOff = profile.coefficients.dbpOffset ?? profile.coefficients.diastolicOffset ?? 0;
+    if (!profile || profile.expiresAt <= Date.now()) return null;
     return {
-      systolic: systolic + sbpOff,
-      diastolic: diastolic + dbpOff,
-      applied: sbpOff !== 0 || dbpOff !== 0,
+      sbpOffset: profile.coefficients.sbpOffset ?? profile.coefficients.systolicOffset ?? 0,
+      dbpOffset: profile.coefficients.dbpOffset ?? profile.coefficients.diastolicOffset ?? 0,
     };
+  }
+
+  /** Offset de SpO2 del perfil SPO2 vigente (0 si no hay calibración activa). */
+  public getActiveSpo2Offset(): number {
+    const profile = this.getActiveProfile('SPO2');
+    if (!profile || profile.expiresAt <= Date.now()) return 0;
+    return profile.coefficients.spo2Offset ?? 0;
   }
 
   public reset(): void {

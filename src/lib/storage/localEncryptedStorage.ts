@@ -13,6 +13,17 @@
 
 const IV_LENGTH = 12;
 
+/**
+ * Claves de `localStorage` del almacenamiento local cifrado. Única fuente de
+ * verdad: Index (limpieza/estado de cifrado) y useSaveMeasurement las importan.
+ */
+export const STORAGE_KEYS = {
+  /** Mediciones locales cifradas (base64 iv||ciphertext). */
+  measurements: 'local_measurements',
+  /** Clave AES-GCM local asociada a `measurements`. */
+  cryptoKey: 'bb-crypto-key',
+} as const;
+
 /** Copia a un Uint8Array con buffer propio (tipado ArrayBuffer para crypto.subtle). */
 function toBytes(source: ArrayLike<number>): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(source.length);

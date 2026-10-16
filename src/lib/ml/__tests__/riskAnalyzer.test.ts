@@ -41,6 +41,7 @@ function createMockVitals(overrides: Partial<VitalSignsResult> = {}): VitalSigns
     respiration: makeMeasurement('Respiration', 16, 'RPM'),
     arrhythmia: makeMeasurement('Arrhythmia', { count: 0, status: 'NORMAL', score: 0 }, 'events'),
     signalQuality: 90,
+    measurementConfidence: 'HIGH',
     isCalibrating: false,
     calibrationProgress: 100,
     ...overrides,

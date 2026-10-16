@@ -4,8 +4,8 @@
  * Permite al usuario desactivarlo o ajustar umbrales por dispositivo desde la
  * UI de Ajustes. Se guarda en localStorage para sobrevivir entre sesiones.
  *
- * Filosofía: el default replica el comportamiento histórico del procesador
- * (low<20 / high>=25 / sustain 3s / maxStride 4). Cualquier cambio del
+ * Filosofía: el default replica el comportamiento del procesador
+ * (low<25 / high>=28 / sustain 5 s / maxStride 5). Cualquier cambio del
  * usuario es opt-in y no afecta la frecuencia temporal de muestreo.
  */
 
@@ -81,13 +81,4 @@ export function saveBackpressureConfig(cfg: BackpressureConfig): void {
   } catch {
     // Ignore error if localStorage is disabled
   }
-}
-
-export function resetBackpressureConfig(): BackpressureConfig {
-  try {
-    localStorage.removeItem(KEY);
-  } catch {
-    // Ignore error if localStorage is disabled
-  }
-  return { ...DEFAULT_BACKPRESSURE_CONFIG };
 }

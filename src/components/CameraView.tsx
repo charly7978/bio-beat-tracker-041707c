@@ -3,6 +3,11 @@ import { createLogger } from "@/utils/logger";
 import { clamp } from "@/utils/math";
 import { Camera } from '@capacitor/camera';
 import { isNative } from "@/lib/device/platform";
+import {
+  CAMERA_MIN_FPS,
+  CAMERA_RESOLUTION,
+  CAMERA_TARGET_FPS,
+} from "@/lib/device/cameraDeviceProfile";
 
 const log = createLogger("CameraView");
 
@@ -143,8 +148,8 @@ async function stabilizeTrack(track: MediaStreamTrack, isGym = false): Promise<v
   const constraints: AdvancedConstraint[] = [];
 
   if (caps.frameRate && isConstraintSupported('frameRate')) {
-    const maxFps = caps.frameRate.max ?? 30;
-    const targetFps = Math.min(30, maxFps);
+    const maxFps = caps.frameRate.max ?? CAMERA_TARGET_FPS;
+    const targetFps = Math.min(CAMERA_TARGET_FPS, maxFps);
     constraints.push({ frameRate: targetFps });
   }
 
@@ -531,9 +536,9 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           // Cámara Frontal para rPPG en Modo Gimnasio
           const videoConstraints: MediaTrackConstraints = {
             facingMode: { ideal: "user" },
-            width: { ideal: 640, max: 1280 },
-            height: { ideal: 480, max: 720 },
-            frameRate: { ideal: 30, min: 15, max: 30 },
+            width: { ideal: CAMERA_RESOLUTION.gym.widthIdeal, max: CAMERA_RESOLUTION.gym.widthMax },
+            height: { ideal: CAMERA_RESOLUTION.gym.heightIdeal, max: CAMERA_RESOLUTION.gym.heightMax },
+            frameRate: { ideal: CAMERA_TARGET_FPS, min: CAMERA_MIN_FPS, max: CAMERA_TARGET_FPS },
           };
 
           stream = await navigator.mediaDevices.getUserMedia({
@@ -547,9 +552,9 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           const videoConstraints: MediaTrackConstraints = {
             facingMode: preferredDeviceId ? undefined : { ideal: "environment" },
             deviceId: preferredDeviceId ? { ideal: preferredDeviceId } : undefined,
-            width: { ideal: 640, max: 960 },
-            height: { ideal: 480, max: 720 },
-            frameRate: { ideal: 30, min: 15, max: 30 },
+            width: { ideal: CAMERA_RESOLUTION.finger.widthIdeal, max: CAMERA_RESOLUTION.finger.widthMax },
+            height: { ideal: CAMERA_RESOLUTION.finger.heightIdeal, max: CAMERA_RESOLUTION.finger.heightMax },
+            frameRate: { ideal: CAMERA_TARGET_FPS, min: CAMERA_MIN_FPS, max: CAMERA_TARGET_FPS },
           };
 
           stream = await navigator.mediaDevices.getUserMedia({

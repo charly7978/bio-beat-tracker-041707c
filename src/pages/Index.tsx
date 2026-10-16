@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2, Sliders, User, Check } from "lucide-react";
+import { Heart, AlertTriangle, Activity, X, Brain, Loader2, Sliders } from "lucide-react";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
-import { CalibrationManager } from "@/modules/vital-signs/CalibrationManager";
+import { CalibrationManager, CALIBRATION_DEVICE_ID } from "@/modules/vital-signs/CalibrationManager";
 import type { VitalSignsResult } from "@/modules/vital-signs/VitalSignsProcessor";
 import { supabase } from "@/integrations/supabase/client";
 import { useSignalProcessor } from "@/hooks/useSignalProcessor";
@@ -15,7 +15,6 @@ import { useFrameLoop } from "@/hooks/useFrameLoop";
 import { useSignalRouter } from "@/hooks/useSignalRouter";
 import { useMeasurementSession } from "@/hooks/useMeasurementSession";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
-import { PoincarePlot } from "@/components/PoincarePlot";
 import { WebrtcCallWidget } from "@/components/WebrtcCallWidget";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
@@ -23,25 +22,14 @@ import type { ContactState } from "@/types/signal";
 import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
 import { triggerCalibrationCompleteHaptic } from "@/utils/haptics";
 import { createLogger } from "@/utils/logger";
+import { VITAL_THRESHOLDS, CALIBRATION_CONFIG } from "@/config/vitalThresholds";
+import { STORAGE_KEYS } from "@/lib/storage/localEncryptedStorage";
+import { DSP_CONSTANTS } from "@/config/signalProcessing";
+import { SplashScreen } from "@/components/SplashScreen";
+import { MeasurementSummaryModal } from "@/components/measurement/MeasurementSummaryModal";
+import { SettingsPanel, type ActiveUser, type HistoricalMeasurement } from "@/components/SettingsPanel";
 
 const log = createLogger('Index');
-
-interface ActiveUser {
-  id: string;
-  email?: string;
-}
-
-interface HistoricalMeasurement {
-  id: string;
-  heart_rate: number;
-  spo2: number;
-  systolic: number;
-  diastolic: number;
-  arrhythmia_count: number;
-  quality: number;
-  measured_at: string;
-  isCloud?: boolean;
-}
 
 const Index = () => {
   // Canvas sincrónico (render-phase, fuera de effects)
@@ -155,13 +143,10 @@ const Index = () => {
     fullResetVitalSigns,
     resetHeartBeat,
     saveMeasurement,
-    setCameraRuntimeHints,
     resetProcessor,
     syncCameraHints,
     resetFingerContactSession: router.resetFingerContactSession,
     resetSessionRefs: router.resetSessionRefs,
-    setShowResults: (v) => session.setLocalShowResults(v),
-    setMeasurementSummary: (v) => session.setLocalMeasurementSummary(v),
     setHeartbeatSignal: (v) => router.setHeartbeatSignal(v),
     setBeatMarker: (v) => router.setBeatMarker(v),
     setRRIntervals: (v) => router.setRRIntervals(v),
@@ -177,7 +162,6 @@ const Index = () => {
     isMonitoringRef: router.isMonitoringRef,
     lastSignal,
     sanityProfileId: router.sanityProfileId,
-    getBackpressureConfig,
     setHeartBeatRuntimeHints,
   });
 
@@ -228,7 +212,6 @@ const Index = () => {
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showTelemedicine, setShowTelemedicine] = useState(false);
-  const [webgpuAvail, setWebgpuAvail] = useState<'checking' | 'yes' | 'no'>('checking');
   const [healthAvail, setHealthAvail] = useState<'checking' | 'yes' | 'no'>('checking');
   const [encryptionReady, setEncryptionReady] = useState(false);
   const [riskResult, setRiskResult] = useState<string | null>(null);
@@ -253,7 +236,6 @@ const Index = () => {
     setDisclaimerAccepted(true);
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'profile' | 'calibration' | 'history' | 'account'>('profile');
   const [history, setHistory] = useState<HistoricalMeasurement[]>([]);
   const [currentUser, setCurrentUser] = useState<ActiveUser | null>(null);
   const [email, setEmail] = useState("");
@@ -297,8 +279,8 @@ const Index = () => {
 
   const handleClearHistory = useCallback(() => {
     if (window.confirm("¿Estás seguro de que quieres borrar el historial local de este dispositivo?")) {
-      localStorage.removeItem("local_measurements");
-      localStorage.removeItem("bb-crypto-key");
+      localStorage.removeItem(STORAGE_KEYS.measurements);
+      localStorage.removeItem(STORAGE_KEYS.cryptoKey);
       fetchHistory();
     }
   }, [fetchHistory]);
@@ -407,24 +389,6 @@ const Index = () => {
     }
   }, [showSettings, fetchHistory]);
 
-  // Check WebGPU availability
-  useEffect(() => {
-    if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const gpu = (navigator as any).gpu;
-      if (gpu) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        gpu.requestAdapter().then((adapter: any) => {
-          setWebgpuAvail(adapter ? 'yes' : 'no');
-        }).catch(() => setWebgpuAvail('no'));
-      } else {
-        setWebgpuAvail('no');
-      }
-    } else {
-      setWebgpuAvail('no');
-    }
-  }, []);
-
   // Check Health Connect availability
   useEffect(() => {
     healthBridge.checkAvailability().then(avail => {
@@ -434,7 +398,7 @@ const Index = () => {
 
   // Check if encryption key exists (means crypto was initialized)
   useEffect(() => {
-    const check = () => setEncryptionReady(localStorage.getItem('bb-crypto-key') !== null);
+    const check = () => setEncryptionReady(localStorage.getItem(STORAGE_KEYS.cryptoKey) !== null);
     check();
     window.addEventListener('storage', check);
     return () => window.removeEventListener('storage', check);
@@ -513,30 +477,32 @@ const Index = () => {
     let calibratedSpo2 = false;
 
     if (sysVal && diaVal) {
-      if (sysVal < 70 || sysVal > 220 || diaVal < 40 || diaVal > 130) {
-        alert("Los valores de presión arterial están fuera de los rangos lógicos (Sistólica: 70-220, Diastólica: 40-130).");
+      const BP = VITAL_THRESHOLDS.BP;
+      if (
+        sysVal < BP.SYSTOLIC_MIN || sysVal > BP.SYSTOLIC_MAX ||
+        diaVal < BP.DIASTOLIC_MIN || diaVal > BP.DIASTOLIC_MAX
+      ) {
+        alert(`Los valores de presión arterial están fuera de rango (Sistólica: ${BP.SYSTOLIC_MIN}-${BP.SYSTOLIC_MAX}, Diastólica: ${BP.DIASTOLIC_MIN}-${BP.DIASTOLIC_MAX}).`);
         return;
       }
-      
+
       const lastBP = lastValidResults?.bloodPressure.value;
       if (lastBP) {
-        const activeBp = calib.getActiveProfile('BP');
-        const prevSbpOff = activeBp?.coefficients?.sbpOffset ?? activeBp?.coefficients?.systolicOffset ?? 0;
-        const prevDbpOff = activeBp?.coefficients?.dbpOffset ?? activeBp?.coefficients?.diastolicOffset ?? 0;
-        const rawSys = lastBP.systolic - prevSbpOff;
-        const rawDia = lastBP.diastolic - prevDbpOff;
+        const prevOffsets = calib.getActiveBpOffsets() ?? { sbpOffset: 0, dbpOffset: 0 };
+        const rawSys = lastBP.systolic - prevOffsets.sbpOffset;
+        const rawDia = lastBP.diastolic - prevOffsets.dbpOffset;
         const sbpOffset = sysVal - rawSys;
         const dbpOffset = diaVal - rawDia;
-        
+
         calib.addProfile({
           id: `bp_${Date.now()}`,
           type: 'BP',
-          deviceId: 'camera_ppg',
+          deviceId: CALIBRATION_DEVICE_ID,
           modelName: 'Bio-PWA 2026 Engine',
           coefficients: { sbpOffset, dbpOffset },
           referenceValues: { systolic: sysVal, diastolic: diaVal },
           createdAt: Date.now(),
-          expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+          expiresAt: Date.now() + CALIBRATION_CONFIG.EXPIRATION_DAYS * 24 * 60 * 60 * 1000,
           method: 'cuff_reference'
         });
         calibratedBP = true;
@@ -544,27 +510,27 @@ const Index = () => {
     }
 
     if (spo2Val) {
-      if (spo2Val < 70 || spo2Val > 100) {
-        alert("El valor de SpO2 debe estar entre 70 y 100.");
+      const SPO2 = VITAL_THRESHOLDS.SPO2;
+      if (spo2Val < SPO2.MIN_VALID || spo2Val > SPO2.MAX_VALID) {
+        alert(`El valor de SpO2 debe estar entre ${SPO2.MIN_VALID} y ${SPO2.MAX_VALID}.`);
         return;
       }
 
       const lastSpo2 = lastValidResults?.spo2.value;
       if (lastSpo2) {
-        const activeSpo2 = calib.getActiveProfile('SPO2');
-        const prevSpo2Off = activeSpo2?.coefficients?.spo2Offset ?? 0;
+        const prevSpo2Off = calib.getActiveSpo2Offset();
         const rawSpo2 = lastSpo2 - prevSpo2Off;
         const spo2Offset = spo2Val - rawSpo2;
-        
+
         calib.addProfile({
           id: `spo2_${Date.now()}`,
           type: 'SPO2',
-          deviceId: 'camera_ppg',
+          deviceId: CALIBRATION_DEVICE_ID,
           modelName: 'Beer-Lambert Camera Proxy',
           coefficients: { spo2Offset },
           referenceValues: { spo2: spo2Val },
           createdAt: Date.now(),
-          expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+          expiresAt: Date.now() + CALIBRATION_CONFIG.EXPIRATION_DAYS * 24 * 60 * 60 * 1000,
           method: 'oximeter_reference'
         });
         calibratedSpo2 = true;
@@ -678,7 +644,7 @@ const Index = () => {
       motionScore: sqm?.motionScore ?? 0,
       saturationRatio: sqm?.saturationRatio ?? 0,
       underexposureRatio: sqm?.underexposureRatio ?? 0,
-      fpsEffective: sqm?.fpsEffective ?? 30,
+      fpsEffective: sqm?.fpsEffective ?? DSP_CONSTANTS.DEFAULT_SAMPLE_RATE,
       frameDropRatio: sqm?.frameDropRatio ?? 0,
       timestampJitterMs: sqm?.timestampJitterMs ?? 0,
       torchActive: measurementMode === 'gym' ? undefined : (cam?.torchActive as boolean | undefined),
@@ -780,99 +746,14 @@ const Index = () => {
           stacking contexts distintos (splash z-[100] vs contenedor z-10) y el
           splash interceptaba el click del disclaimer. */}
       {disclaimerAccepted && !session.isFullscreen && (
-        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-gradient-to-b from-zinc-950 via-black to-zinc-950 animate-in fade-in duration-700">
-          <div className="relative flex flex-col items-center max-w-xs text-center space-y-10 px-4">
-            
-            {/* Logo Pulsante / Anillos Biomédicos */}
-            <div className="relative flex items-center justify-center">
-              <div className="absolute inset-0 bg-emerald-500/20 blur-3xl rounded-full animate-ripple scale-150" />
-              <div className="absolute w-32 h-32 rounded-full border border-emerald-500/20 animate-spin duration-1000" style={{ animationDuration: '8s' }} />
-              <div className="relative w-24 h-24 rounded-full glass-card border border-emerald-500/40 flex items-center justify-center shadow-2xl shadow-emerald-950/60 glow-emerald">
-                <Heart className="w-10 h-10 text-emerald-400 animate-cardiac drop-shadow-[0_0_12px_rgba(16,185,129,0.8)]" fill="currentColor" />
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <h1 className="text-white text-3xl font-extrabold tracking-[0.18em] font-heading bg-gradient-to-r from-white via-zinc-200 to-emerald-300 bg-clip-text text-transparent">
-                BIO-BEAT
-              </h1>
-              <div className="flex items-center justify-center gap-2">
-                <span className="h-[1px] w-6 bg-emerald-500/40" />
-                <p className="text-emerald-400/80 text-[10px] font-bold tracking-[0.25em] uppercase font-mono">
-                  Monitor de Grado Clínico
-                </p>
-                <span className="h-[1px] w-6 bg-emerald-500/40" />
-              </div>
-            </div>
-
-            {/* Selector de Modo Pre-Inicio */}
-            <div className="flex items-center gap-1.5 p-1 bg-black/40 backdrop-blur-md rounded-2xl border border-white/10">
-              <button
-                type="button"
-                onClick={() => { setMeasurementMode('finger'); resetProcessor(); }}
-                className={`px-3.5 py-1.5 rounded-xl text-[10px] font-mono font-bold tracking-wider transition-all duration-200 flex items-center gap-1.5 ${
-                  measurementMode === 'finger'
-                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/30'
-                    : 'text-zinc-400 hover:text-white'
-                }`}
-              >
-                <Heart className="w-3 h-3" />
-                CLÍNICO (DEDO)
-              </button>
-              <button
-                type="button"
-                onClick={() => { setMeasurementMode('gym'); resetProcessor(); }}
-                className={`px-3.5 py-1.5 rounded-xl text-[10px] font-mono font-bold tracking-wider transition-all duration-200 flex items-center gap-1.5 ${
-                  measurementMode === 'gym'
-                    ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/30'
-                    : 'text-zinc-400 hover:text-white'
-                }`}
-              >
-                <Activity className="w-3 h-3" />
-                MODO GYM (FACIAL)
-              </button>
-            </div>
-
-            <button 
-              onClick={() => {
-                session.enterFullScreen();
-                session.startMonitoring();
-              }}
-              className="group relative px-8 py-3.5 overflow-hidden rounded-2xl transition-all duration-300 active:scale-95 shadow-xl shadow-emerald-950/40"
-            >
-              <div className="absolute inset-0 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 opacity-90 group-hover:opacity-100 transition-opacity" />
-              <div className="absolute inset-0 border border-emerald-300/40 rounded-2xl" />
-              <span className="relative text-white text-xs font-bold tracking-[0.2em] uppercase font-mono flex items-center gap-2">
-                <Activity className="w-4 h-4 text-emerald-200" />
-                INICIAR SISTEMA
-              </span>
-            </button>
-
-            <div className="pt-6 grid grid-cols-2 gap-x-6 gap-y-4 opacity-90 animate-in slide-in-from-bottom-6 duration-700 delay-200 fill-mode-both">
-              <div className="text-left space-y-1 glass-card p-2.5 rounded-xl border border-white/5">
-                <p className="text-zinc-400 text-[8px] font-bold tracking-widest uppercase font-mono">Pipeline</p>
-                <p className="text-emerald-300 text-[9px] font-mono leading-tight font-bold">ZERO-ALLOCATION<br/>ULTRA LOW LATENCY</p>
-              </div>
-              <div className="text-left space-y-1 glass-card p-2.5 rounded-xl border border-white/5">
-                <p className="text-zinc-400 text-[8px] font-bold tracking-widest uppercase font-mono">Engine</p>
-                <p className="text-cyan-300 text-[9px] font-mono leading-tight font-bold">PPG-RG FIDELITY<br/>PWA IMMERSIVE</p>
-              </div>
-              <div className="text-left space-y-1 glass-card p-2.5 rounded-xl border border-white/5">
-                <p className="text-zinc-400 text-[8px] font-bold tracking-widest uppercase font-mono">Analytics</p>
-                <p className="text-emerald-300 text-[9px] font-mono leading-tight font-bold">HRV CLINICAL<br/>RMSSD / PNN50</p>
-              </div>
-              <div className="text-left space-y-1 glass-card p-2.5 rounded-xl border border-white/5">
-                <p className="text-zinc-400 text-[8px] font-bold tracking-widest uppercase font-mono">Security</p>
-                <p className="text-indigo-300 text-[9px] font-mono leading-tight font-bold">ANTI-SIM GUARD<br/>DATA INTEGRITY</p>
-              </div>
-            </div>
-
-            <div className="pt-4 space-y-1 opacity-50 text-center font-mono text-[8px] text-zinc-400 uppercase tracking-widest">
-              <p>Hardware: WebRTC Optical Sensor</p>
-              <p>Engine v4.0.2 • Build 2026.SOTA</p>
-            </div>
-          </div>
-        </div>
+        <SplashScreen
+          measurementMode={measurementMode}
+          onSelectMode={(mode) => { setMeasurementMode(mode); resetProcessor(); }}
+          onStart={() => {
+            session.enterFullScreen();
+            session.startMonitoring();
+          }}
+        />
       )}
 
       <div className="flex-1 relative">
@@ -1064,7 +945,6 @@ const Index = () => {
               }
               acquisitionStatus={acquisitionStatusLabel}
               getVideoElement={() => cameraRef.current?.getVideoElement() ?? canvasRef.current ?? null}
-              webgpuAvail={webgpuAvail}
               encryptionReady={encryptionReady}
               healthAvail={healthAvail}
               riskResult={riskResult}
@@ -1073,226 +953,23 @@ const Index = () => {
           </div>
 
           {/* RESUMEN ESTADÍSTICO POST-MEDICIÓN */}
-          {session.showResults && session.measurementSummary && (() => {
-            const { totalBeats, arrhythmiaBeats, normalPercent } = session.measurementSummary;
-            const normalBeats = totalBeats - arrhythmiaBeats;
-            const avgBpm = (router.vitalSigns.heartRate.value ?? 0) > 0 ? Math.round(router.vitalSigns.heartRate.value!) : '--';
-            const statusColor = normalPercent >= 95 ? 'emerald' : normalPercent >= 80 ? 'yellow' : 'red';
-            const statusText = normalPercent >= 95 ? 'RITMO NORMAL' : normalPercent >= 80 ? 'LEVE IRREGULARIDAD' : 'IRREGULARIDAD DETECTADA';
-            const statusIcon = normalPercent >= 95 ? CheckCircle2 : normalPercent >= 80 ? AlertTriangle : XCircle;
-            const bgClass = statusColor === 'emerald' ? 'bg-emerald-500/10' : statusColor === 'yellow' ? 'bg-yellow-500/10' : 'bg-red-500/10';
-            const textClass = statusColor === 'emerald' ? 'text-emerald-400' : statusColor === 'yellow' ? 'text-yellow-400' : 'text-red-400';
-            const strokeClass = statusColor === 'emerald' ? 'stroke-emerald-400' : statusColor === 'yellow' ? 'stroke-yellow-400' : 'stroke-red-400';
-            const StatusIcon = statusIcon;
-            
-            return (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-fade-in p-4">
-                <div className="glass-panel border border-white/15 rounded-3xl max-w-sm w-full shadow-2xl flex flex-col max-h-[85vh] overflow-hidden animate-in zoom-in-95 duration-200">
-                  
-                  {/* Header con estado */}
-                  <div className={`flex-none px-5 py-4 ${bgClass} border-b border-white/10`}>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 rounded-2xl bg-black/40 border border-white/10 shadow-inner">
-                          <StatusIcon className={`w-5 h-5 ${textClass}`} />
-                        </div>
-                        <div>
-                          <h3 className="text-white text-sm font-bold font-heading tracking-wide">
-                            {session.validationVerdict && !session.validationVerdict.accepted ? 'SESIÓN NO VÁLIDA' : 'MEDICIÓN COMPLETADA'}
-                          </h3>
-                          <p className={`${textClass} text-[10px] font-semibold tracking-wider uppercase font-mono`}>{statusText}</p>
-                        </div>
-                      </div>
-                      <button 
-                        onClick={() => {
-                          session.setLocalMeasurementSummary(null);
-                          session.setLocalShowResults(false);
-                        }}
-                        className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Métricas principales */}
-                  <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                    
-                    {/* BPM y SpO2 en fila */}
-                    <div className="grid grid-cols-2 gap-2.5">
-                      <div className="glass-card rounded-2xl p-3 text-center border border-white/5 shadow-lg">
-                        <Heart className="w-4 h-4 text-rose-400 mx-auto mb-1 animate-cardiac" fill="currentColor" />
-                        <div className="text-white text-2xl font-extrabold font-mono leading-none tracking-tight">{avgBpm}</div>
-                        <div className="text-zinc-400 text-[9px] mt-1 font-mono uppercase tracking-wider">BPM PROMEDIO</div>
-                      </div>
-                      <div className="glass-card rounded-2xl p-3 text-center border border-white/5 shadow-lg">
-                        <Activity className="w-4 h-4 text-cyan-400 mx-auto mb-1" />
-                        <div className="text-white text-2xl font-extrabold font-mono leading-none tracking-tight">
-                          {router.vitalSigns.spo2.value != null && router.vitalSigns.spo2.value > 0 ? Math.round(router.vitalSigns.spo2.value) : '--'}
-                          <span className="text-sm text-cyan-300/70 ml-0.5">%</span>
-                        </div>
-                        <div className="text-zinc-400 text-[9px] mt-1 font-mono uppercase tracking-wider">SpO₂ · experimental</div>
-                        <div className="mt-1.5 flex justify-center">
-                          {router.vitalSigns.spo2.value != null && router.vitalSigns.spo2.value > 0 ? (
-                            router.vitalSigns.spo2.calibration?.available ? (
-                              <span className="text-[7px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">CALIBRADO</span>
-                            ) : (
-                              <span className="text-[7px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">ESTIMADO</span>
-                            )
-                          ) : (
-                            <span className="text-[7px] font-bold px-2 py-0.5 rounded-full bg-zinc-500/20 text-zinc-300 border border-zinc-500/30">NO DISPONIBLE</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Presión arterial */}
-                    {router.vitalSigns.bloodPressure.value && router.vitalSigns.bloodPressure.value.systolic > 0 && (
-                      <div className="glass-card rounded-2xl p-3.5 border border-white/5 flex items-center gap-3 shadow-lg">
-                        <div className="p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
-                          <Shield className="w-4 h-4 text-indigo-400" />
-                        </div>
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between mb-0.5">
-                            <div className="text-zinc-400 text-[9px] font-mono uppercase tracking-wider">PRESIÓN ARTERIAL</div>
-                            {router.vitalSigns.bloodPressure.calibration?.available ? (
-                              <span className="text-[7px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">CALIBRADO</span>
-                            ) : (
-                              <span className="text-[7px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">ESTIMADO</span>
-                            )}
-                          </div>
-                          <div className="text-white text-lg font-bold font-mono">
-                            {Math.round(router.vitalSigns.bloodPressure.value.systolic)}/{Math.round(router.vitalSigns.bloodPressure.value.diastolic)}
-                            <span className="text-xs text-zinc-400 ml-1 font-sans">mmHg</span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Barras de ritmo */}
-                    <div className="glass-card rounded-2xl p-3.5 border border-white/5 space-y-2 shadow-lg">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-zinc-300 text-[10px] font-bold font-mono tracking-wider uppercase">ANÁLISIS DE RITMO</span>
-                        <div className="flex items-center gap-1 text-zinc-400 text-[9px] font-mono">
-                          <Clock className="w-3 h-3 text-zinc-500" />
-                          <span>60s</span>
-                        </div>
-                      </div>
-                      
-                      {/* Latidos normales */}
-                      <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <span className="text-emerald-400 text-[9px] font-mono">■ Latidos Normales</span>
-                          <span className="text-white text-xs font-bold font-mono">{normalBeats}</span>
-                        </div>
-                        <div className="w-full h-2 bg-black/40 rounded-full overflow-hidden p-0.5 border border-white/5">
-                          <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-1000 ease-out"
-                               style={{ width: `${totalBeats > 0 ? (normalBeats / totalBeats) * 100 : 0}%` }} />
-                        </div>
-                      </div>
-                      
-                      {/* Arritmias */}
-                      <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <span className="text-rose-400 text-[9px] font-mono">■ Arrítmicos / Ectópicos</span>
-                          <span className="text-white text-xs font-bold font-mono">{arrhythmiaBeats}</span>
-                        </div>
-                        <div className="w-full h-2 bg-black/40 rounded-full overflow-hidden p-0.5 border border-white/5">
-                          <div className={`h-full rounded-full transition-all duration-1000 ease-out ${arrhythmiaBeats > 0 ? 'bg-gradient-to-r from-rose-600 to-red-500' : 'bg-zinc-800'}`}
-                               style={{ width: `${totalBeats > 0 ? (arrhythmiaBeats / totalBeats) * 100 : 100}%` }} />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Poincaré Plot de HRV */}
-                    {router.rrIntervals && router.rrIntervals.length >= 2 && (
-                      <div className="flex justify-center my-1 animate-in fade-in zoom-in-95 duration-500">
-                        <PoincarePlot rrIntervals={router.rrIntervals} width={200} height={200} />
-                      </div>
-                    )}
-
-                    {/* Porcentaje circular visual */}
-                    <div className="glass-card rounded-2xl p-3 border border-white/5 flex items-center justify-center gap-4">
-                      <div className="relative w-14 h-14">
-                        <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
-                          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                                fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
-                          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                                fill="none"
-                                className={strokeClass}
-                                strokeWidth="3"
-                                strokeDasharray={`${normalPercent}, 100`}
-                                strokeLinecap="round" />
-                        </svg>
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <span className={`text-xs font-bold font-mono ${textClass}`}>
-                            {normalPercent}%
-                          </span>
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-white text-xs font-bold font-heading">Regularidad de Ritmo</div>
-                        <div className="text-zinc-400 text-[9px] font-mono">{totalBeats} latidos registrados</div>
-                        <div className={`text-[10px] font-bold mt-0.5 font-mono ${textClass}`}>
-                          {statusText}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Tarjeta de Validación Clínica (MeasurementWindowValidator) */}
-                    {session.validationVerdict && (
-                      <div className={`glass-card rounded-2xl p-3 border ${session.validationVerdict.accepted ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'} space-y-1.5 shadow-lg`}>
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1.5">
-                            {session.validationVerdict.accepted ? (
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                            ) : (
-                              <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-                            )}
-                            <span className={`text-[10px] font-bold font-mono tracking-wider uppercase ${session.validationVerdict.accepted ? 'text-emerald-400' : 'text-amber-400'}`}>
-                              {session.validationVerdict.accepted ? 'VENTANA CLÍNICA VALIDADA' : 'CALIDAD DE SEÑAL SUBÓPTIMA'}
-                            </span>
-                          </div>
-                          <span className="text-[9px] font-mono text-zinc-400">
-                            SQI {Math.round(session.validationVerdict.qualitySummary.sqiMedian)}% · {Math.round(session.validationVerdict.qualitySummary.fpsMedian)} FPS
-                          </span>
-                        </div>
-                        {!session.validationVerdict.accepted && session.validationVerdict.rejectionReasons.length > 0 && (
-                          <p className="text-[9px] font-mono text-amber-300/80 leading-tight">
-                            {session.validationVerdict.rejectionReasons[0]}
-                          </p>
-                        )}
-                        {!session.validationVerdict.accepted && avgBpm === '--' && (
-                          <p className="text-[9px] font-mono text-amber-300/80 leading-tight">
-                            Sin pulso válido: no genera fila de historial (BPM en --).
-                          </p>
-                        )}
-                        <p className="text-[8px] font-mono text-zinc-500 leading-tight">
-                          SpO₂/PA son estimaciones experimentales de bienestar, no mediciones clínicas.
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Botón Análisis AI */}
-                    <button
-                      onClick={() => {
-                        analyzeVitals({ vitalSigns: router.vitalSigns, quality: lastSignal?.quality || 0 });
-                        setShowAIAnalysis(true);
-                      }}
-                      disabled={isAnalyzing}
-                      className="w-full mt-1 flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs font-mono uppercase tracking-wider transition-all active:scale-[0.98] shadow-xl shadow-purple-950/40 disabled:opacity-50 border border-purple-400/30"
-                    >
-                      {isAnalyzing ? (
-                        <><Loader2 className="w-4 h-4 animate-spin" /> Analizando...</>
-                      ) : (
-                        <><Brain className="w-4 h-4 text-purple-200" /> Análisis AI de Salud</>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
+          {session.showResults && session.measurementSummary && (
+            <MeasurementSummaryModal
+              summary={session.measurementSummary}
+              validationVerdict={session.validationVerdict}
+              vitalSigns={router.vitalSigns}
+              rrIntervals={router.rrIntervals}
+              isAnalyzing={isAnalyzing}
+              onClose={() => {
+                session.setLocalMeasurementSummary(null);
+                session.setLocalShowResults(false);
+              }}
+              onAnalyze={() => {
+                analyzeVitals({ vitalSigns: router.vitalSigns, quality: lastSignal?.quality || 0 });
+                setShowAIAnalysis(true);
+              }}
+            />
+          )}
 
           {/* MODAL ANÁLISIS AI */}
           {showAIAnalysis && (
@@ -1332,419 +1009,29 @@ const Index = () => {
 
           {/* PANEL DE AJUSTES Y CALIBRACIÓN */}
           {showSettings && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-fade-in p-4">
-              <div className="glass-panel border border-white/15 rounded-3xl max-w-sm w-full shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
-                
-                {/* Header */}
-                <div className="px-5 pt-4 bg-gradient-to-b from-white/5 to-transparent border-b border-white/10 flex flex-col">
-                  <div className="flex items-center justify-between pb-3">
-                    <div className="flex items-center gap-2.5">
-                      <div className="p-2 rounded-2xl bg-emerald-500/10 border border-emerald-500/20">
-                        <Sliders className="w-4 h-4 text-emerald-400" />
-                      </div>
-                      <div>
-                        <h3 className="text-white text-sm font-bold font-heading tracking-wide uppercase">Ajustes del Sistema</h3>
-                        <p className="text-zinc-400 text-[8px] font-mono tracking-wider uppercase">Monitorización y calibración clínica</p>
-                      </div>
-                    </div>
-                    <button 
-                      onClick={() => setShowSettings(false)}
-                      className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                  
-                  {/* Tabs Selector */}
-                  <div className="flex gap-1 p-1 bg-black/40 rounded-2xl border border-white/5 text-[9px] font-bold font-mono mb-2">
-                    <button 
-                      onClick={() => setActiveTab('profile')}
-                      className={`flex-1 py-1.5 px-2 text-center rounded-xl transition-all duration-200 ${
-                        activeTab === 'profile'
-                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-md'
-                          : 'text-zinc-400 hover:text-zinc-200'
-                      }`}
-                    >
-                      PERFIL
-                    </button>
-                    <button 
-                      onClick={() => setActiveTab('calibration')}
-                      className={`flex-1 py-1.5 px-2 text-center rounded-xl transition-all duration-200 ${
-                        activeTab === 'calibration'
-                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-md'
-                          : 'text-zinc-400 hover:text-zinc-200'
-                      }`}
-                    >
-                      CALIBRACIÓN
-                    </button>
-                    <button 
-                      onClick={() => setActiveTab('history')}
-                      className={`flex-1 py-1.5 px-2 text-center rounded-xl transition-all duration-200 ${
-                        activeTab === 'history'
-                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-md'
-                          : 'text-zinc-400 hover:text-zinc-200'
-                      }`}
-                    >
-                      HISTORIAL
-                    </button>
-                    <button 
-                      onClick={() => setActiveTab('account')}
-                      className={`flex-1 py-1.5 px-2 text-center rounded-xl transition-all duration-200 ${
-                        activeTab === 'account'
-                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-md'
-                          : 'text-zinc-400 hover:text-zinc-200'
-                      }`}
-                    >
-                      SYNC
-                    </button>
-                  </div>
-                </div>
-
-                {/* Body */}
-                <div className="flex-1 overflow-y-auto p-4">
-                  
-                  {/* TAB 1: PERFIL */}
-                  {activeTab === 'profile' && (
-                    <div className="space-y-4 animate-in fade-in duration-200">
-                      {/* Sección 1: Perfil Fisiológico */}
-                      <div className="space-y-3">
-                        <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] font-bold uppercase tracking-wider">
-                          <User className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Perfil Fisiológico (PA Neuronal)</span>
-                        </div>
-                        
-                        <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3.5">
-                          {/* Edad y Género */}
-                          <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-1">
-                              <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Edad (años)</label>
-                              <input 
-                                type="number" 
-                                value={age}
-                                onChange={(e) => setAge(e.target.value)}
-                                className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
-                                placeholder="35"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Sexo Biológico</label>
-                              <div className="grid grid-cols-2 gap-1 bg-black p-0.5 rounded-lg border border-zinc-900">
-                                <button 
-                                  type="button"
-                                  onClick={() => setGender('male')}
-                                  className={`py-1 text-[10px] font-bold rounded ${gender === 'male' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'text-zinc-500 hover:text-white'}`}
-                                >
-                                  MASC
-                                </button>
-                                <button 
-                                  type="button"
-                                  onClick={() => setGender('female')}
-                                  className={`py-1 text-[10px] font-bold rounded ${gender === 'female' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'text-zinc-500 hover:text-white'}`}
-                                >
-                                  FEM
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Altura y Peso */}
-                          <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-1">
-                              <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Altura (cm)</label>
-                              <input 
-                                type="number" 
-                                value={height}
-                                onChange={(e) => setHeight(e.target.value)}
-                                className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
-                                placeholder="172"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Peso (kg)</label>
-                              <input 
-                                type="number" 
-                                value={weight}
-                                onChange={(e) => setWeight(e.target.value)}
-                                className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
-                                placeholder="70"
-                              />
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={handleSaveProfile}
-                            className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] transition-colors flex items-center justify-center gap-1.5"
-                          >
-                            <Check className="w-3.5 h-3.5" /> GUARDAR PERFIL
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* TAB 1b: CALIBRACIÓN */}
-                  {activeTab === 'calibration' && (
-                    <div className="space-y-4 animate-in fade-in duration-200">
-                      {/* Sección 2: Calibración Cruzada */}
-                      <div className="space-y-3">
-                        <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] font-bold uppercase tracking-wider">
-                          <Activity className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Calibración con Dispositivo Médico</span>
-                        </div>
-
-                        <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3.5">
-                          {lastValidResults ? (
-                            <>
-                              <div className="bg-black/60 rounded-lg p-2.5 border border-zinc-900/40 text-[10px] space-y-1">
-                                <span className="text-zinc-500 font-semibold block uppercase">Última medición registrada:</span>
-                                <div className="flex justify-between text-white font-bold">
-                                  <span>PA: {lastValidResults.bloodPressure.value ? `${Math.round(lastValidResults.bloodPressure.value.systolic)}/${Math.round(lastValidResults.bloodPressure.value.diastolic)} mmHg` : 'No detectada'}</span>
-                                  <span>SpO₂: {lastValidResults.spo2.value ? `${Math.round(lastValidResults.spo2.value)}%` : 'No detectado'}</span>
-                                </div>
-                              </div>
-
-                              <div className="space-y-2.5">
-                                <div className="grid grid-cols-2 gap-3">
-                                  <div className="space-y-1">
-                                    <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Ref. Sistólica (mmHg)</label>
-                                    <input 
-                                      type="number" 
-                                      value={refSys}
-                                      onChange={(e) => setRefSys(e.target.value)}
-                                      className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
-                                      placeholder="120"
-                                    />
-                                  </div>
-                                  <div className="space-y-1">
-                                    <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Ref. Diastólica (mmHg)</label>
-                                    <input 
-                                      type="number" 
-                                      value={refDia}
-                                      onChange={(e) => setRefDia(e.target.value)}
-                                      className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
-                                      placeholder="80"
-                                    />
-                                  </div>
-                                </div>
-
-                                <div className="space-y-1">
-                                  <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Ref. SpO₂ (%)</label>
-                                  <input 
-                                    type="number" 
-                                    value={refSpo2}
-                                    onChange={(e) => setRefSpo2(e.target.value)}
-                                    className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
-                                    placeholder="98"
-                                  />
-                                </div>
-
-                                <button
-                                  type="button"
-                                  onClick={handleCalibrateReference}
-                                  className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] transition-colors flex items-center justify-center gap-1.5"
-                                >
-                                  <Activity className="w-3.5 h-3.5" /> CALIBRAR DISPOSITIVO
-                                </button>
-                              </div>
-                            </>
-                          ) : (
-                            <div className="text-center py-4 space-y-2">
-                              <AlertTriangle className="w-6 h-6 text-amber-500 mx-auto" />
-                              <p className="text-zinc-400 text-[10px] font-semibold leading-relaxed">
-                                Realiza al menos una medición completa para poder calibrar los sensores ópticos con tus valores de referencia.
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Sección 3: Estado de Calibraciones */}
-                      <div className="space-y-3">
-                        <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] font-bold uppercase tracking-wider">
-                          <Shield className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Calibraciones Activas</span>
-                        </div>
-
-                        <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-2 text-[10px] font-semibold text-zinc-400">
-                          <div className="flex justify-between items-center py-1 border-b border-zinc-900/50">
-                            <span>Presión Arterial (BP)</span>
-                            {CalibrationManager.getInstance().getCalibrationInfo('BP').available ? (
-                              <span className="text-emerald-400 font-bold uppercase">Activo (Válido)</span>
-                            ) : (
-                              <span className="text-slate-600 uppercase">Sin calibrar</span>
-                            )}
-                          </div>
-                          <div className="flex justify-between items-center py-1">
-                            <span>Oxígeno en Sangre (SpO2)</span>
-                            {CalibrationManager.getInstance().getCalibrationInfo('SPO2').available ? (
-                              <span className="text-emerald-400 font-bold uppercase">Activo (Válido)</span>
-                            ) : (
-                              <span className="text-slate-600 uppercase">Sin calibrar</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* TAB 2: HISTORIAL DE MEDICIONES */}
-                  {activeTab === 'history' && (
-                    <div className="space-y-4 animate-in fade-in duration-200">
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={handleExportCSV}
-                          className="flex-1 py-2 rounded-xl bg-zinc-950 border border-zinc-900 hover:bg-zinc-900 text-white font-bold text-xs transition-all flex items-center justify-center gap-2"
-                        >
-                          <Activity className="w-4 h-4 text-cyan-400" /> EXPORTAR CSV
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleClearHistory}
-                          className="px-4 py-2 rounded-xl bg-red-950/20 border border-red-900/40 text-red-400 hover:bg-red-950/40 font-bold text-xs transition-all"
-                        >
-                          LIMPIAR
-                        </button>
-                      </div>
-
-                      <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
-                        {history.length > 0 ? (
-                          history.map((m: HistoricalMeasurement) => {
-                            const dateStr = new Date(m.measured_at).toLocaleDateString(undefined, {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            });
-                            return (
-                              <div key={m.id} className="bg-zinc-950/60 border border-zinc-900/40 rounded-xl p-3 space-y-2 relative">
-                                <div className="flex justify-between items-center">
-                                  <span className="text-[10px] text-zinc-500 font-bold uppercase">{dateStr}</span>
-                                  {m.isCloud ? (
-                                    <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400">NUBE</span>
-                                  ) : (
-                                    <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-zinc-900 text-zinc-400">LOCAL</span>
-                                  )}
-                                </div>
-                                <div className="grid grid-cols-3 gap-2 text-center">
-                                  <div className="bg-black/40 rounded-lg py-1 border border-zinc-950">
-                                    <span className="text-zinc-500 text-[8px] block font-bold">PULSO</span>
-                                    <span className="text-white text-xs font-bold">{m.heart_rate || '--'} <span className="text-[8px] text-zinc-400">bpm</span></span>
-                                  </div>
-                                  <div className="bg-black/40 rounded-lg py-1 border border-zinc-950">
-                                    <span className="text-zinc-500 text-[8px] block font-bold">SpO₂ <span className="text-amber-400/80">·EXP</span></span>
-                                    <span className="text-white text-xs font-bold">{m.spo2 || '--'}<span className="text-[8px] text-zinc-400">%</span></span>
-                                  </div>
-                                  <div className="bg-black/40 rounded-lg py-1 border border-zinc-950">
-                                    <span className="text-zinc-500 text-[8px] block font-bold">PRESIÓN <span className="text-amber-400/80">·EXP</span></span>
-                                    <span className="text-white text-xs font-bold">
-                                      {m.systolic && m.diastolic ? `${m.systolic}/${m.diastolic}` : '--'}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })
-                        ) : (
-                          <div className="text-center py-10 space-y-2 border border-dashed border-zinc-900 rounded-xl">
-                            <Activity className="w-8 h-8 text-slate-700 mx-auto animate-pulse" />
-                            <p className="text-zinc-500 text-[10px] font-semibold">Aún no hay mediciones guardadas en este dispositivo.</p>
-                          </div>
-                        )}
-                        {history.length > 0 && (
-                          <p className="text-zinc-600 text-[8px] font-mono leading-tight px-1">
-                            ·EXP = estimación experimental de bienestar, no medición clínica. «--» = no disponible (sin señal suficiente o sin referencia vigente).
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* TAB 3: SINCRONIZACIÓN EN LA NUBE */}
-                  {activeTab === 'account' && (
-                    <div className="space-y-4 animate-in fade-in duration-200">
-                      {currentUser ? (
-                        <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-4 space-y-4 text-center">
-                          <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto">
-                            <Check className="w-6 h-6 text-emerald-400" />
-                          </div>
-                          <div className="space-y-1">
-                            <h4 className="text-white text-xs font-bold">SESIÓN INICIADA</h4>
-                            <p className="text-zinc-400 text-[10px] font-mono">{currentUser.email}</p>
-                          </div>
-                          <p className="text-zinc-500 text-[9px] leading-relaxed">
-                            Tus signos vitales se guardarán automáticamente en la nube y se sincronizarán en todos tus dispositivos.
-                          </p>
-                          <button
-                            type="button"
-                            onClick={handleSignOut}
-                            className="w-full py-2 rounded-xl bg-red-950/20 border border-red-900/40 text-red-400 hover:bg-red-950/40 font-bold text-xs transition-all"
-                          >
-                            CERRAR SESIÓN
-                          </button>
-                        </div>
-                      ) : (
-                        <form onSubmit={handleAuth} className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-4 space-y-4">
-                          <div className="text-center space-y-1 pb-2">
-                            <h4 className="text-white text-xs font-bold uppercase">Sincronización en la Nube</h4>
-                            <p className="text-zinc-500 text-[9px] font-medium leading-relaxed">
-                              Crea una cuenta para guardar tu historial en internet de forma permanente y segura.
-                            </p>
-                          </div>
-
-                          <div className="space-y-2.5">
-                            <div className="space-y-1">
-                              <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Correo Electrónico</label>
-                              <input 
-                                type="email" 
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
-                                placeholder="tu@correo.com"
-                                required
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Contraseña</label>
-                              <input 
-                                type="password" 
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
-                                placeholder="••••••••"
-                                required
-                              />
-                            </div>
-                          </div>
-
-                          <div className="pt-2 space-y-3">
-                            <button
-                              type="submit"
-                              disabled={authLoading}
-                              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-bold text-xs tracking-wider transition-all disabled:opacity-50"
-                            >
-                              {authLoading ? "Procesando..." : (authMode === 'signin' ? "INICIAR SESIÓN" : "CREAR CUENTA")}
-                            </button>
-
-                            <div className="text-center">
-                              <button
-                                type="button"
-                                onClick={() => setAuthMode(prev => prev === 'signin' ? 'signup' : 'signin')}
-                                className="text-emerald-400 hover:text-emerald-300 text-[10px] font-bold"
-                              >
-                                {authMode === 'signin' ? "¿No tienes cuenta? Regístrate aquí" : "¿Ya tienes cuenta? Inicia sesión"}
-                              </button>
-                            </div>
-                          </div>
-                        </form>
-                      )}
-                    </div>
-                  )}
-
-                </div>
-              </div>
-            </div>
+            <SettingsPanel
+              onClose={() => setShowSettings(false)}
+              age={age} setAge={setAge}
+              gender={gender} setGender={setGender}
+              height={height} setHeight={setHeight}
+              weight={weight} setWeight={setWeight}
+              handleSaveProfile={handleSaveProfile}
+              lastValidResults={lastValidResults}
+              refSys={refSys} setRefSys={setRefSys}
+              refDia={refDia} setRefDia={setRefDia}
+              refSpo2={refSpo2} setRefSpo2={setRefSpo2}
+              handleCalibrateReference={handleCalibrateReference}
+              history={history}
+              handleExportCSV={handleExportCSV}
+              handleClearHistory={handleClearHistory}
+              currentUser={currentUser}
+              email={email} setEmail={setEmail}
+              password={password} setPassword={setPassword}
+              authLoading={authLoading}
+              authMode={authMode} setAuthMode={setAuthMode}
+              handleAuth={handleAuth}
+              handleSignOut={handleSignOut}
+            />
           )}
 
         </div>

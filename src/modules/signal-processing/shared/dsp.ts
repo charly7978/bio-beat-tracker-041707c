@@ -5,7 +5,6 @@
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { clamp } from '../../../utils/math';
 import { median } from '../../../utils/stats';
-import { BandpassFilter } from '../BandpassFilter';
 
 const TWO_PI_DSP = Math.PI * 2;
 
@@ -61,31 +60,6 @@ export function movingAverage(x: number[], win: number): number[] {
       }
     }
     out[i] = c > 0 ? sum / c : x[i];
-  }
-  return out;
-}
-
-export function derivativeCentral(x: number[], fs: number): number[] {
-  const n = x.length;
-  const out = new Array<number>(n).fill(0);
-  if (n < 3 || fs <= 0) return out;
-  for (let i = 1; i < n - 1; i++) {
-    out[i] = ((x[i + 1] - x[i - 1]) / 2) * fs;
-  }
-  return out;
-}
-
-export function movingWindowIntegration(x: number[], samples: number): number[] {
-  const n = x.length;
-  if (n === 0 || samples < 1) return [];
-  const out = new Array<number>(n).fill(0);
-  let acc = 0;
-  const q: number[] = [];
-  for (let i = 0; i < n; i++) {
-    acc += x[i];
-    q.push(x[i]);
-    if (q.length > samples) acc -= q.shift()!;
-    out[i] = acc / q.length;
   }
   return out;
 }
@@ -152,7 +126,7 @@ export function prepareUniformPpgWindow(
   const gaps: number[] = [];
   for (let i = 1; i < timestampsMs.length; i++) gaps.push(timestampsMs[i]! - timestampsMs[i - 1]!);
   const sortedG = [...gaps].sort((a, b) => a - b);
-  const med = sortedG[Math.floor(sortedG.length / 2)] ?? 1000 / samplingRateHz;
+  const med = median(gaps);
   const jitterP95 = sortedG[Math.floor(sortedG.length * 0.95)] ?? med;
   const needsResample =
     jitterP95 > med * cfg.RESAMPLE_JITTER_FACTOR ||
@@ -172,6 +146,19 @@ export function prepareUniformPpgWindow(
     ts[i] = r.t0 + (i * (r.t1 - r.t0)) / Math.max(1, r.y.length - 1);
   }
   return { signal: r.y, timestampsMs: ts, samplingRateHz: r.fs, resampled: true };
+}
+
+/**
+ * Autocorrelación (media de productos, no normalizada) de una señal a un lag fijo.
+ * Primitiva compartida: la usa el ratio-of-ratios de SpO2 (r0/rLag por canal) y
+ * cualquier consumidor que necesite el valor en un lag específico.
+ */
+export function autocorrAtLag(sig: readonly number[], lag: number): number {
+  const n = sig.length;
+  if (lag < 0 || n <= lag) return 0;
+  let sum = 0;
+  for (let i = 0; i < n - lag; i++) sum += sig[i]! * sig[i + lag]!;
+  return sum / (n - lag);
 }
 
 export function autocorrDominantLag(
@@ -199,18 +186,6 @@ export function autocorrDominantLag(
     }
   }
   return { lag: bestLag, score: best };
-}
-
-export function bpmFromAutocorr(signal: number[], fs: number): { bpm: number; score: number } {
-  if (signal.length < 40 || fs < 8) return { bpm: 0, score: 0 };
-  const det = detrendLinear(signal);
-  const mean = det.reduce((a, b) => a + b, 0) / det.length;
-  const centered = det.map((v) => v - mean);
-  const minLag = Math.max(3, Math.round((fs * 60) / 200));
-  const maxLag = Math.min(centered.length - 3, Math.round((fs * 60) / 38));
-  const { lag, score } = autocorrDominantLag(centered, minLag, maxLag);
-  if (lag <= 0 || score < 0.12) return { bpm: 0, score };
-  return { bpm: (60 * fs) / lag, score };
 }
 
 /**
@@ -332,8 +307,3 @@ export function computeWindowMoments(values: readonly number[]): {
   };
 }
 
-export function bandpassOffline(signal: number[], fs: number): number[] {
-  const f = new BandpassFilter(fs);
-  f.reset();
-  return signal.map((s) => f.filter(s));
-}

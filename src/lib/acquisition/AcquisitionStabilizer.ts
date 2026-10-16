@@ -1,4 +1,5 @@
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
+import { clamp01 } from '@/utils/math';
 import type { ContactState } from '@/types/signal';
 
 /**
@@ -51,10 +52,6 @@ export function createAcquisitionState(): AcquisitionState {
     aboveEnterFrames: 0,
     belowExitFrames: 0,
   };
-}
-
-function clamp01(v: number): number {
-  return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
 /**
@@ -163,7 +160,3 @@ export function updateAcquisition(state: AcquisitionState, sample: AcquisitionSa
   return state;
 }
 
-/** Conveniencia: ¿la adquisición está firme para revelar métricas en vivo? */
-export function isAcquisitionReady(state: AcquisitionState): boolean {
-  return state.stage === 'READY';
-}

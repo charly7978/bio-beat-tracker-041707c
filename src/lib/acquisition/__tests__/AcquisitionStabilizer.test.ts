@@ -3,7 +3,6 @@ import {
   createAcquisitionState,
   updateAcquisition,
   instantAcquisitionConfidence,
-  isAcquisitionReady,
   type AcquisitionSample,
 } from '../AcquisitionStabilizer';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
@@ -54,7 +53,6 @@ describe('AcquisitionStabilizer', () => {
     expect(s.stage).toBe('SEARCHING');
     expect(s.confidence).toBe(0);
     expect(s.progress).toBe(0);
-    expect(isAcquisitionReady(s)).toBe(false);
   });
 
   it('instantAcquisitionConfidence: buenas métricas → alta, nulas → 0', () => {
@@ -124,7 +122,6 @@ describe('AcquisitionStabilizer', () => {
       updateAcquisition(s, goodSample());
     }
     expect(s.stage).toBe('READY');
-    expect(isAcquisitionReady(s)).toBe(true);
     expect(s.progress).toBeGreaterThan(0.9);
   });
 

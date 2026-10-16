@@ -13,6 +13,8 @@
  *      - Marcadores fiduciales flotantes con columnas láser y anillos de impacto en el piso.
  */
 import { WINDOW_MS, type PpgRenderState } from './ppgCanvasRenderer';
+import { PPG3D_INTENSITY_MIN, PPG3D_INTENSITY_MAX } from '@/store/ppg3dSettings';
+import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 
 const FONT = '"SF Mono", Consolas, "Roboto Mono", "JetBrains Mono", monospace';
 
@@ -583,7 +585,7 @@ export function drawFloorOpticalLens3D(
   let statusColor = '#f59e0b';
   let statusRgb = '245, 158, 11';
   if (isDetected) {
-    const isSaturated = (diag?.sqm as Record<string, number> | undefined)?.saturationRatio && (diag?.sqm as Record<string, number>).saturationRatio > 0.15;
+    const isSaturated = (diag?.sqm as Record<string, number> | undefined)?.saturationRatio && (diag?.sqm as Record<string, number>).saturationRatio > VITAL_THRESHOLDS.QUALITY.CLIPPING_SATURATION_RATIO;
     if (isSaturated) {
       statusText = 'ISQUEMIA / SOBREPRESIÓN';
       statusColor = '#ef4444';
@@ -659,7 +661,7 @@ export function drawWaveRibbon3D(
   const sBack = proj.scaleAt(WAVE_D_BACK);
   const groundYFront = proj.horizonY + proj.floorSpanY * sFront;
   const groundYBack = proj.horizonY + proj.floorSpanY * sBack;
-  const intensity = clamp(state.threeD?.intensity ?? 1, 0.6, 1.4);
+  const intensity = clamp(state.threeD?.intensity ?? 1, PPG3D_INTENSITY_MIN, PPG3D_INTENSITY_MAX);
   const maxLift = proj.floorSpanY * MAX_LIFT_FRAC * intensity;
 
   for (let i = 0; i < n; i++) {

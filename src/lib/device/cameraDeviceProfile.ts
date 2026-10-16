@@ -2,6 +2,22 @@
  * Perfil de cámara en runtime.
  * TCL suele entregar flash + AE estables; el resto usa modo tolerante por defecto.
  */
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
+
+/** FPS objetivo de estabilización del track (alineado con el sample rate nominal DSP). */
+export const CAMERA_TARGET_FPS = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
+/** FPS mínimo aceptable para el pipeline PPG (el SQI penaliza por debajo). */
+export const CAMERA_MIN_FPS = DSP_CONSTANTS.SAMPLE_RATE_MIN + 5;
+
+/**
+ * Resolución de captura solicitada (ideal/max) por modo. Se pide el mínimo
+ * suficiente: el ROI de dedo no necesita HD y menos píxeles = más FPS efectivos.
+ */
+export const CAMERA_RESOLUTION = {
+  gym: { widthIdeal: 640, widthMax: 1280, heightIdeal: 480, heightMax: 720 },
+  finger: { widthIdeal: 640, widthMax: 960, heightIdeal: 480, heightMax: 720 },
+} as const;
+
 export interface CameraRuntimeHints {
   /** false solo en TCL (u otra cámara “probada”) */
   constrained: boolean;

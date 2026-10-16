@@ -12,18 +12,19 @@ export const VITAL_THRESHOLDS = {
     MAX: 220,
     PHYSIOLOGICAL_RR_MIN_MS: 270,
     PHYSIOLOGICAL_RR_MAX_MS: 2200,
+    /** Ventana de plausibilidad del lag de autocorrelación en SpO2 (anti-armónicos) */
+    PLAUSIBLE_MIN: 42,
+    PLAUSIBLE_MAX: 210,
+    /** HR de referencia cuando aún no hay medida al estimar el lag */
+    DEFAULT_ESTIMATE: 75,
   },
   
   // BLOOD OXYGEN (SpO2) — modelo ratio-of-ratios cámara+flash (verde como proxy IR)
   SPO2: {
     MIN_VALID: 75,
     MAX_VALID: 100,
-    CRITICAL_LOW: 90,
     R_VALUE_MIN: 0.1,
     R_VALUE_MAX: 2.5,
-    /** SpO2 = intercept − slope × R_mediana (calibración smartphone) */
-    R_MODEL_INTERCEPT: 103,
-    R_MODEL_SLOPE: 11,
     /** Coeficientes del modelo cuadrático mejorado */
     R_MODEL_A: -3.5,
     R_MODEL_B: -7.5,
@@ -62,13 +63,10 @@ export const VITAL_THRESHOLDS = {
     /** Fracción de PP atribuible a reflexión de onda (índice 0–1) */
     REFLECTION_PP_FRAC: 0.22,
     MIN_CYCLES: 2,
-    MIN_CYCLE_QUALITY: 0.28,
     MIN_BUFFER_SAMPLES: 90,
     STABILITY_FRAMES_HIGH: 20,
-    STABILITY_FRAMES_MEDIUM: 12,
     FEATURE_QUALITY_HIGH: 72,
     FEATURE_QUALITY_MEDIUM: 36,
-    MIN_RR_CONFIDENCE: 0.08,
     /** Límites de forma de pulso (adimensional / ms) — no mmHg */
     FEATURE_NORM: {
       K_VALUE: [0.22, 0.58] as const,
@@ -92,11 +90,6 @@ export const VITAL_THRESHOLDS = {
       RESISTANCE: { k: 0.15, ipa: 0.40, decay: 0.45 },
       COMPLIANCE: { stiff: 0.10, si: 0.30, aix: 0.28, vMax: 0.02, sutRatio: 0.30 },
       REFLECTION: { dDivA: 0.30, agi: 0.20, dicroticDepth: 0.30, stiffnessIndex: 0.20 },
-      FUSION: { hemodynamic: 0.52, morphology: 0.48 },
-      MORPHOLOGY: {
-        sbp: { sut: 0.30, stiff: 0.28, dicrotic: 0.22, aix: 0.12, hr: 0.08 },
-        dbp: { pw50: 0.26, diaPhase: 0.24, decay: 0.20, dicrotic: 0.12, hrv: 0.08, ipa: 0.10 },
-      },
     },
   },
   
@@ -112,18 +105,24 @@ export const VITAL_THRESHOLDS = {
     /** Acuerdo Elgendi mínimo para alimentar arritmias */
     MIN_DETECTOR_AGREEMENT_ARRHYTHMIA: 0.55,
     MIN_FOR_CLINICAL: 55,
+    /** SQI mínimo para solicitar el análisis IA (edge function analyze-vitals) */
+    AI_ANALYSIS_MIN: 40,
     /** PI (AC/DC) mínimo para marcar contacto STABLE — cámara suele dar 0.001–0.008 al inicio */
     MIN_PI: 0.0009,
     MAX_MOTION: 0.75,
     MAX_JITTER_MS: 55,
+    /**
+     * Ratio de saturación del frame actual por encima del cual se marca
+     * "clipping" (UI 3D/meter y política de guardado). Diferente de
+     * `ROUTER.SATURATION_FRAME_RATIO` (fracción de frames saturados en ventana).
+     */
+    CLIPPING_SATURATION_RATIO: 0.15,
     /** Alpha del segundo EMA (doble suavizado) — menor = más filtro, menos latencia neta. */
     VITAL_EMA_SECONDARY: 0.08,
     /** Frames con dedo candidato antes de STABLE (≈0,53 s @ 30 fps) */
     STABLE_FRAMES_REQ: 16,
     /** EMA del SQI mostrado en UI (0–1 por frame) */
     DISPLAY_SQI_EMA_ALPHA: 0.2,
-    /** Solo vaciar buffers DSP tras este tiempo en NO_CONTACT (evita “todo/nada”) */
-    BUFFER_RESET_AFTER_NO_CONTACT_FRAMES: 8,
     /** Overlay diagnóstico — evita parpadeo VALID ↔ LOW_SIGNAL_QUALITY */
     DIAG_SQI_EMA_ALPHA: 0.14,
     DIAG_ENTER_LOW_SQI: 22,
@@ -317,6 +316,22 @@ export const VITAL_THRESHOLDS = {
   },
 
   /**
+   * RASTREO FACIAL rPPG (modo gimnasio) — tiers de movimiento/confianza del rostro.
+   * Tres tiers con semántica distinta: diagnóstico (flag de salida), adaptación
+   * de baseline DC y criterio de contacto estable.
+   */
+  GYM_FACE: {
+    /** Tier diagnóstico: marca `motionArtifact` en la salida cuando el rostro se pierde. */
+    MOTION_ARTIFACT_DIAG: 0.6,
+    /** Tier de baseline: acelera la adaptación DC del canal ante movimiento. */
+    MOTION_ARTIFACT_STRICT: 0.55,
+    /** Movimiento máximo del rostro para considerar contacto estable. */
+    MOTION_STABLE_MAX: 0.65,
+    /** Confianza mínima del tracker facial para contacto estable. */
+    CONF_STABLE_MIN: 0.50,
+  },
+
+  /**
    * ACONDICIONADOR ACTIVO DE SEÑAL (DSP en vivo): estabiliza la línea base y hace
    * denoise que PRESERVA los picos (edge-preserving). Trabaja la señal frame a frame.
    * Unidades en la escala de `pulseSource` (~±95). Ver activeStabilizer.ts.
@@ -388,7 +403,6 @@ export const VITAL_THRESHOLDS = {
     MIN_EVENT_INTERVAL_MS: 6000,
     OUTLIER_RATIO: 0.16,
     ABRUPT_RR_FRAC: 0.16,
-    IRREGULAR_DIFF_MS: 165,
 
     // ── Sub-score thresholds (LO = normal ceiling, HI = strong AF floor)
     RMSSD_LO: 28,
@@ -473,22 +487,27 @@ export const VITAL_THRESHOLDS = {
     MIN_COVERAGE: 0.09,
     /** R/B mínimo — dedo absorbe azul; flash sin dedo suele fallar esto */
     HEMOGLOBIN_MIN_RB: 1.15,
-    SOFT_COVERAGE_MULT: 0.85,
+    /** Veto por ambigüedad: rojo apenas dominante en ambos ratios */
+    HEMOGLOBIN_AMBIGUOUS_RG: 1.14,
+    HEMOGLOBIN_AMBIGUOUS_RB: 1.28,
+    /** Veto "escena brillante": G/B altos con dominancia baja */
+    HEMOGLOBIN_BRIGHT_G: 95,
+    HEMOGLOBIN_BRIGHT_B: 80,
+    HEMOGLOBIN_BRIGHT_MAX_DOMINANCE: 30,
+    /** Endurecimiento por intensidad total alta */
+    HEMOGLOBIN_STRONG_TOTAL: 200,
+    HEMOGLOBIN_STRONG_MIN_RB: 1.38,
+    HEMOGLOBIN_MED_TOTAL: 120,
+    HEMOGLOBIN_MED_MIN_RB: 1.42,
+    HEMOGLOBIN_MED_MIN_RG: 1.2,
     /** Adquisición estricta */
     ACQUIRE_RB_STRICT: 1.2,
     ACQUIRE_INTENSITY_MIN: 68,
     ACQUIRE_INTENSITY_MAX: 780,
     ACQUIRE_SMOOTHED_FINGER_MIN: 0.14,
-    ACQUIRE_MAX_MOTION_STRICT: 0.85,
-    /** Adquisición suave (parcial / flash desigual) */
-    ACQUIRE_SOFT_MIN_RED: 28,
-    ACQUIRE_SOFT_RG: 1.025,
-    ACQUIRE_SOFT_RB: 1.16,
-    ACQUIRE_SOFT_DOMINANCE: 8,
+    /** Umbrales de firma parcial (fingerContactSignature.hasFingerHemoglobinSignature) */
     ACQUIRE_SOFT_INTENSITY_MIN: 52,
-    ACQUIRE_SOFT_INTENSITY_MAX: 850,
     ACQUIRE_SOFT_FINGER_SCORE_ROI: 0.18,
-    ACQUIRE_SOFT_SMOOTHED_FINGER: 0.15,
     ACQUIRE_MAX_MOTION_SOFT: 0.90,
     /** Mantener contacto */
     MAINTAIN_MIN_RED: 28,
@@ -512,8 +531,6 @@ export const VITAL_THRESHOLDS = {
     PULSATILE_ACQUIRE_RG: 1.02,
     PULSATILE_ACQUIRE_RB: 1.05,
     PULSATILE_ACQUIRE_COVERAGE: 0.075,
-    PULSATILE_ACQUIRE_FINGER_ROI: 0.12,
-    PULSATILE_ACQUIRE_MAX_MOTION: 1.0,
     PULSATILE_ACQUIRE_MIN_DOMINANCE: 4.4,
     /** Clasificación por tile (ROI 5×5) — umbrales relajados para tolerar dedo parcial/ladeado */
     TILE_MIN_RED: 24,
@@ -524,16 +541,54 @@ export const VITAL_THRESHOLDS = {
     TILE_DOMINANCE_SCORE_OFFSET: 5,
     MIN_FINGER_TILES_FOR_WEIGHTING: 2,
     FINGER_CONFIRM_FRAMES: 5,
-    /** Tras perder firma instantánea: frames hasta degradar */
-    INSTANT_LOST_TO_UNSTABLE: 2,
-    INSTANT_LOST_TO_NO_CONTACT: 4,
-    FINGER_LOST_FRAMES_UI: 6,
-    UNSTABLE_GRACE_FRAMES: 0,
-    /** softHold al perder instantáneo — solo si la firma RGB aún es válida */
-    SOFT_HOLD_COVERAGE: 0.11,
-    SOFT_HOLD_DOMINANCE_DELTA: 6,
-    SOFT_HOLD_FINGER_SCORE: 0.14,
-    SOFT_HOLD_RG: 1.04,
+    /**
+     * Escena dedo-sobre-lente (fingerSceneClassifier.isFingerOnLensScene):
+     * dedo parcial/ladeado con firma validada.
+     */
+    LENS_SCENE_MIN_TOTAL: 48,
+    LENS_SCENE_MAX_TOTAL: 520,
+    LENS_SCENE_MIN_RB: 1.14,
+    LENS_SCENE_MIN_RG: 1.05,
+    LENS_SCENE_MIN_DOMINANCE: 10,
+    LENS_SCENE_MIN_COVERAGE: 0.11,
+    LENS_SCENE_MIN_FINGER_SCORE: 0.14,
+    LENS_SCENE_MIN_SNAP_COVERAGE: 0.1,
+    /**
+     * Rubric del ensemble de contacto (fingerContactSignature.computeFingerEnsemble):
+     * puntuaciones por criterio y pesos finales.
+     */
+    ENSEMBLE: {
+      /** Brillo: suma RGB normalizada /255 * BRIGHTNESS_NORM_DIVISOR */
+      BRIGHTNESS_NORM_DIVISOR: 3,
+      BRIGHTNESS_FULL: 0.5,
+      BRIGHTNESS_PARTIAL: 0.25,
+      BRIGHTNESS_PARTIAL_SCORE: 0.5,
+      BRIGHTNESS_LOW_SCALE: 0.3,
+      /** Cobertura */
+      COVER_FULL: 0.7,
+      COVER_PARTIAL: 0.4,
+      COVER_PARTIAL_SCORE: 0.7,
+      COVER_LOW_SCALE: 0.4,
+      /** Histograma (bins ocupados / altura del pico) */
+      HIST_BINS_STRONG: 60,
+      HIST_PEAK_STRONG: 0.12,
+      HIST_BINS_MED: 100,
+      HIST_PEAK_MED: 0.08,
+      HIST_SCORE_MED: 0.6,
+      HIST_SCORE_DEFAULT: 0.3,
+      /** Estabilidad temporal (|Δ| medio entre frames / 255) */
+      TEMP_STABLE_MAX: 0.015,
+      TEMP_SOFT_MAX: 0.03,
+      TEMP_NOISY_MAX: 0.05,
+      TEMP_SCORE_SOFT: 0.6,
+      TEMP_SCORE_NOISY: 0.3,
+      TEMP_SCORE_UNSTABLE: 0.1,
+      /** Pesos finales */
+      W_BRIGHTNESS: 0.30,
+      W_COVERAGE: 0.30,
+      W_HISTOGRAM: 0.20,
+      W_TEMPORAL: 0.20,
+    },
   },
 
   /**
@@ -573,10 +628,7 @@ export const VITAL_THRESHOLDS = {
     HR_PUSH_THROTTLE_MS: 80,
     VITALS_PUSH_THROTTLE_MS: 300,
     RR_PUSH_THROTTLE_MS: 250,
-    SIGNAL_PUSH_THROTTLE_MS: 16,
     DIAG_PUSH_THROTTLE_MS: 200,
-    FACE_PUSH_THROTTLE_MS: 100,
-    DUAL_STREAM_PUSH_THROTTLE_MS: 250,
     /** Duración del marcador de latido en UI (ms) */
     BEAT_MARKER_MS: 300,
     /** Cooldown entre toasts de señal sospechosa (ms) */
@@ -587,15 +639,11 @@ export const VITAL_THRESHOLDS = {
     /** Escala y piso del PI mínimo aplicados en evaluateMeasurementReadiness */
     PI_MIN_READINESS_SCALE: 0.18,
     PI_MIN_READINESS_FLOOR: 0.04,
-    /** Confianza mínima de fusión dual-stream para usar su BPM de consenso (0–100) */
-    FUSION_CONSENSUS_MIN_CONF: 60,
     /** Confianza mínima del ensemble para alimentar arritmia desde el router */
     ARRHYTHMIA_MIN_CONF: 0.15,
   },
 };
 
 export const CALIBRATION_CONFIG = {
-  SPO2_REQUIRED_SAMPLES: 15,
-  BP_REQUIRED_SAMPLES: 25,
   EXPIRATION_DAYS: 30,
 };

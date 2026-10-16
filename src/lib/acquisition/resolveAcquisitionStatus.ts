@@ -41,8 +41,10 @@ export function resolveAcquisitionStatus(input: AcquisitionStatusInput): Measure
     return 'NO_FINGER';
   }
 
-  if (input.saturationRatio > 0.75) return 'SATURATED';
-  if ((input.underexposureRatio ?? 0) > 0.82) return 'UNDEREXPOSED';
+  if (input.saturationRatio > VITAL_THRESHOLDS.ROUTER.SATURATION_FRAME_RATIO) return 'SATURATED';
+  if ((input.underexposureRatio ?? 0) > VITAL_THRESHOLDS.ROUTER.UNDEREXPOSURE_FRAME_RATIO) {
+    return 'UNDEREXPOSED';
+  }
   if (input.motionScore > Q.MAX_MOTION) return 'MOTION_ARTIFACT';
   if (input.fpsEffective > 0 && input.fpsEffective < 20) return 'LOW_FPS';
   if (input.timestampJitterMs > Q.MAX_JITTER_MS) return 'LOW_FPS';

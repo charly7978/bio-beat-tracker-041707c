@@ -26,7 +26,6 @@ import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import { VitalsSanityChecker } from '@/lib/sanity/vitalsSanity';
 import {
   getActiveProfileId,
-  getCustomOverrides,
   resolveProfile,
 } from '@/lib/sanity/sanityProfiles';
 import { recordVerdict as recordAuditVerdict } from '@/lib/sanity/sanityAuditLog';
@@ -172,11 +171,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const beatMarkerTimerRef = useRef<number | null>(null);
 
   // Sanity checker
-  const [sanityProfileId, setSanityProfileId] = useState<string>(() => getActiveProfileId());
-  const [customJSON, setCustomJSON] = useState<string>(() => {
-    const o = getCustomOverrides();
-    return Object.keys(o).length ? JSON.stringify(o, null, 2) : "";
-  });
+  const [sanityProfileId] = useState<string>(() => getActiveProfileId());
   const bpmSanityRef = useRef<VitalsSanityChecker>(
     new VitalsSanityChecker({
       ...resolveProfile(getActiveProfileId()).effective,
@@ -805,8 +800,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     rrIntervals,
     setRRIntervals,
     currentDiagnostics,
-    setCurrentDiagnostics,
-
 
     // Refs for save
     vitalSignsRef,
@@ -821,9 +814,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     // Sanity state
     sanityProfileId,
-    setSanityProfileId,
-    customJSON,
-    setCustomJSON,
 
     // Callbacks
     handleSignalRealtime,
@@ -831,7 +821,5 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     resetFingerContactSession,
     resetSessionRefs,
     setIsMonitoringRef,
-    bpmSanityRef,
-    applyLiveDisplaySmooth,
   };
 }

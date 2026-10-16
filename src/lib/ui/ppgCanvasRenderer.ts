@@ -1,5 +1,7 @@
 import { CircularBuffer } from '../../utils/CircularBuffer';
 import { isPhysiologicalRR } from '../../utils/physio';
+import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import {
   buildRhythmPanel,
   formatContactState,
@@ -528,7 +530,7 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   }
 
   // Telemetría derecha
-  const fpsEff = diag?.sqm?.fpsEffective ?? 30;
+  const fpsEff = diag?.sqm?.fpsEffective ?? DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
   const jitterMs = diag?.sqm?.timestampJitterMs ?? 0;
   ctx.font = `9px ${FONT_MONO}`;
   ctx.textAlign = 'right';
@@ -1927,7 +1929,7 @@ export function drawLiveFingerOpticalLens(
     let statusColor = '#f59e0b';
     let statusRgb = '245, 158, 11';
     if (isDetected) {
-      const isSaturated = (diag?.sqm as Record<string, number> | undefined)?.saturationRatio && (diag?.sqm as Record<string, number>).saturationRatio > 0.15;
+      const isSaturated = (diag?.sqm as Record<string, number> | undefined)?.saturationRatio && (diag?.sqm as Record<string, number>).saturationRatio > VITAL_THRESHOLDS.QUALITY.CLIPPING_SATURATION_RATIO;
       if (isSaturated) {
         statusText = 'ISQUEMIA / SOBREPRESIÓN';
         statusColor = '#ef4444';

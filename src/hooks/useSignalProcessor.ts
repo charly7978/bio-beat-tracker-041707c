@@ -4,7 +4,6 @@ import type { ProcessedSignal, ProcessingError, MeasurementMode } from '../types
 import { PPGSignalProcessor } from '../modules/signal-processing/PPGSignalProcessor';
 import {
   loadBackpressureConfig,
-  saveBackpressureConfig,
   type BackpressureConfig,
 } from '../lib/perf/backpressureConfig';
 import { createLogger } from '../utils/logger';
@@ -391,11 +390,6 @@ export const useSignalProcessor = () => {
     return backpressureStateRef.current.config;
   }, []);
 
-  /** Frames descartados por contrapresión (cola acotada) desde el arranque. */
-  const getDroppedFrames = useCallback((): number => {
-    return droppedFramesRef.current;
-  }, []);
-
   const setCameraRuntimeHints = useCallback((diag: Record<string, unknown> | null | undefined) => {
     if (fallbackProcessorRef.current) {
       fallbackProcessorRef.current.setCameraRuntimeHints(diag);
@@ -405,23 +399,6 @@ export const useSignalProcessor = () => {
       type: 'setCameraRuntimeHints',
       data: diag
     });
-  }, []);
-
-  const setBackpressureConfig = useCallback((partial: Partial<BackpressureConfig>): BackpressureConfig => {
-    const nextCfg = { ...backpressureStateRef.current.config, ...partial };
-    saveBackpressureConfig(nextCfg);
-    backpressureStateRef.current.config = nextCfg;
-
-    if (fallbackProcessorRef.current) {
-      fallbackProcessorRef.current.setBackpressureConfig(partial);
-    } else {
-      workerRef.current?.postMessage({
-        type: 'setBackpressureConfig',
-        data: partial
-      });
-    }
-
-    return nextCfg;
   }, []);
 
   const setSignalCallback = useCallback((cb: ((s: ProcessedSignal) => void) | null) => {
@@ -456,12 +433,8 @@ export const useSignalProcessor = () => {
     getRGBStats,
     getBackpressureState,
     getBackpressureConfig,
-    getDroppedFrames,
-    setBackpressureConfig,
     setCameraRuntimeHints,
     setSignalCallback,
     resetProcessor,
-    /** true si el pipeline corre en el hilo principal (worker no disponible). */
-    isFallbackMode: fallbackModeRef.current,
   };
 };

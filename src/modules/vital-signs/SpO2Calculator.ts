@@ -1,7 +1,10 @@
 import { createLogger } from '../../utils/logger';
 import { clamp } from '../../utils/math';
+import { median } from '../../utils/stats';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { CalibrationManager } from './CalibrationManager';
+import { autocorrAtLag } from '../signal-processing/shared/dsp';
 import { fastICA } from '../../utils/ica';
 
 const log = createLogger('SpO2Calculator');
@@ -36,19 +39,6 @@ function cameraLinearizeAC(ac: number, dc: number): number {
   const term = y / (1 - y);
   const slope = (theta / d) * Math.pow(term, (1 / d) - 1) * (1 / Math.pow(1 - y, 2));
   return ac * slope;
-}
-
-/**
- * Calcula la autocorrelación de una señal a un lag específico.
- */
-function computeAutocorrelation(sig: number[], lag: number): number {
-  const N = sig.length;
-  if (N <= lag) return 0;
-  let sum = 0;
-  for (let i = 0; i < N - lag; i++) {
-    sum += sig[i] * sig[i + lag];
-  }
-  return sum / (N - lag);
 }
 
 /**
@@ -150,18 +140,20 @@ export class SpO2Calculator {
         const { A, S } = icaResult;
 
         // Buscamos el pitch period de la frecuencia cardíaca mediante autocorrelación en el canal verde (el más pulsátil)
-        // Rango fisiológico HR: 42 a 210 BPM
-        const safeFs = sampleRate > 0 ? sampleRate : 30;
-        const minLag = Math.max(2, Math.floor((safeFs * 60) / 210));
-        const maxLag = Math.min(this.greenAcHistory.length - 2, Math.ceil((safeFs * 60) / 42));
+        // Ventana de plausibilidad HR (VITAL_THRESHOLDS.HR.PLAUSIBLE_*)
+        const HR = VITAL_THRESHOLDS.HR;
+        const safeFs = sampleRate > 0 ? sampleRate : DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
+        const minLag = Math.max(2, Math.floor((safeFs * 60) / HR.PLAUSIBLE_MAX));
+        const maxLag = Math.min(this.greenAcHistory.length - 2, Math.ceil((safeFs * 60) / HR.PLAUSIBLE_MIN));
 
-        let detectedLag = (typeof currentHr === 'number' && currentHr >= 42 && currentHr <= 210)
-          ? Math.round((safeFs * 60) / currentHr)
-          : Math.round((safeFs * 60) / 75);
+        let detectedLag =
+          typeof currentHr === 'number' && currentHr >= HR.PLAUSIBLE_MIN && currentHr <= HR.PLAUSIBLE_MAX
+            ? Math.round((safeFs * 60) / currentHr)
+            : Math.round((safeFs * 60) / HR.DEFAULT_ESTIMATE);
 
         let maxAutoCorr = -1;
         for (let lag = minLag; lag <= maxLag; lag++) {
-          const acVal = computeAutocorrelation(this.greenAcHistory, lag);
+          const acVal = autocorrAtLag(this.greenAcHistory, lag);
           if (acVal > maxAutoCorr) {
             maxAutoCorr = acVal;
             detectedLag = lag;
@@ -173,8 +165,8 @@ export class SpO2Calculator {
         let bestScore = -1;
         for (let i = 0; i < 3; i++) {
           const src = S[i];
-          const r0 = computeAutocorrelation(src, 0);
-          const rLag = computeAutocorrelation(src, detectedLag);
+          const r0 = autocorrAtLag(src, 0);
+          const rLag = autocorrAtLag(src, detectedLag);
           const periodicity = r0 > 1e-10 ? Math.max(0, rLag / r0) : 0;
 
           // Correlación absoluta con canal verde de referencia
@@ -219,16 +211,16 @@ export class SpO2Calculator {
         }
 
         // Calcular SNR para cada canal usando el lag cardíaco detectado
-        const r0Red = computeAutocorrelation(this.redAcHistory, 0);
-        const rLagRed = computeAutocorrelation(this.redAcHistory, detectedLag);
+        const r0Red = autocorrAtLag(this.redAcHistory, 0);
+        const rLagRed = autocorrAtLag(this.redAcHistory, detectedLag);
         snrRed = r0Red > 1e-10 ? Math.max(0, rLagRed / (r0Red - Math.abs(rLagRed) + 1e-6)) : 0;
 
-        const r0Green = computeAutocorrelation(this.greenAcHistory, 0);
-        const rLagGreen = computeAutocorrelation(this.greenAcHistory, detectedLag);
+        const r0Green = autocorrAtLag(this.greenAcHistory, 0);
+        const rLagGreen = autocorrAtLag(this.greenAcHistory, detectedLag);
         snrGreen = r0Green > 1e-10 ? Math.max(0, rLagGreen / (r0Green - Math.abs(rLagGreen) + 1e-6)) : 0;
 
-        const r0Blue = computeAutocorrelation(this.blueAcHistory, 0);
-        const rLagBlue = computeAutocorrelation(this.blueAcHistory, detectedLag);
+        const r0Blue = autocorrAtLag(this.blueAcHistory, 0);
+        const rLagBlue = autocorrAtLag(this.blueAcHistory, detectedLag);
         snrBlue = r0Blue > 1e-10 ? Math.max(0, rLagBlue / (r0Blue - Math.abs(rLagBlue) + 1e-6)) : 0;
       }
     }
@@ -279,8 +271,7 @@ export class SpO2Calculator {
 
     if (this.rValueHistory.length < 3) return 0;
 
-    const sortedR = [...this.rValueHistory].sort((a, b) => a - b);
-    const medianR = sortedR[Math.floor(sortedR.length / 2)] ?? 0;
+    const medianR = median(this.rValueHistory);
 
     // Modelo adaptativo: el término lineal y cuadrático se ajusta por la calidad de señal (PI promedio)
     const avgPI = (piRed + piGreen + piBlue) / 3;
@@ -292,9 +283,9 @@ export class SpO2Calculator {
     // o '--'. Un Math.max(MIN_VALID) enmascararía una desaturación real — la
     // regla del proyecto es "sin lectura" sobre lectura falseada.
     // El CAP superior sí es físico: la saturación no puede superar 100%.
-    const A = spoCfg.R_MODEL_A ?? -3.5;
-    const B = spoCfg.R_MODEL_B ?? -7.5;
-    const C = spoCfg.R_MODEL_C ?? 104;
+    const A = spoCfg.R_MODEL_A;
+    const B = spoCfg.R_MODEL_B;
+    const C = spoCfg.R_MODEL_C;
 
     const adjB = B / piFactor;
     const adjA = A / piFactor;

@@ -25,6 +25,8 @@ export interface VitalSignsDetailedResult {
   respiration: VitalMeasurement<number>;
   arrhythmia: VitalMeasurement<{ count: number; status: string; score?: number }>;
   signalQuality: number;
+  /** Nivel de confianza global de la medición (misma política de estabilidad que el gate de frames). */
+  measurementConfidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INVALID';
   isCalibrating: boolean;
   calibrationProgress: number;
 }
@@ -88,7 +90,7 @@ export class VitalSignsProcessor {
   private morphologyHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
   private placementMode: FingerPlacementMode = 'hybrid';
   /** Buffer más largo para modulación respiratoria (~10 Hz efectivos desde Index). */
-  private readonly RESPIRATION_BUFFER = 320;
+  private readonly RESPIRATION_BUFFER = RESPIRATION_DEFAULTS.bufferSamples;
   private respirationHistory: RingF32 = new RingF32(this.RESPIRATION_BUFFER);
   private readonly VITAL_SIGNAL_ESTIMATE_HZ = 10;
   private frameCount = 0;  // Contador continuo para logging/diagnóstico
@@ -106,10 +108,8 @@ export class VitalSignsProcessor {
 
   /** Segundo EMA (doble suavizado) — reduce ruido residual con menos latencia que un único EMA fuerte. */
   private readonly EMA_ALPHA_SECONDARY = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_SECONDARY;
-  // Estados del segundo EMA por signo vital
+  // Estado del segundo EMA (segundo pase aplicado a SpO2)
   private ema2Spo2 = 0;
-  private ema2Sys = 0;
-  private ema2Dia = 0;
 
   // Contador de pulsos válidos
   private validPulseCount: number = 0;
@@ -452,9 +452,12 @@ export class VitalSignsProcessor {
 
     const spo2Shown = this.displaySmoothing.updateSpO2Hold(
       this.measurements.spo2,
-      spo2UiReady && this.measurements.spo2 >= 70 && this.measurements.spo2 <= 100,
+      spo2UiReady &&
+        this.measurements.spo2 >= VITAL_THRESHOLDS.SPO2.MIN_VALID &&
+        this.measurements.spo2 <= VITAL_THRESHOLDS.SPO2.MAX_VALID,
     );
-    const spo2HasDisplay = spo2Shown >= 70 && spo2Shown <= 100;
+    const spo2HasDisplay =
+      spo2Shown >= VITAL_THRESHOLDS.SPO2.MIN_VALID && spo2Shown <= VITAL_THRESHOLDS.SPO2.MAX_VALID;
 
     const spo2Status: MeasurementStatus = !spo2UiReady && !spo2HasDisplay
       ? "LOW_SIGNAL_QUALITY"
@@ -594,6 +597,7 @@ export class VitalSignsProcessor {
         diagnostics: { rmssd: this.measurements.lastArrhythmiaData?.rmssd }
       },
       signalQuality: Math.round(sqi),
+      measurementConfidence: this.getMeasurementConfidence(),
       isCalibrating: this.isCalibrating,
       calibrationProgress: this.getCalibrationProgress(),
       lastArrhythmiaData: this.measurements.lastArrhythmiaData
@@ -645,7 +649,12 @@ export class VitalSignsProcessor {
       currentBPM > 0 ? currentBPM : undefined,
     );
     const spo2Conf = this.getSpo2Confidence();
-    if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && spo2Conf !== 'INVALID') {
+    if (
+      spo2 > 0 &&
+      spo2 >= VITAL_THRESHOLDS.SPO2.MIN_VALID &&
+      spo2 <= VITAL_THRESHOLDS.SPO2.MAX_VALID &&
+      spo2Conf !== 'INVALID'
+    ) {
       const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 5;
       if (isCoherent) {
         this.spo2IncoherentStreak = 0;
@@ -764,7 +773,7 @@ export class VitalSignsProcessor {
    * latencia apreciable porque el primer pase ya respondió al cambio.
    */
   private applyEma2(
-    key: 'ema2Spo2' | 'ema2Sys' | 'ema2Dia',
+    key: 'ema2Spo2',
     firstPass: number,
   ): number {
     if (firstPass === 0 || isNaN(firstPass)) {
@@ -811,8 +820,6 @@ export class VitalSignsProcessor {
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
     this.ema2Spo2 = 0;
-    this.ema2Sys = 0;
-    this.ema2Dia = 0;
     return result;
   }
 
@@ -849,8 +856,6 @@ export class VitalSignsProcessor {
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
     this.ema2Spo2 = 0;
-    this.ema2Sys = 0;
-    this.ema2Dia = 0;
   }
 }
 

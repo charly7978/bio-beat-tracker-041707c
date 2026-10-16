@@ -7,30 +7,34 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
       # SHA = tags oficiales (el validador del IDE a veces no resuelve @v* sin red/GitHub login)
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: actions/setup-node@v4
         with:
-          bun-version: latest
+          node-version: '20'
+          cache: npm
       - name: Install dependencies
-        run: bun install
+        run: npm ci
       - name: Lint
-        run: bun run lint
+        run: npm run lint
       - name: Typecheck
-        run: bun run typecheck
+        run: npm run typecheck
       - name: Repo hygiene (orphan imports)
-        run: bun run check:orphans
+        run: npm run check:orphans
       - name: Architecture guardrails
-        run: bun run check:architecture
+        run: npm run check:architecture
       - name: Anti-simulation guardrail
-        run: bun run check:no-sim
+        run: npm run check:no-sim
       - name: Tests
-        run: bun run test -- --run
+        run: npm run test
       - name: Build
-        run: bun run build
+        run: npm run build
       - name: Anti-simulation guardrail (dist)
-        run: bun run check:no-sim:dist
+        run: npm run check:no-sim:dist

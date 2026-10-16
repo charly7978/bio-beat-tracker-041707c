@@ -52,12 +52,18 @@ if (allowlistErrors.length) {
   process.exit(1);
 }
 
+const usedEntries = new Set();
 function isAllowlisted(fileRel, lineNo, patternId) {
-  return ALLOWLIST.some(e =>
-    e.file === fileRel &&
-    (e.line == null || e.line === lineNo) &&
-    (e.pattern == null || e.pattern === patternId)
-  );
+  let allowed = false;
+  ALLOWLIST.forEach((e, idx) => {
+    if (e.dist === true) return; // dist-only entries belong to the dist scanner
+    if (e.file !== fileRel) return;
+    if (e.line != null && e.line !== lineNo) return;
+    if (e.pattern != null && e.pattern !== patternId) return;
+    allowed = true;
+    usedEntries.add(idx);
+  });
+  return allowed;
 }
 
 // Inline marker MUST contain reason=... and ref=...
@@ -86,7 +92,7 @@ const malformedMarkers = [];
 for (const file of walk(ROOT)) {
   const text = readFileSync(file, "utf8");
   const lines = text.split(/\r?\n/);
-  const fileRel = relative(".", file);
+  const fileRel = relative(".", file).replace(/\\/g, "/");
   lines.forEach((line, i) => {
     const marker = inlineMarkerValid(line);
     if (marker.present) {
@@ -104,11 +110,19 @@ for (const file of walk(ROOT)) {
   });
 }
 
+const staleEntries = ALLOWLIST
+  .map((e, idx) => ({ e, idx }))
+  .filter(({ e, idx }) => e.dist !== true && !usedEntries.has(idx));
+
 if (malformedMarkers.length) {
   console.error("\n❌ MALFORMED `anti-sim-allow` MARKERS (require reason=\"...\" and ref=\"...\"):\n");
   for (const m of malformedMarkers) console.error(`  ${m.file}:${m.line}\n    ${m.text}`);
 }
-if (violations.length || malformedMarkers.length) {
+if (staleEntries.length) {
+  console.error("\n❌ STALE ALLOWLIST ENTRIES (no matching violation in src/) — delete them:\n");
+  for (const { e } of staleEntries) console.error(`  ${e.file} [${e.pattern ?? "any"}] ref=${e.ref}`);
+}
+if (violations.length || malformedMarkers.length || staleEntries.length) {
   if (violations.length) {
     console.error("\n❌ ANTI-SIMULATION GUARDRAIL FAILED\n");
     for (const v of violations) console.error(`  [${v.id}] ${v.file}:${v.line}\n    ${v.text}`);

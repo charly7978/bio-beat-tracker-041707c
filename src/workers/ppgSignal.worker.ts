@@ -81,13 +81,7 @@ self.onmessage = async (event: MessageEvent) => {
           rotationRate
         } as unknown as DeviceMotionEvent;
 
-        // Acceder al manejador de eventos interno de movimiento
-        const pWithMotion = processor as unknown as {
-          handleMotionEvent?: (e: DeviceMotionEvent) => void;
-        };
-        if (typeof pWithMotion.handleMotionEvent === 'function') {
-          pWithMotion.handleMotionEvent(motionPayload);
-        }
+        processor.handleMotionEvent(motionPayload);
         break;
       }
 

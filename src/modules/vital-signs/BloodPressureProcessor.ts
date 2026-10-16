@@ -1,6 +1,6 @@
 import { PPGFeatureExtractor, CycleFeatures } from './PPGFeatureExtractor';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
-import { isPhysiologicalRR } from '../../utils/physio';
+import { isPhysiologicalRR, RR_MIN_MS } from '../../utils/physio';
 import { median } from '../../utils/stats';
 import type { FingerPlacementMode } from '../../types/signal';
 import {
@@ -103,14 +103,9 @@ export class BloodPressureProcessor {
       ? externalHr
       : 60000 / avgRR;
     const rrVar = PPGFeatureExtractor.extractRRVariability(validRR.length >= 2 ? validRR : [avgRR, avgRR]);
-    const cyclePeriodMs = Math.max(280, mf.sutMs + mf.diastolicPhaseMs);
+    const cyclePeriodMs = Math.max(RR_MIN_MS, mf.sutMs + mf.diastolicPhaseMs);
 
-    const calib = CalibrationManager.getInstance();
-    const activeBpProfile = calib.getActiveProfile('BP');
-    const calibrationOffsets = activeBpProfile && activeBpProfile.expiresAt > Date.now() ? {
-      sbpOffset: activeBpProfile.coefficients.sbpOffset ?? activeBpProfile.coefficients.systolicOffset ?? 0,
-      dbpOffset: activeBpProfile.coefficients.dbpOffset ?? activeBpProfile.coefficients.diastolicOffset ?? 0,
-    } : null;
+    const calibrationOffsets = CalibrationManager.getInstance().getActiveBpOffsets();
 
     const raw = estimatePhysiologicalBp(
       mf,

@@ -3,6 +3,7 @@ import { SignalQualityMetrics } from '../../types/measurements';
 import type { ContactState } from '../../types/signal';
 import { clamp } from '../../utils/math';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
 
 /** Estado interno para histéresis del overlay de calidad (anti-parpadeo). */
 export interface DiagnosticStatusState {
@@ -145,7 +146,7 @@ export class SignalQualityIndex {
       saturationRatio: base.saturationRatio ?? 0,
       underexposureRatio: base.underexposureRatio ?? 0,
       frameDropRatio: base.frameDropRatio ?? 0,
-      fpsEffective: base.fpsEffective ?? 30,
+      fpsEffective: base.fpsEffective ?? DSP_CONSTANTS.DEFAULT_SAMPLE_RATE,
       timestampJitterMs: base.timestampJitterMs ?? 0,
       elgendiConfidence: el,
       detectorAgreement: agreeRaw,

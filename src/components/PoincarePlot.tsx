@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { isPhysiologicalRR } from '../utils/physio';
 
 interface PoincarePlotProps {
   rrIntervals: number[];
@@ -32,8 +33,8 @@ export const PoincarePlot: React.FC<PoincarePlotProps> = ({
     ctx.fillStyle = '#020617'; // bg-slate-950
     ctx.fillRect(0, 0, width, height);
 
-    // Filtrar intervalos RR fisiológicos (ej. 300ms a 1500ms)
-    const validRR = rrIntervals.filter((rr) => rr >= 300 && rr <= 1500);
+    // Filtrar intervalos RR fisiológicos (rango canónico VITAL_THRESHOLDS: 270–2200 ms)
+    const validRR = rrIntervals.filter(isPhysiologicalRR);
 
     if (validRR.length < 2) {
       // Dibujar estado de datos insuficientes

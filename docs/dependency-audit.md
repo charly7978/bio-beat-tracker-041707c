@@ -22,7 +22,7 @@
 | `react-router-dom` | Routing | No | ✅ Ninguno | |
 | `@capacitor/android`, `@capacitor/camera`, `@capacitor/core`, `@capacitor/haptics` | Capacitor runtime | No | ✅ Ninguno | Solo hardware access. |
 | `@capgo/capacitor-health` | Health bridge | No | ✅ Ninguno | Reads native health stores. |
-| `@radix-ui/react-slot`, `@radix-ui/react-toast` | UI primitives | No | ✅ Ninguno | |
+| `@radix-ui/react-toast` | UI primitives | No | ✅ Ninguno | Único primitivo Radix del proyecto (react-slot eliminado 2026-10-16: 0 usos). |
 | `@supabase/supabase-js` | Backend client | Solo persistencia post-medicion | ✅ Ninguno | No fabrica vitales; solo lee/escribe. |
 | `class-variance-authority`, `clsx`, `tailwind-merge`, `tailwindcss-animate` | Styling | No | ✅ Ninguno | |
 | `lucide-react` | Iconos SVG | No | ✅ Ninguno | Estatico. |
@@ -75,3 +75,11 @@ Reference audit (0 imports in src/ and supabase/, including dynamic imports). Re
 - @capacitor/preferences (code uses localStorage directly)
 - @capacitor/status-bar, @capacitor/filesystem, @capacitor/app (no usages)
 - bun.lock removed (duplicate lockfile; npm + package-lock.json are operational)
+
+## Updated 2026-10-16 - Audit deep (F6)
+
+- `@radix-ui/react-slot` eliminado (0 usos en `src/`; verificado con rg). Queda solo `@radix-ui/react-toast`.
+- `eslint-plugin-react-hooks` `5.1.0-rc.0` → `^5.2.0` (release estable; elimina dependencia de un pre-release).
+- CI dejó de usar Bun: `.github/workflows/ci.yml` ahora usa Node 20 + `npm ci` (consistente con `package-lock.json`, que es el único lockfile).
+- `tailwind.config.ts` sin `require()` (ESM puro: `import tailwindcssAnimate`).
+- `lovable-tagger` se conserva: lo usa `vite.config.ts` (`componentTagger()` solo en modo development). El edge `analyze-vitals` depende del gateway de Lovable (`LOVABLE_API_KEY`); fuera de ese hosting requiere un proveedor alternativo — ver `docs/audit-2026-10-15.md`.

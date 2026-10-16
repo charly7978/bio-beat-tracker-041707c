@@ -2,7 +2,8 @@
  * FILTRO PASABANDA IIR BUTTERWORTH 4º ORDEN - OPTIMIZADO PARA PPG
  *
  * CRÍTICO PARA DETECCIÓN DE LATIDOS:
- * - Frecuencia cardíaca: 18-300 BPM = 0.3-5 Hz (rango amplio para robustez)
+ * - Canal de pulso: 30–220 BPM ≈ 0.5–4.5 Hz (canon en `DSP_CONSTANTS.PPG_BAND_HZ`)
+ * - Canal morfológico (BP): 0.5–12 Hz (preserva escotadura dicrótica)
  * - Elimina DC (línea base, cambios lentos de iluminación)
  * - Elimina alta frecuencia (ruido eléctrico, vibraciones, movimiento)
  *
@@ -31,10 +32,13 @@ export class BandpassFilter {
 
   private sampleRate: number;
   private highCutFreq: number;
-  private lowCutFreq = 0.5;
+  private lowCutFreq: number = DSP_CONSTANTS.PPG_BAND_HZ[0];
   private initialized = false;
 
-  constructor(sampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE, highCutFreq: number = 4.5) {
+  constructor(
+    sampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE,
+    highCutFreq: number = DSP_CONSTANTS.PPG_BAND_HZ[1],
+  ) {
     this.sampleRate = sampleRate;
     this.highCutFreq = highCutFreq;
 

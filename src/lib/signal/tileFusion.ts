@@ -56,30 +56,3 @@ export function pulsatilityBoost(
   const sNorm = (s - s0) / (1 - 2 * s0);
   return 1 + gain * sNorm;
 }
-
-/**
- * Suavizado temporal de pesos por tile (EMA frame a frame). Evita cambios bruscos
- * de contribución entre frames consecutivos que producirían artefactos audibles en
- * la señal fusionada (chirridos/click). Se usa en el hot path de extractROI.
- */
-export interface TileWeightSmoother {
-  weights: Float64Array;
-  alpha: number;
-}
-
-export function createWeightSmoother(numTiles: number, alpha = 0.35): TileWeightSmoother {
-  return { weights: new Float64Array(numTiles), alpha };
-}
-
-export function smoothTileWeights(
-  sm: TileWeightSmoother,
-  rawWeights: Float64Array | number[],
-): Float64Array {
-  const a = sm.alpha;
-  const ia = 1 - a;
-  const out = sm.weights;
-  for (let i = 0; i < out.length; i++) {
-    out[i] = out[i] * ia + (rawWeights[i] ?? 0) * a;
-  }
-  return out;
-}

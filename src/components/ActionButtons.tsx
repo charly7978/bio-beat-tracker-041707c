@@ -1,11 +1,10 @@
-import { Play, Square, RotateCcw, Box, Cpu, Shield, Activity, Brain } from 'lucide-react';
+import { Play, Square, RotateCcw, Box, Shield, Activity, Brain } from 'lucide-react';
 import { usePpg3dSettings } from '@/store/ppg3dSettings';
 
 export interface ActionButtonsProps {
   isMonitoring: boolean;
   onStartMeasurement: () => void;
   onReset: () => void;
-  webgpuAvail?: 'yes' | 'no' | 'checking';
   encryptionReady?: boolean;
   healthAvail?: 'yes' | 'no' | 'checking';
   riskResult?: string | null;
@@ -15,7 +14,6 @@ export function ActionButtons({
   isMonitoring,
   onStartMeasurement,
   onReset,
-  webgpuAvail = 'no',
   encryptionReady = false,
   healthAvail = 'no',
   riskResult = null,
@@ -34,24 +32,13 @@ export function ActionButtons({
       <div className="flex items-center gap-1.5 justify-center mb-2 pointer-events-auto">
         <span
           className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[8px] font-mono font-bold tracking-wider uppercase border transition-all duration-300 ${
-            webgpuAvail === 'yes'
-              ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40 glow-cyan shadow-[0_0_12px_rgba(6,182,212,0.35)]'
-              : 'bg-zinc-900/70 text-zinc-500 border-zinc-800/80 backdrop-blur-md'
-          }`}
-        >
-          <Cpu className="w-2.5 h-2.5" />
-          GPU{webgpuAvail === 'yes' ? '·ON' : ''}
-        </span>
-
-        <span
-          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[8px] font-mono font-bold tracking-wider uppercase border transition-all duration-300 ${
             encryptionReady
               ? 'bg-amber-500/15 text-amber-300 border-amber-500/40 glow-amber shadow-[0_0_12px_rgba(245,158,11,0.35)]'
               : 'bg-zinc-900/70 text-zinc-500 border-zinc-800/80 backdrop-blur-md'
           }`}
         >
           <Shield className="w-2.5 h-2.5" />
-          {encryptionReady ? 'AES-256' : 'ENC—'}
+          {encryptionReady ? 'LOCAL CIFRADO' : 'ENC—'}
         </span>
 
         <span

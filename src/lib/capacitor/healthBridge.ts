@@ -1,4 +1,5 @@
 import type { VitalSignsResult } from '../../modules/vital-signs/VitalSignsProcessor';
+import { isNative } from '@/lib/device/platform';
 
 export interface HealthMetric {
   type: 'HEART_RATE' | 'BLOOD_PRESSURE' | 'SPO2' | 'RESPIRATORY_RATE';
@@ -11,16 +12,9 @@ export interface HealthMetric {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let healthPlugin: any = null;
 
-function isNativePlatform(): boolean {
-  if (typeof window === 'undefined') return false;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const cap = (window as any).Capacitor;
-  return !!(cap && typeof cap.isNativePlatform === 'function' && cap.isNativePlatform());
-}
-
 async function getHealthPlugin() {
   if (healthPlugin) return healthPlugin;
-  if (!isNativePlatform()) return null;
+  if (!isNative()) return null;
   try {
     const mod = await import('@capgo/capacitor-health');
     healthPlugin = mod.Health;

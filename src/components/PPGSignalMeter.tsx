@@ -3,10 +3,6 @@ import { CircularBuffer } from '../utils/CircularBuffer';
 import { isNative } from '@/lib/device/platform';
 import { calculateHRV, isPhysiologicalRR } from '../utils/physio';
 import {
-  DISPLAY_SMOOTH_ALPHAS,
-  lerpDisplayValue,
-} from '@/lib/measurement/displaySmoothing';
-import {
   TARGET_FPS,
   BUFFER_SIZE,
   TREND_WINDOW_MS,
@@ -55,7 +51,6 @@ export interface PPGSignalMeterProps {
   contactState?: string;
   acquisitionStatus?: string;
   getVideoElement?: () => HTMLVideoElement | HTMLCanvasElement | null;
-  webgpuAvail?: 'yes' | 'no' | 'checking';
   encryptionReady?: boolean;
   healthAvail?: 'yes' | 'no' | 'checking';
   riskResult?: string | null;
@@ -130,7 +125,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   contactState,
   acquisitionStatus,
   getVideoElement,
-  webgpuAvail = 'no',
   encryptionReady = false,
   healthAvail = 'no',
   riskResult = null,
@@ -392,18 +386,12 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       const targetSpo2 = fingerOn || preserve ? p.spo2 ?? 0 : 0;
       const targetSys = fingerOn || preserve ? p.pressure?.systolic ?? 0 : 0;
       const targetDia = fingerOn || preserve ? p.pressure?.diastolic ?? 0 : 0;
-      displayBpmRef.current = Math.round(
-        lerpDisplayValue(displayBpmRef.current, targetBpm, DISPLAY_SMOOTH_ALPHAS.hr),
-      );
-      displaySpo2Ref.current = Math.round(
-        lerpDisplayValue(displaySpo2Ref.current, targetSpo2, DISPLAY_SMOOTH_ALPHAS.spo2),
-      );
-      displaySysRef.current = Math.round(
-        lerpDisplayValue(displaySysRef.current, targetSys, DISPLAY_SMOOTH_ALPHAS.bp),
-      );
-      displayDiaRef.current = Math.round(
-        lerpDisplayValue(displayDiaRef.current, targetDia, DISPLAY_SMOOTH_ALPHAS.bp),
-      );
+      // Suavizado único en useSignalRouter.applyLiveDisplaySmooth: aquí solo se
+      // refleja el valor ya suavizado (evita doble EMA que retrasaba la lectura).
+      displayBpmRef.current = targetBpm;
+      displaySpo2Ref.current = targetSpo2;
+      displaySysRef.current = targetSys;
+      displayDiaRef.current = targetDia;
 
       // La onda se muestra SIEMPRE, con altura honesta (signalStrength). El latch
       // solo controla el indicador fino de progreso (barra), que desaparece al
@@ -527,7 +515,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         isMonitoring={isMonitoring}
         onStartMeasurement={onStartMeasurement}
         onReset={handleReset}
-        webgpuAvail={webgpuAvail}
         encryptionReady={encryptionReady}
         healthAvail={healthAvail}
         riskResult={riskResult}

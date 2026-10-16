@@ -1,80 +1,75 @@
-# Welcome to your Lovable project
+# Bio-Beat Tracker
 
-## Project info
+Estimación de bienestar mediante **fotopletismografía (PPG)** con la cámara del
+smartphone: pulso (BPM), SpO₂ experimental, presión arterial experimental (PWA,
+requiere calibración), respiración e irregularidad de ritmo.
 
-**URL**: https://lovable.dev/projects/d19c3295-2b5b-4a30-ba82-d64b04ac6a03
+> **No es un dispositivo médico.** Las estimaciones de SpO₂ y PA son
+> exploratorias y no sustituyen a un oxímetro ni a un tensiómetro certificado.
+> El pulso (temporización de latidos) es la medición principal; el resto queda
+> claramente etiquetado como estimación. Ver `docs/medical-validation.md`.
 
-## How can I edit this code?
-
-There are several ways of editing your application.
-
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/d19c3295-2b5b-4a30-ba82-d64b04ac6a03) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+## Quickstart
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
 npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+npm run dev        # Vite en http://localhost:8080
 ```
 
-**Edit a file directly in GitHub**
+Sin variables de entorno la app arranca en **modo local** (mediciones cifradas
+en el dispositivo). Para sincronizar con Supabase, ver la sección de variables.
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## Verificación
 
-**Use GitHub Codespaces**
+```sh
+npm run check:all  # lint + typecheck + orphans + arquitectura + no-sim + tests + build
+```
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+| Script | Qué protege |
+|---|---|
+| `check:orphans` | 0 archivos huérfanos, imports resolubles |
+| `check:architecture` | 10 módulos canónicos, sin procesadores paralelos |
+| `check:no-sim` / `:dist` | prohíbe `Math.random`/mock/synthetic en el pipeline PPG |
+| `test` | 55 archivos / 344 tests (vitest) |
 
-## What technologies are used for this project?
+## Estructura
 
-This project is built with .
+- `src/modules/signal-processing/` — pipeline PPG (filtros, picos, SQI, ROI)
+- `src/modules/vital-signs/` — SpO₂, PA, respiración, arritmia, calibración
+- `src/config/` — **fuente única de umbrales y constantes** (vitalThresholds, signalProcessing, ui, webrtc)
+- `src/hooks/`, `src/lib/` — orquestación y utilidades (acquisition, measurement, gym, storage)
+- `docs/ARCHITECTURE.md` — flujo end-to-end, fuentes de verdad, límites
+- `docs/audit-2026-10-15.md` — última auditoría profunda (fases, decisiones, pendientes)
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## Medición clínica (dedo) vs modo gym (facial)
 
-## How can I deploy this project?
+- **Clínico (dedo)**: cámara trasera + flash; el dedo solo se acepta con
+  evidencia pulsátil real (no por color).
+- **Gym (facial)**: cámara frontal, rPPG (POS Wang 2017); más sensible a
+  iluminación/movimiento.
 
-Simply open [Lovable](https://lovable.dev/projects/d19c3295-2b5b-4a30-ba82-d64b04ac6a03) and click on Share -> Publish.
+## Variables de entorno (nube opcional)
 
-### Variables de entorno (obligatorias para nube; sin ellas la app arranca en MODO LOCAL)
-
-El cliente de Sup requiere dos variables **en el dashboard del deploy** (Lovable → Project Settings → Environment Variables, o Vercel → Settings → Environment Variables). **No** se leen desde `.env` del repo (está excluido del control de versiones por seguridad):
+Configurar en el dashboard del deploy (Lovable → Project Settings → Environment
+Variables, o el proveedor equivalente). **No** se leen desde `.env` (excluido
+del repo):
 
 | Variable | Dónde obtenerla |
 |---|---|
 | `VITE_SUPABASE_URL` | Supabase → Project Settings → API → Project URL |
-| `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase → Project Settings → API → `anon` / publishable key (clave pública, protegida por RLS; **nunca** la `service_role`) |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase → claves API → `anon`/publishable (**nunca** `service_role`) |
 
-Desde 2026-10-15 un deploy **sin** estas variables no queda con pantalla negra: la app arranca en modo local (mediciones cifradas en el dispositivo) y lo advierte por consola. Con ellas, se sincronizan a la nube.
+Además, el edge function `analyze-vitals` (análisis IA) requiere
+`LOVABLE_API_KEY` en el entorno de Supabase Functions.
 
-## I want to use a custom domain - is that possible?
+## Deploy
 
-We don't support custom domains (yet). If you want to deploy your project under your own domain then we recommend using Netlify. Visit our docs for more details: [Custom domains](https://docs.lovable.dev/tips-tricks/custom-domain/)
+- **Web**: publicar desde Lovable (Share → Publish).
+- **APK Android**: GitHub Actions → workflow «Construir APK» (manual);
+  genera debug APK con `cap sync` + Gradle. Se requiere Android SDK 36/Java 21
+  (ya configurado en el workflow).
+
+## Stack
+
+Vite · React 18 · TypeScript · Tailwind CSS · Capacitor (Android) · Supabase ·
+Vitest

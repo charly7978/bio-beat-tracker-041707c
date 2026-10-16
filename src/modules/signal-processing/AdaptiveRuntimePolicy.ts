@@ -14,6 +14,7 @@
  * Todo el estado es reiniciable (`resetAdaptivePolicy`) para no arrastrar
  * memoria entre sesiones ni entre cambios de cámara.
  */
+import { clamp, clamp01 } from '../../utils/math';
 
 export interface AdaptiveRuntimePolicy {
   /** Factor multiplicativo sobre ROI_SIZE_FRACTION (0.62..1.0). */
@@ -24,8 +25,6 @@ export interface AdaptiveRuntimePolicy {
   bandHighHz: number;
   /** Histéresis dinámica (ms) para cambiar de fuente de señal. */
   sourceHysteresisMs: number;
-  /** Referencia de calidad relativa de la sesión (0..100). */
-  qualityFloor: number;
   /** Posición relativa del SQI actual en la sesión (0..1). */
   qualityRelative: number;
   /** Posición relativa del movimiento actual en la sesión (0..1). */
@@ -56,10 +55,6 @@ const BASE = {
   WARMUP_SAMPLES: 45,
 } as const;
 
-function clamp01(v: number): number {
-  return v < 0 ? 0 : v > 1 ? 1 : v;
-}
-
 /** z-score → 0..1 mediante logística; sin umbrales duros. */
 function relativePosition(value: number, mean: number, variance: number): number {
   const sd = Math.sqrt(Math.max(variance, 1e-9));
@@ -73,7 +68,6 @@ export function createAdaptivePolicy(): AdaptiveRuntimePolicy {
     bandLowHz: 0.5,
     bandHighHz: 4.5,
     sourceHysteresisMs: 4000,
-    qualityFloor: 0,
     qualityRelative: 0.5,
     motionRelative: 0.5,
     sqiMean: 0,
@@ -138,7 +132,7 @@ export function updateAdaptivePolicy(
     BASE.ROI_SCALE_MAX -
     shrink * (BASE.ROI_SCALE_MAX - BASE.ROI_SCALE_MIN) +
     expand * 0.0; // la expansión solo cancela el encogimiento, nunca supera el máximo
-  p.roiScale += (clampRange(roiTarget, BASE.ROI_SCALE_MIN, BASE.ROI_SCALE_MAX) - p.roiScale) * BASE.OUT_ALPHA;
+  p.roiScale += (clamp(roiTarget, BASE.ROI_SCALE_MIN, BASE.ROI_SCALE_MAX) - p.roiScale) * BASE.OUT_ALPHA;
 
   // --- BANDA DEL FILTRO ---
   // Con ritmo estimado fiable (periodicidad alta) la banda se estrecha alrededor
@@ -147,8 +141,8 @@ export function updateAdaptivePolicy(
   const fHr = input.bpm > 0 ? input.bpm / 60 : 0;
   const confidence = clamp01(input.periodicity) * qRel * trust;
   if (fHr > 0.6 && fHr < 4) {
-    const lowTarget = clampRange(fHr * (1 - 0.55 * confidence) * 0.75, BASE.BAND_LOW_MIN, BASE.BAND_LOW_MAX);
-    const highTarget = clampRange(
+    const lowTarget = clamp(fHr * (1 - 0.55 * confidence) * 0.75, BASE.BAND_LOW_MIN, BASE.BAND_LOW_MAX);
+    const highTarget = clamp(
       fHr * (2.6 - 0.9 * confidence),
       BASE.BAND_HIGH_MIN,
       BASE.BAND_HIGH_MAX,
@@ -169,14 +163,5 @@ export function updateAdaptivePolicy(
     BASE.HYST_MIN_MS + (BASE.HYST_MAX_MS - BASE.HYST_MIN_MS) * clamp01(mRel * 0.6 + (1 - qRel) * 0.4);
   p.sourceHysteresisMs += (hystTarget - p.sourceHysteresisMs) * BASE.OUT_ALPHA;
 
-  // --- RANGO DE CALIDAD ---
-  // Piso adaptativo: media de la sesión menos ~0.6σ, nunca negativo.
-  const sd = Math.sqrt(Math.max(p.sqiVar, 1e-9));
-  p.qualityFloor = Math.max(0, (p.sqiMean - 0.6 * sd) * trust);
-
   return p;
-}
-
-function clampRange(v: number, min: number, max: number): number {
-  return v < min ? min : v > max ? max : v;
 }

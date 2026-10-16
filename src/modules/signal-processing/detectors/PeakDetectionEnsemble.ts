@@ -49,8 +49,7 @@ export class PeakDetectionEnsemble {
     let fsEffective = samplingRateHz;
     let fsAdapted = false;
     if (gaps.length >= 8) {
-      const sorted = [...gaps].sort((a, b) => a - b);
-      const medDt = sorted[Math.floor(sorted.length / 2)] ?? 1000 / samplingRateHz;
+      const medDt = median(gaps);
       const fsFromTs = 1000 / medDt;
       if (
         fsFromTs >= 5 && fsFromTs <= 240 &&

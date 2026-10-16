@@ -9,7 +9,7 @@
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
 import { clamp } from '../../../utils/math';
-import { skewness } from '../../../utils/stats';
+import { median, skewness } from '../../../utils/stats';
 import {
   detrendLinear,
   hampel1D,
@@ -164,8 +164,11 @@ export class ElgendiPeakDetector {
     const peakProms = new Array<number>(maxPeaks);
     let pk = 0;
 
-    // Periodo refractario fisiológico fijo (~280 ms)
-    const refractorySamples = Math.max(3, Math.round((280 / 1000) * fs));
+    // Periodo refractario fisiológico fijo (RR mínimo canónico: 270 ms)
+    const refractorySamples = Math.max(
+      3,
+      Math.round((PEAK_DETECTION_DEFAULTS.minPeakDistanceMs / 1000) * fs),
+    );
 
     for (let bi = 0; bi < blocks.length; bi++) {
       const b = blocks[bi];
@@ -186,7 +189,7 @@ export class ElgendiPeakDetector {
         if (x[j] < localMin) localMin = x[j];
       }
       const prom = bestV - localMin;
-      if (prom < minProm * 0.4) continue;
+      if (prom < minProm * PEAK_DETECTION_DEFAULTS.candidateProminenceScale) continue;
 
       if (pk > 0) {
         const prev = peaks[pk - 1];
@@ -214,10 +217,9 @@ export class ElgendiPeakDetector {
 
     // Filtrado de picos por amplitud relativa sólo ante artefactos evidentes
     if (pk >= 4) {
-      const promsSorted = peakProms.slice(0, pk).sort((a, b) => a - b);
-      const medProm = promsSorted[Math.floor(promsSorted.length / 2)] ?? 0;
-      const promFloor = medProm * 0.20;
-      const promCeil = medProm * 3.8;
+      const medProm = median(peakProms.slice(0, pk));
+      const promFloor = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectFraction;
+      const promCeil = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectUpper;
 
       if (medProm > 0) {
         let w = 0;

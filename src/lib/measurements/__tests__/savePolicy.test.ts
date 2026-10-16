@@ -54,6 +54,7 @@ function makeVs(hrStatus: VitalSignsResult['heartRate']['status'], sqiRound: num
       diagnostics: {},
     },
     signalQuality: sqiRound,
+    measurementConfidence: 'HIGH',
     isCalibrating: false,
     calibrationProgress: 0,
   };

@@ -3,7 +3,7 @@ import { BandpassFilter } from './BandpassFilter';
 import { PPGSignalSplitter } from './PPGSignalSplitter';
 import { createLogger, ppgPerf } from '../../utils/logger';
 import { clamp } from '../../utils/math';
-import { robustBounds, stdDev } from '../../utils/stats';
+import { median, robustBounds, stdDev } from '../../utils/stats';
 import { RingF32 } from '../../utils/RingBuffer';
 import {
   DEFAULT_BACKPRESSURE_CONFIG,
@@ -25,6 +25,7 @@ import {
 import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 import {
+  computeTemporalVariance,
   hasFingerHemoglobinSignature,
   calibrateZlo,
   getZlo,
@@ -71,6 +72,7 @@ import { bandLimitedDominantFreq, computeWindowMoments } from './shared/dsp';
 import { RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
 import { GymFaceTracker, type GymFaceTrackingResult } from '../../lib/gym/gymFaceTracker';
 import { GymMotionCancellation } from '../../lib/gym/gymMotionCancellation';
+import { emaBlend } from '../../lib/measurement/adaptiveEma';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -105,7 +107,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   private bandpassFilter: BandpassFilter;
   private morphBandpassFilter: BandpassFilter;
-  private readonly signalSplitter = new PPGSignalSplitter(30);
+  private readonly signalSplitter = new PPGSignalSplitter();
   /** BPM estimado para el notch adaptativo del canal 5 (arritmias) */
   private lastKnownBpm = 0;
   private placementMode: FingerPlacementMode = 'hybrid';
@@ -326,10 +328,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     public onSignalReady?: (signal: ProcessedSignal) => void,
     public onError?: (error: ProcessingError) => void
   ) {
-    // Pulso (HR): 0.5-4.5Hz — rango cardíaco estándar, 4º orden para mejor rechazo
-    this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, 4.5);
-    // Morfología (BP): 0.5-8Hz — preserva escotadura dicrótica y forma completa del pulso
-    this.morphBandpassFilter = new BandpassFilter(this.estimatedSampleRate, 8.0);
+    // Pulso (HR): 0.5-4.5 Hz — rango cardíaco estándar (DSP_CONSTANTS.PPG_BAND_HZ)
+    this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, DSP_CONSTANTS.PPG_BAND_HZ[1]);
+    // Morfología (BP): 0.5-12 Hz — preserva escotadura dicrótica completa (PPG_MORPH_BAND_HZ)
+    this.morphBandpassFilter = new BandpassFilter(
+      this.estimatedSampleRate,
+      DSP_CONSTANTS.PPG_MORPH_BAND_HZ[1],
+    );
   }
 
   async initialize(): Promise<void> {
@@ -406,7 +411,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         faceDetected: false,
         contactState: 'NO_CONTACT',
         measurementMode: 'gym',
-        motionArtifact: face.motionScore > 0.6,
+        motionArtifact: face.motionScore > VITAL_THRESHOLDS.GYM_FACE.MOTION_ARTIFACT_DIAG,
         roi: {
           x: face.faceBox.x,
           y: face.faceBox.y,
@@ -438,8 +443,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     // 2. Rostro detectado: presencia confirmada
     const wasLost = this.consecutiveNoContactFrames > 0;
     this.consecutiveNoContactFrames = 0;
-    const motionArtifact = face.motionScore > 0.55;
-    const isStable = face.confidence >= 0.50 && face.motionScore < 0.65;
+    const motionArtifact = face.motionScore > VITAL_THRESHOLDS.GYM_FACE.MOTION_ARTIFACT_STRICT;
+    const isStable =
+      face.confidence >= VITAL_THRESHOLDS.GYM_FACE.CONF_STABLE_MIN &&
+      face.motionScore < VITAL_THRESHOLDS.GYM_FACE.MOTION_STABLE_MAX;
     this.contactState = isStable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
     this.fingerDetected = true;
 
@@ -483,8 +490,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.xBuffer.push(X);
     this.yBuffer.push(Y);
 
-    const stdX = this.calculateStdDev(this.xBuffer);
-    const stdY = this.calculateStdDev(this.yBuffer);
+    const stdX = this.xBuffer.stdDev();
+    const stdY = this.yBuffer.stdDev();
     const rawAlpha = stdY > 1e-9 ? stdX / stdY : this.smoothedPosAlpha;
     const reliability = clamp(stdY / Math.max(1, stdX * 0.5 + stdY), 0, 1);
     const blendedAlpha = rawAlpha * reliability + this.smoothedPosAlpha * (1 - reliability);
@@ -672,7 +679,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       { red: this.smoothedRed, green: this.smoothedGreen, blue: this.smoothedBlue, coverage: this.smoothedCoverage, fingerScore: this.smoothedFingerScore },
       { coverageRatio: roi.coverageRatio, fingerScore: roi.fingerScore, fingerTileCount: roi.fingerTileCount },
       this.grayBuffer,
-      this.lastEnsembleScore,
+      computeTemporalVariance(this.grayBuffer),
     );
     this.lastEnsembleScore = fingerEnsemble.ensemble.ensembleScore;
     const liveFinger = this.isLiveFingerFrame(roi, this.lastEnsembleScore);
@@ -1361,9 +1368,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (this.frameCount % 10 !== 0) return;
 
     const fiTail = this.frameIntervalBuffer.tail(this.frameIntervalBuffer.length);
-    fiTail.sort((a, b) => a - b);
-    const median = fiTail[Math.floor(fiTail.length / 2)] ?? 33;
-    const estimatedFps = clamp(1000 / median, 10, 40);
+    const medDeltaMs = median(fiTail) || (1000 / DSP_CONSTANTS.DEFAULT_SAMPLE_RATE);
+    const estimatedFps = clamp(
+      1000 / medDeltaMs,
+      DSP_CONSTANTS.SAMPLE_RATE_MIN,
+      DSP_CONSTANTS.SAMPLE_RATE_MAX,
+    );
 
     if (Math.abs(estimatedFps - this.estimatedSampleRate) > 2) {
       this.estimatedSampleRate = estimatedFps;
@@ -1525,7 +1535,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       // Alpha adaptativo por velocidad instantánea + outlier rejection:
       // movimiento rápido → α alto (sigue); quieto → α bajo (suaviza).
       // Saltos > 3× la media reciente se limitan para ignorar outliers.
-      this.centroidMotionEma = this.centroidMotionEma * 0.85 + displacement * 0.15;
+      this.centroidMotionEma = emaBlend(this.centroidMotionEma, displacement, 0.15);
       const outlierLimit = Math.max(0.005, this.centroidMotionEma * 3);
       const clampedDisp = Math.min(displacement, outlierLimit);
       const alpha = clamp(0.02 + clampedDisp * 3.0, 0.02, 0.25);
@@ -1537,8 +1547,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       );
     } else {
       const alphaDrift = 0.04;
-      this.trackedCentroid.x = this.trackedCentroid.x * (1 - alphaDrift) + 0.5 * alphaDrift;
-      this.trackedCentroid.y = this.trackedCentroid.y * (1 - alphaDrift) + 0.5 * alphaDrift;
+      this.trackedCentroid.x = emaBlend(this.trackedCentroid.x, 0.5, alphaDrift);
+      this.trackedCentroid.y = emaBlend(this.trackedCentroid.y, 0.5, alphaDrift);
     }
 
     const saturationRatio = totalSampled > 0 ? saturatedSamples / totalSampled : 0;
@@ -1646,9 +1656,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       // El tracking DC debe ser dinámico y ágil (alpha ~ 0.06) para que el
       // algoritmo POS mantenga las señales centradas sin saturar en clampMax (0.06).
       const gymAlpha = motionArtifact ? 0.22 : 0.06;
-      this.redBaseline = this.redBaseline * (1 - gymAlpha) + rawRed * gymAlpha;
-      this.greenBaseline = this.greenBaseline * (1 - gymAlpha) + rawGreen * gymAlpha;
-      this.blueBaseline = this.blueBaseline * (1 - gymAlpha) + rawBlue * gymAlpha;
+      this.redBaseline = emaBlend(this.redBaseline, rawRed, gymAlpha);
+      this.greenBaseline = emaBlend(this.greenBaseline, rawGreen, gymAlpha);
+      this.blueBaseline = emaBlend(this.blueBaseline, rawBlue, gymAlpha);
       return;
     }
 
@@ -1663,9 +1673,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         ? 0.02
         : 0.04;
     const redBlPrev = this.redBaseline;
-    this.redBaseline = this.redBaseline * (1 - alpha) + rawRed * alpha;
-    this.greenBaseline = this.greenBaseline * (1 - alpha) + rawGreen * alpha;
-    this.blueBaseline = this.blueBaseline * (1 - alpha) + rawBlue * alpha;
+    this.redBaseline = emaBlend(this.redBaseline, rawRed, alpha);
+    this.greenBaseline = emaBlend(this.greenBaseline, rawGreen, alpha);
+    this.blueBaseline = emaBlend(this.blueBaseline, rawBlue, alpha);
     // Si el baseline previo era muy distinto al raw y el nuevo alpha se quedo
     // corto, aproximamos en un solo salto: el DC ya cambio y la convergencia
     // lenta solo prolonga el ringing.
@@ -1673,9 +1683,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const step = Math.abs(rawRed - redBlPrev) / Math.max(1, redBlPrev);
       if (step > 0.03) {
         const fastAlpha = clamp(step * 2, 0.15, 0.6);
-        this.redBaseline = this.redBaseline * (1 - fastAlpha) + rawRed * fastAlpha;
-        this.greenBaseline = this.greenBaseline * (1 - fastAlpha) + rawGreen * fastAlpha;
-        this.blueBaseline = this.blueBaseline * (1 - fastAlpha) + rawBlue * fastAlpha;
+        this.redBaseline = emaBlend(this.redBaseline, rawRed, fastAlpha);
+        this.greenBaseline = emaBlend(this.greenBaseline, rawGreen, fastAlpha);
+        this.blueBaseline = emaBlend(this.blueBaseline, rawBlue, fastAlpha);
       }
     }
   }
@@ -1724,8 +1734,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.xBuffer.push(X);
     this.yBuffer.push(Y);
 
-    const stdX = this.calculateStdDev(this.xBuffer);
-    const stdY = this.calculateStdDev(this.yBuffer);
+    const stdX = this.xBuffer.stdDev();
+    const stdY = this.yBuffer.stdDev();
     const rawAlpha = stdY > 1e-9 ? stdX / stdY : this.smoothedPosAlpha;
     const reliability = clamp(stdY / Math.max(1, stdX * 0.5 + stdY), 0, 1);
     const blendedAlpha = rawAlpha * reliability + this.smoothedPosAlpha * (1 - reliability);
@@ -1821,10 +1831,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
   }
 
-  private calculateStdDev(ring: RingF32): number {
-    return ring.stdDev();
-  }
-
   private computeSourceScore(buffer: number[]): number {
     if (buffer.length < 30) return 0;
 
@@ -1918,7 +1924,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const data = this.periodicityScratch;
     
     // Autocorrelación: lags escalados por sample rate real (36-180 bpm @30fps)
-    const sr = clamp(this.estimatedSampleRate, 10, 60);
+    const sr = clamp(
+      this.estimatedSampleRate,
+      DSP_CONSTANTS.SAMPLE_RATE_MIN,
+      DSP_CONSTANTS.SAMPLE_RATE_MAX,
+    );
     const minLag = Math.max(5, Math.round((sr * 60) / 180));
     const maxLag = Math.min(n - 8, Math.round((sr * 60) / 36));
     let maxCorr = 0;
@@ -2177,7 +2187,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.signalMotionScore * (1 - Q.MOTION_SIGNAL_EMA_ALPHA) + combinedInst * Q.MOTION_SIGNAL_EMA_ALPHA;
   }
 
-  private handleMotionEvent = (event: DeviceMotionEvent) => {
+  /**
+   * Público: además del listener DOM, el Web Worker inyecta eventos sintéticos
+   * de movimiento (`{ accelerationIncludingGravity, rotationRate }`) por postMessage.
+   */
+  handleMotionEvent = (event: DeviceMotionEvent) => {
     const acc = event.accelerationIncludingGravity;
     if (!acc || acc.x === null || acc.y === null || acc.z === null) return;
 

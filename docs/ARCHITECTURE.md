@@ -38,8 +38,20 @@ Index.tsx → PPGSignalMeter (Canvas 2D Catmull-Rom + 3D ribbon)
           + DebugTelemetryPanel + Supabase (measurements + local encrypted)
           + useSignalRouter (throttle HR 80 ms / vitals 300 ms, latch, sanity)
           + useMeasurementSession (60 s, 60 s trend)
+          + SplashScreen / SettingsPanel / MeasurementSummaryModal (extraídos)
 Medición dual: finger (trasera+flash) vs gym (frontal POS Wang 2017, rPPG)
 ```
+
+**Estructura de UI (2026-10-16):** `Index.tsx` quedó como orquestador (~1.1k
+líneas); los tres bloques grandes se extrajeron a componentes de render puro con
+props explícitas:
+
+- `src/components/SplashScreen.tsx` — puerta de entrada (selector de modo + start);
+  versión de build vía `__APP_VERSION__` (inyectada por `vite.config.ts` desde package.json).
+- `src/components/measurement/MeasurementSummaryModal.tsx` — resumen post-medición
+  (BPM/SpO2/PA, barras de ritmo, Poincaré, veredicto de `MeasurementWindowValidator`, CTA de análisis IA).
+- `src/components/SettingsPanel.tsx` — panel de ajustes (perfil, calibración, historial, sync);
+  `activeTab` es estado local del panel; `HistoricalMeasurement`/`ActiveUser` se exportan desde aquí.
 
 **Fallback worker → main-thread (implementado 2026-10-15):** si `new Worker`
 falla (CSP, WebView antiguo), `useSignalProcessor` instancia `PPGSignalProcessor`
@@ -64,6 +76,8 @@ degrada a "señal inventada": si tampoco el main-thread inicia, el estado es
 | Honestidad de onda | `src/lib/ui/waveHonesty.ts` (`realSignalStrength = perf×per` AND — prioridad no-lectura) |
 | Backpressure | `src/lib/perf/backpressureConfig.ts` (stride 3↔4, checked 1 s, hysteresis) |
 | Suavizado EMA adaptativo | `src/lib/measurement/adaptiveEma.ts` (núcleo único; wrappers: `displaySmoothing.ts` capa UI y `modules/vital-signs/DisplaySmoothing.ts` capa procesador) |
+| Perfil de cámara (FPS/resolución por modo) | `src/lib/device/cameraDeviceProfile.ts` (CAMERA_TARGET_FPS/MIN_FPS/RESOLUTION; consumido por `CameraView.tsx`) |
+| UI compartida (toasts) | `src/config/ui.ts` (TOAST_LIMIT, TOAST_REMOVE_DELAY; consumido por `use-toast.ts`) |
 | Servidores ICE (telemetría P2P) | `src/config/webrtc.ts` (consumido por `WebrtcCallWidget.tsx`) |
 
 CI ejecuta `npm run check:architecture` para impedir procesadores paralelos y rutas legacy.
@@ -124,6 +138,24 @@ Reglas típicas:
 ## Supabase
 
 Se conservan intentos y mediciones con metadatos de calidad; **no** se deben persistir lecturas inválidas como resultados clínicos finales sin `status`/`reason`. El edge function `secure-proxy` fue **eliminado** (dead code: sin referencias en el cliente); el único invocado desde `src/` es `analyze-vitals`.
+
+### Persistencia (`measurements`) — cableado 2026-10-16
+
+La fila final ahora escribe trazabilidad real además de los valores básicos:
+
+| Columna | Origen |
+|---|---|
+| `algorithm_version` | `__APP_VERSION__` inyectada en build (null en tests/node) |
+| `measurement_confidence` | `VitalSignsResult.measurementConfidence` (`HIGH`/`MEDIUM`/`LOW`/`INVALID`, misma política que el gate de estabilidad) |
+| `measurement_window_seconds` | Reloj real de la sesión (`elapsedTime` al finalizar) |
+| `signal_quality_index` | SQI redondeado usado por la política de guardado |
+
+Esquema: migraciones idempotentes `20260606014823` (duplicaba `measurement_attempts`),
+`20260925000001` (columnas extra de `measurements`) y `20260925000002`
+(FK `perf_snapshots.user_id → auth.users` con `ON DELETE CASCADE`).
+`analyze-vitals` valida rangos fisiológicos alineados al canónico de la app
+(HR 30–220, SpO2 75–100, sistólica 20–280, diastólica 40–130) y requiere
+`LOVABLE_API_KEY` en el entorno del edge.
 
 ### Secretos y almacenamiento local (auditado 2026-10-15)
 

@@ -220,54 +220,6 @@ export function computePhysiologicalIndices(
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * 2. ESTIMACIÓN MORFOLÓGICA PWA
- * ═══════════════════════════════════════════════════════════════════════════
- */
-export function morphologyPressures(
-  f: PwaMedianFeatures,
-  ctx: PwaBpContext,
-  _profile?: AnthropometricProfile | null,
-): { sbp: number; dbp: number } {
-  const cfg = VITAL_THRESHOLDS.BP;
-  const N = cfg.FEATURE_NORM;
-  const cycleMs = Math.max(280, ctx.cyclePeriodMs);
-  const spanS = cfg.SYSTOLIC_MAX - cfg.SYSTOLIC_MIN;
-  const spanD = cfg.DIASTOLIC_MAX - cfg.DIASTOLIC_MIN;
-  const M = cfg.WEIGHTS.MORPHOLOGY;
-
-  const sutScore = norm01(f.sutMs / cycleMs, N.SUT_CYCLE_RATIO[0], N.SUT_CYCLE_RATIO[1]);
-  const diaScore = norm01(
-    f.diastolicPhaseMs / cycleMs,
-    N.DIA_PHASE_RATIO[0],
-    N.DIA_PHASE_RATIO[1],
-  );
-  const pw50Score = norm01(f.pw50Ms / cycleMs, N.PW50_CYCLE_RATIO[0], N.PW50_CYCLE_RATIO[1]);
-  const hrScore = norm01(ctx.hr, VITAL_THRESHOLDS.HR.MIN, VITAL_THRESHOLDS.HR.MAX);
-  const hrvScore = norm01(ctx.rmssd, N.RMSSD[0], N.RMSSD[1]);
-
-  const sbpUnit =
-    M.sbp.sut * (1 - sutScore) +
-    M.sbp.stiff * norm01(-f.bDivA, N.B_DIV_A[0], N.B_DIV_A[1]) +
-    M.sbp.dicrotic * norm01(f.dicroticDepth, N.DICROTIC_DEPTH[0], N.DICROTIC_DEPTH[1]) +
-    M.sbp.aix * norm01(f.augmentationIndex, N.AUGMENTATION_INDEX[0], N.AUGMENTATION_INDEX[1]) +
-    M.sbp.hr * hrScore;
-
-  const dbpUnit =
-    M.dbp.pw50 * pw50Score +
-    M.dbp.diaPhase * diaScore +
-    M.dbp.decay * norm01(decayLambda(f), N.DECAY_LAMBDA[0], N.DECAY_LAMBDA[1]) +
-    M.dbp.dicrotic * norm01(f.dicroticDepth, N.DICROTIC_DEPTH[0], N.DICROTIC_DEPTH[1]) +
-    M.dbp.hrv * (1 - hrvScore) +
-    M.dbp.ipa * norm01(f.areaRatio, N.AREA_RATIO[0], N.AREA_RATIO[1]);
-
-  return {
-    sbp: cfg.SYSTOLIC_MIN + clamp(sbpUnit, 0, 1) * spanS,
-    dbp: cfg.DIASTOLIC_MIN + clamp(dbpUnit, 0, 1) * spanD,
-  };
-}
-
-/**
- * ═══════════════════════════════════════════════════════════════════════════
  * 3. ESTIMADOR PRINCIPAL: FUSIÓN ADAPTATIVA NEURAL-WINDKESSEL-PDA
  * ═══════════════════════════════════════════════════════════════════════════
  */

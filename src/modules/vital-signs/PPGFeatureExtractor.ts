@@ -13,7 +13,7 @@
  * - pyPPG (PMC 2024) - 632 features estandarizados
  */
 
-import { calculateHRV } from '../../utils/physio';
+import { calculateHRV, isPhysiologicalRR } from '../../utils/physio';
 
 // ═══════════════════════════════════════════
 // TYPES
@@ -119,9 +119,9 @@ export class PPGFeatureExtractor {
       const nextOnset = valleys[i + 1];
       const cycleLength = nextOnset - onset;
 
-      // Validate cycle length (350ms - 1800ms → ~33-171 BPM) to reject non-human noise
+      // Validate cycle length against the canonical physiological RR range (270–2200 ms)
       const cycleLengthMs = (cycleLength / sampleRate) * 1000;
-      if (cycleLengthMs < 350 || cycleLengthMs > 1800) continue;
+      if (!isPhysiologicalRR(cycleLengthMs)) continue;
 
       // 2. Find systolic peak within cycle
       const systolicPeak = this.findSystolicPeak(buffer, onset, nextOnset);

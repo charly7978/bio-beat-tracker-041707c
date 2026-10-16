@@ -1,4 +1,5 @@
 import { clamp } from '../../utils/math';
+import { median } from '../../utils/stats';
 import { createLogger } from '../../utils/logger';
 import {
   getMonotonicNow,
@@ -495,10 +496,9 @@ export class ArrhythmiaProcessor {
       r => r >= this.MIN_VALID_RR_MS && r <= this.MAX_VALID_RR_MS,
     );
     if (valid.length < 4) return;
-    const sorted = [...valid].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
-    if (median <= 0) return;
-    for (const r of valid) this.warmupSpread.push(Math.abs(r - median));
+    const medRr = median(valid);
+    if (medRr <= 0) return;
+    for (const r of valid) this.warmupSpread.push(Math.abs(r - medRr));
     if (this.warmupSpread.length > 400) {
       this.warmupSpread = this.warmupSpread.slice(-400);
     }

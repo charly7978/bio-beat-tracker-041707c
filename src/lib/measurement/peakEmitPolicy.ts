@@ -12,6 +12,7 @@
 import type { PeakDetectionResult } from '@/types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '@/config/signalProcessing';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
+import { median } from '@/utils/stats';
 import { rrMedianMs, scorePeakCandidate } from './peakScoring';
 
 export interface PeakEmitDecision {
@@ -135,14 +136,12 @@ export function bpmFromEmittedRr(rrMs: number[]): number {
       d <= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS,
   );
   if (!tail.length) return 0;
-  const sorted = [...tail].sort((a, b) => a - b);
-  const med = sorted[Math.floor(sorted.length / 2)] ?? sorted[0]!;
+  const med = median(tail);
   const trimmed =
     tail.length >= 3
       ? tail.filter((d) => Math.abs(d - med) / med <= 0.22)
       : tail;
   const use = trimmed.length >= 2 ? trimmed : tail;
-  const sortedUse = [...use].sort((a, b) => a - b);
-  const finalMed = sortedUse[Math.floor(sortedUse.length / 2)] ?? sortedUse[0]!;
+  const finalMed = median(use);
   return 60000 / finalMed;
 }

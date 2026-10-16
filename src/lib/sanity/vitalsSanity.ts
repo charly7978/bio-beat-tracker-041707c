@@ -54,11 +54,6 @@ export class VitalsSanityChecker {
     this.lastVerdict = { ok: true };
   }
 
-  /** Read-only accessor for the active thresholds (for audit / UI display). */
-  getOptions() {
-    return { ...this.opt };
-  }
-
   /** Push a new sample. 0 / non-finite values are treated as "no reading" and skipped. */
   push(value: number): SanityVerdict {
     if (!Number.isFinite(value) || value <= 0) return this.lastVerdict;

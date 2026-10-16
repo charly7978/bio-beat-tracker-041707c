@@ -44,14 +44,3 @@ export function smoothDisplayPair(
     diastolic: Math.round(smoothDisplayValue(prev.diastolic, next.diastolic, alpha)),
   };
 }
-
-/** Mismo algoritmo para el canvas (PPGSignalMeter). */
-export function lerpDisplayValue(
-  cur: number,
-  tgt: number,
-  base: number,
-): number {
-  if (tgt <= 0) return smoothDisplayValue(cur, 0, base);
-  if (cur <= 0) return tgt;
-  return smoothDisplayValue(cur, tgt, base);
-}

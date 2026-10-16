@@ -164,6 +164,7 @@ export function isFingerOnLensScene(
   coverage: number,
   fingerScore: number,
 ): boolean {
+  const F = VITAL_THRESHOLDS.FINGER;
   const r = snap.red;
   const g = Math.max(1, snap.green);
   const b = Math.max(1, snap.blue);
@@ -172,14 +173,14 @@ export function isFingerOnLensScene(
   const rg = r / g;
   const dom = r - (g + b) / 2;
   return (
-    total >= 48 &&
-    total <= 520 &&
-    rb >= 1.14 &&
-    rg >= 1.05 &&
-    dom >= 10 &&
-    coverage >= 0.11 &&
-    fingerScore >= 0.14 &&
-    snap.coverage >= 0.1
+    total >= F.LENS_SCENE_MIN_TOTAL &&
+    total <= F.LENS_SCENE_MAX_TOTAL &&
+    rb >= F.LENS_SCENE_MIN_RB &&
+    rg >= F.LENS_SCENE_MIN_RG &&
+    dom >= F.LENS_SCENE_MIN_DOMINANCE &&
+    coverage >= F.LENS_SCENE_MIN_COVERAGE &&
+    fingerScore >= F.LENS_SCENE_MIN_FINGER_SCORE &&
+    snap.coverage >= F.LENS_SCENE_MIN_SNAP_COVERAGE
   );
 }
 

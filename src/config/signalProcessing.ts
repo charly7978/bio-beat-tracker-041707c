@@ -73,6 +73,8 @@ export const PEAK_DETECTION_DEFAULTS = {
    * → no afecta señales débiles; alto → no descarta latidos reales ni PVC.
    */
   peakAmplitudeRejectUpper: 2.6,
+  /** Escala mínima de prominencia de candidatos antes del filtrado relativo */
+  candidateProminenceScale: 0.4,
   minSQI: 10,
   /** Ventana para emitir pico respecto al frame actual (ms) — cubre ciclo cardíaco completo + latencia MA */
   peakEmitWindowMs: 1200,
@@ -118,6 +120,16 @@ export const DSP_CONSTANTS = {
   BUFFER_SIZE: 300,
   /** Frecuencia de muestreo nominal por defecto (fps). */
   DEFAULT_SAMPLE_RATE: 30,
+  /** Clamps del sample rate efectivo estimado desde timestamps (fps). */
+  SAMPLE_RATE_MIN: 10,
+  SAMPLE_RATE_MAX: 60,
+  /** Banda del canal de pulso (Hz): rango cardíaco estándar (30–220 BPM). */
+  PPG_BAND_HZ: [0.5, 4.5] as const,
+  /**
+   * Banda del canal morfológico (BP, Hz): más ancha para preservar la forma
+   * completa del pulso incluida la escotadura dicrótica.
+   */
+  PPG_MORPH_BAND_HZ: [0.5, 12] as const,
   /** Número máximo de intervalos RR almacenados para análisis de variabilidad. */
   MAX_RR_INTERVALS: 30,
   /** Tamaño de búfer por fuente para ranking competitivo de canales. */
@@ -129,7 +141,10 @@ export const RESPIRATION_DEFAULTS = {
   minRpm: 6,
   maxRpm: 40,
   minStableFrames: 90,
+  /** Muestras mínimas del historial para confiar en la estimación */
   minBuffer: 240,
+  /** Capacidad del ring buffer de historial respiratorio (VitalSignsProcessor) */
+  bufferSamples: 320,
 } as const;
 
 /**

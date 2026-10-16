@@ -14,19 +14,23 @@ import {
   decryptLocal,
   encryptLocal,
   getOrCreateLocalKey,
+  STORAGE_KEYS,
 } from '@/lib/storage/localEncryptedStorage';
+import { DSP_CONSTANTS } from '@/config/signalProcessing';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('useSaveMeasurement');
+
+/** Versión del motor inyectada en build (package.json); null en tests/node. */
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null;
 
 interface MeasurementData {
   vitalSigns: VitalSignsResult;
   signalQuality: number;
   artifactMetrics?: ArtifactMetrics;
+  /** Duración real de la ventana de medición en segundos (reloj de sesión). */
+  windowSeconds?: number;
 }
-
-const LOCAL_STORAGE_KEY = 'local_measurements';
-const LOCAL_KEY_STORAGE_KEY = 'bb-crypto-key';
 
 /**
  * Ofuscación local (NO almacenamiento seguro): la clave reside en el mismo
@@ -36,7 +40,7 @@ const LOCAL_KEY_STORAGE_KEY = 'bb-crypto-key';
  * Semántica completa en `src/lib/storage/localEncryptedStorage.ts`.
  */
 async function getEncryptionKey(): Promise<CryptoKey | null> {
-  return getOrCreateLocalKey(LOCAL_KEY_STORAGE_KEY);
+  return getOrCreateLocalKey(STORAGE_KEYS.cryptoKey);
 }
 
 async function encryptLocalMeasurements(data: unknown): Promise<string | null> {
@@ -46,7 +50,7 @@ async function encryptLocalMeasurements(data: unknown): Promise<string | null> {
 }
 
 export async function decryptLocalMeasurements(): Promise<unknown[]> {
-  const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+  const raw = localStorage.getItem(STORAGE_KEYS.measurements);
   if (!raw) return [];
   try {
     const key = await getEncryptionKey();
@@ -132,7 +136,7 @@ export const useSaveMeasurement = () => {
           quality: {
             sqi: sq,
             pi: vs.heartRate.signalQuality?.perfusionIndex ?? 0,
-            fps: vs.heartRate.signalQuality?.fpsEffective ?? 30,
+            fps: vs.heartRate.signalQuality?.fpsEffective ?? DSP_CONSTANTS.DEFAULT_SAMPLE_RATE,
             jitter: vs.heartRate.signalQuality?.timestampJitterMs ?? 0,
           },
           rr: [],
@@ -191,7 +195,7 @@ export const useSaveMeasurement = () => {
             duration: 5000,
           });
         } else {
-          localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
+            localStorage.setItem(STORAGE_KEYS.measurements, encrypted);
           savedLocally = true;
 
           toast({
@@ -203,7 +207,7 @@ export const useSaveMeasurement = () => {
       }
 
       if (!savedLocally && user) {
-        const measurementRecord = {
+        const measurementRecord: TablesInsert<'measurements'> = {
           user_id: user.id,
           heart_rate: hr,
           spo2,
@@ -212,6 +216,10 @@ export const useSaveMeasurement = () => {
           arrhythmia_count: vs.arrhythmia.value?.count ?? 0,
           quality: sq,
           measured_at: new Date().toISOString(),
+          algorithm_version: APP_VERSION,
+          measurement_confidence: vs.measurementConfidence,
+          measurement_window_seconds: data.windowSeconds ?? null,
+          signal_quality_index: sq,
         };
 
         const { error: insertError } = await supabase.from('measurements').insert(measurementRecord);
@@ -237,7 +245,7 @@ export const useSaveMeasurement = () => {
           });
           const encrypted = await encryptLocalMeasurements(localMeasurements);
           if (encrypted != null) {
-            localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
+          localStorage.setItem(STORAGE_KEYS.measurements, encrypted);
           }
 
           toast({

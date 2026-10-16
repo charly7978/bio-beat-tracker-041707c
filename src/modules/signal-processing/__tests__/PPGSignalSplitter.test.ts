@@ -21,32 +21,6 @@ function rms(arr: number[]): number {
 }
 
 describe('PPGSignalSplitter', () => {
-  describe('Canal 1: HR', () => {
-    it('produce señal filteredHR finita para entrada PPG válida', () => {
-      const splitter = new PPGSignalSplitter(30);
-      const sig = makePPGSignal(1.2, 30, 300);
-      let lastOut = 0;
-      for (let i = 0; i < 300; i++) {
-        const out = splitter.process(sig[i]!, sig[i]! * 0.6, 30);
-        expect(isFinite(out.filteredHR)).toBe(true);
-        lastOut = out.filteredHR;
-      }
-      // Tras warm-up, debe haber señal en la banda cardiaca
-      expect(Math.abs(lastOut)).toBeGreaterThanOrEqual(0); // no NaN
-    });
-
-    it('spike aislado en el raw es amortiguado por Hampel', () => {
-      const splitter = new PPGSignalSplitter(30);
-      // Warm-up con señal estable
-      for (let i = 0; i < 30; i++) {
-        splitter.process(150, 90, 30);
-      }
-      // Spike brutal en un frame
-      const out = splitter.process(254, 90, 30);
-      expect(isFinite(out.filteredHR)).toBe(true);
-    });
-  });
-
   describe('Canal 2: SpO2 AC/DC', () => {
     it('dcRed no es cero con señal no nula', () => {
       const splitter = new PPGSignalSplitter(30);
@@ -182,7 +156,6 @@ describe('PPGSignalSplitter', () => {
     it('maneja NaN/Infinity sin propagar error', () => {
       const splitter = new PPGSignalSplitter(30);
       const out = splitter.process(NaN, Infinity, -Infinity, 0);
-      expect(isFinite(out.filteredHR)).toBe(true);
       expect(isFinite(out.spo2.acRed)).toBe(true);
       expect(isFinite(out.morphology)).toBe(true);
       expect(isFinite(out.respiration)).toBe(true);
@@ -195,7 +168,7 @@ describe('PPGSignalSplitter', () => {
       splitter.reset();
       // Después del reset, la primera muestra debe ser finita y cercana a 0
       const out = splitter.process(150, 90, 30, 70);
-      expect(isFinite(out.filteredHR)).toBe(true);
+      expect(isFinite(out.morphology)).toBe(true);
     });
 
     it('setSampleRate reconfigura sin errores', () => {
@@ -203,7 +176,7 @@ describe('PPGSignalSplitter', () => {
       for (let i = 0; i < 30; i++) splitter.process(150, 90, 30, 70);
       splitter.setSampleRate(25);
       const out = splitter.process(150, 90, 30, 70);
-      expect(isFinite(out.filteredHR)).toBe(true);
+      expect(isFinite(out.morphology)).toBe(true);
     });
   });
 });

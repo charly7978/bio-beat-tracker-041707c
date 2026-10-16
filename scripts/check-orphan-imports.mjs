@@ -57,6 +57,9 @@ function tryResolve(spec, fromFile) {
 const importRe = /(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]/g;
 const dynRe = /import\(\s*['"]([^'"]+)['"]\s*\)/g;
 
+const isTestFile = (f) =>
+  f.includes('__tests__') || /\.(test|spec)\.[tj]sx?$/.test(f);
+
 const files = walk(SRC);
 const importGraph = new Map(); // file -> Set<resolvedFile>
 const errors = [];
@@ -80,16 +83,20 @@ for (const file of files) {
   importGraph.set(file, targets);
 }
 
-// Orphan detection
+// Orphan detection — only PRODUCTION files count as referents: a module
+// imported exclusively by its own test is still dead production code.
 const referenced = new Set();
-for (const targets of importGraph.values()) for (const t of targets) referenced.add(t);
+for (const [file, targets] of importGraph) {
+  if (isTestFile(file)) continue;
+  for (const t of targets) referenced.add(t);
+}
 for (const ep of ENTRYPOINTS) referenced.add(join(ROOT, ep));
 
 const orphans = files.filter(f => {
   const rel = f.replace(ROOT + '/', '');
   if (ENTRYPOINTS.has(rel)) return false;
   if (TYPES_GLOB.test(rel)) return false; // ambient types
-  if (rel.includes('__tests__') || /\.(test|spec)\.[tj]sx?$/.test(rel)) return false;
+  if (isTestFile(rel)) return false;
   return !referenced.has(f);
 });
 

@@ -6,9 +6,8 @@ import { inferCameraRuntimeHints } from '@/lib/device/cameraDeviceProfile';
 import { createDefaultVitalSignsResult } from '@/lib/vitals/defaultVitalSignsResult';
 import type { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import {
-  setActiveProfile as setAuditProfile,
-} from '@/lib/sanity/sanityAuditLog';
+import { DSP_CONSTANTS } from '@/config/signalProcessing';
+import { startSession as startAuditSession } from '@/lib/sanity/sanityAuditLog';
 import {
   MeasurementWindowValidator,
   type ValidationFrame,
@@ -16,6 +15,9 @@ import {
 } from '@/lib/acquisition/MeasurementWindowValidator';
 import { healthBridge } from '@/lib/capacitor/healthBridge';
 import type { CameraViewHandle } from '@/components/CameraView';
+
+/** Contador monótono local: fallback determinista cuando crypto.randomUUID no existe. */
+let auditSessionFallbackSeq = 0;
 
 interface UseMeasurementSessionInput {
   cameraRef: React.RefObject<CameraViewHandle>;
@@ -37,15 +39,13 @@ interface UseMeasurementSessionInput {
       underexposureRatio: number;
       totalFrames: number;
     };
+    windowSeconds?: number;
   }) => Promise<boolean>;
-  setCameraRuntimeHints: (diag: Record<string, unknown> | null | undefined) => void;
   /** Reset duro del procesador PPG (fin/inicio de sesión y cambio de cámara). */
   resetProcessor: () => void;
   syncCameraHints: () => void;
   resetFingerContactSession: () => void;
   resetSessionRefs: () => void;
-  setShowResults: (v: boolean) => void;
-  setMeasurementSummary: (v: { totalBeats: number; arrhythmiaBeats: number; normalPercent: number } | null) => void;
   setHeartbeatSignal: (v: number) => void;
   setBeatMarker: (v: number) => void;
   setRRIntervals: (v: number[]) => void;
@@ -61,7 +61,6 @@ interface UseMeasurementSessionInput {
   isMonitoringRef: React.MutableRefObject<boolean>;
   lastSignal: import('@/types/signal').ProcessedSignal | null;
   sanityProfileId: string;
-  getBackpressureConfig: () => import('@/lib/perf/backpressureConfig').BackpressureConfig;
   setHeartBeatRuntimeHints: (hints: import('@/lib/device/cameraDeviceProfile').CameraRuntimeHints) => void;
 }
 
@@ -73,12 +72,10 @@ export function useMeasurementSession({
   resetVitalSigns, fullResetVitalSigns,
   resetHeartBeat,
   saveMeasurement,
-  setCameraRuntimeHints: _setCameraRuntimeHints,
   resetProcessor,
   syncCameraHints,
   resetFingerContactSession,
   resetSessionRefs,
-  setShowResults: _setShowResults, setMeasurementSummary: _setMeasurementSummary,
   setHeartbeatSignal, setBeatMarker, setRRIntervals,
   setVitalSigns,
   vitalSignsRef,
@@ -89,7 +86,6 @@ export function useMeasurementSession({
   isMonitoringRef,
   lastSignal,
   sanityProfileId,
-  getBackpressureConfig: _getBackpressureConfig,
   setHeartBeatRuntimeHints,
 }: UseMeasurementSessionInput) {
   const [isMonitoring, setIsMonitoring] = useState(false);
@@ -196,10 +192,10 @@ export function useMeasurementSession({
     const frame: ValidationFrame = {
       sqi: lastSignal.quality || 0,
       pi: lastSignal.perfusionIndex || 0,
-      fps: sqm?.fpsEffective ?? 30,
+      fps: sqm?.fpsEffective ?? DSP_CONSTANTS.DEFAULT_SAMPLE_RATE,
       jitter: sqm?.timestampJitterMs ?? 0,
       motion: sqm?.motionScore ?? (lastSignal.motionArtifact ? 1 : 0),
-      isClipping: (sqm?.saturationRatio ?? 0) > 0.15,
+      isClipping: (sqm?.saturationRatio ?? 0) > VITAL_THRESHOLDS.QUALITY.CLIPPING_SATURATION_RATIO,
       hasContact,
     };
     validationBufferRef.current.push(frame);
@@ -260,7 +256,9 @@ export function useMeasurementSession({
       setElapsedTime(prev => prev + 1);
     }, 1000);
 
-    setAuditProfile(sanityProfileId);
+    const auditSessionId =
+      globalThis.crypto?.randomUUID?.() ?? `s-${Date.now().toString(36)}-${auditSessionFallbackSeq++}`;
+    startAuditSession(auditSessionId, sanityProfileId);
 
     startCalibration();
     resetFingerContactSession();
@@ -357,6 +355,7 @@ export function useMeasurementSession({
         vitalSigns: dataToSave,
         signalQuality: sqForSave,
         artifactMetrics,
+        windowSeconds: elapsedTime,
       });
       healthBridge.checkAvailability().then(avail => {
         if (avail) healthBridge.saveVitals(dataToSave);

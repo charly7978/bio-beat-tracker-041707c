@@ -5,7 +5,7 @@
  */
 import { clamp } from '../utils/math';
 import { triggerHeartbeatHaptic } from '../utils/haptics';
-import { robustBounds, skewness } from '../utils/stats';
+import { median, robustBounds, skewness } from '../utils/stats';
 import { PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
@@ -454,8 +454,7 @@ export class HeartBeatProcessor {
     const rr = this.rrIntervals;
     let medRr = 0;
     if (rr.length >= 3) {
-      const sorted = [...rr].sort((a, b) => a - b);
-      medRr = sorted[Math.floor(sorted.length / 2)] ?? 0;
+      medRr = median(rr);
     } else if (this.cachedPeriodicity.bpm > 0 && this.cachedPeriodicity.score >= 0.3) {
       medRr = 60000 / this.cachedPeriodicity.bpm;
     }
@@ -521,9 +520,12 @@ export class HeartBeatProcessor {
       if (d >= 10 && d <= 100) intervals.push(d);
     }
     if (intervals.length < 6) return this.cachedSampleRate || DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
-    const sorted = [...intervals].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)] ?? 33;
-    this.cachedSampleRate = clamp(1000 / median, 20, 40);
+    const medIntervalMs = median(intervals) || (1000 / DSP_CONSTANTS.DEFAULT_SAMPLE_RATE);
+    this.cachedSampleRate = clamp(
+      1000 / medIntervalMs,
+      DSP_CONSTANTS.SAMPLE_RATE_MIN,
+      DSP_CONSTANTS.SAMPLE_RATE_MAX,
+    );
     return this.cachedSampleRate;
   }
 
@@ -540,8 +542,9 @@ export class HeartBeatProcessor {
 
     if (energy < 400) return { bpm: 0, score: 0 };
 
-    const minLag = Math.max(5, Math.round((sampleRate * 60) / 200));
-    const maxLag = Math.min(centered.length - 8, Math.round((sampleRate * 60) / 38));
+    // Ventana de lags alineada al rango cardíaco canónico (30–220 BPM)
+    const minLag = Math.max(5, Math.round((sampleRate * 60) / VITAL_THRESHOLDS.HR.MAX));
+    const maxLag = Math.min(centered.length - 8, Math.round((sampleRate * 60) / VITAL_THRESHOLDS.HR.MIN));
     const { lag, score } = autocorrDominantLag(centered, minLag, maxLag);
 
     if (lag === 0 || score < 0.18) return { bpm: 0, score: Math.max(0, score) };
