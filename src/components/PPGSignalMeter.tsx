@@ -133,6 +133,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   diagnostics,
 }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const animationRef = useRef<number | null>(null);
   const isRunningRef = useRef(false);
@@ -300,7 +301,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const container = containerRef.current;
     if (!canvas || !container) return;
     const rect = container.getBoundingClientRect();
-    const maxDpr = isNative() ? 1.5 : 2.5;
+    const maxDpr = isNative() ? 1.5 : 2.0;
     const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
     const cssW = Math.max(320, Math.floor(rect.width));
     const cssH = Math.max(480, Math.floor(rect.height));
@@ -310,9 +311,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     canvas.style.height = `${cssH}px`;
     const ctx = canvas.getContext('2d', { alpha: false });
     if (ctx) {
+      ctxRef.current = ctx;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
+      ctx.imageSmoothingQuality = 'medium';
     }
 
     const header = { x: 0, y: 0, w: cssW, h: 40 };
@@ -369,10 +371,14 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         animationRef.current = requestAnimationFrame(render);
         return;
       }
-      const ctx = canvas.getContext('2d', { alpha: false });
+      let ctx = ctxRef.current;
       if (!ctx) {
-        animationRef.current = requestAnimationFrame(render);
-        return;
+        ctx = canvas.getContext('2d', { alpha: false });
+        if (!ctx) {
+          animationRef.current = requestAnimationFrame(render);
+          return;
+        }
+        ctxRef.current = ctx;
       }
       const now = Date.now();
       if (now - lastRenderTime < frameTime) {

@@ -834,4 +834,4 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
 CameraView.displayName = "CameraView";
 
-export default CameraView;
+export default React.memo(CameraView);

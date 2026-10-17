@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { Heart, AlertTriangle, Activity, X, Brain, Loader2, Sliders } from "lucide-react";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
 import { CalibrationManager, CALIBRATION_DEVICE_ID } from "@/modules/vital-signs/CalibrationManager";
@@ -15,7 +15,6 @@ import { useFrameLoop } from "@/hooks/useFrameLoop";
 import { useSignalRouter } from "@/hooks/useSignalRouter";
 import { useMeasurementSession } from "@/hooks/useMeasurementSession";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
-import { WebrtcCallWidget } from "@/components/WebrtcCallWidget";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import type { ContactState } from "@/types/signal";
@@ -25,12 +24,16 @@ import { createLogger } from "@/utils/logger";
 import { VITAL_THRESHOLDS, CALIBRATION_CONFIG } from "@/config/vitalThresholds";
 import { STORAGE_KEYS } from "@/lib/storage/localEncryptedStorage";
 import { DSP_CONSTANTS } from "@/config/signalProcessing";
+import type { ActiveUser, HistoricalMeasurement } from "@/components/SettingsPanel";
 import { DEFAULT_USER_PROFILE } from "@/config/ui";
 import { SplashScreen } from "@/components/SplashScreen";
-import { MeasurementSummaryModal } from "@/components/measurement/MeasurementSummaryModal";
-import { SettingsPanel, type ActiveUser, type HistoricalMeasurement } from "@/components/SettingsPanel";
+
 
 const log = createLogger('Index');
+
+const WebrtcCallWidget = lazy(() => import("@/components/WebrtcCallWidget").then(m => ({ default: m.WebrtcCallWidget })));
+const SettingsPanel = lazy(() => import("@/components/SettingsPanel").then(m => ({ default: m.SettingsPanel })));
+const MeasurementSummaryModal = lazy(() => import("@/components/measurement/MeasurementSummaryModal").then(m => ({ default: m.MeasurementSummaryModal })));
 
 const Index = () => {
   // Canvas sincrónico (render-phase, fuera de effects)
@@ -713,17 +716,19 @@ const Index = () => {
     };
   }, []);
 
-  const handleToggleMonitoring = () => {
+  const handleToggleMonitoring = useCallback(() => {
     if (session.isMonitoring) {
       session.finalizeMeasurement();
     } else {
       session.startMonitoring();
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.isMonitoring, session.finalizeMeasurement, session.startMonitoring]);
 
-  const handleReset = () => {
+  const handleReset = useCallback(() => {
     session.handleReset();
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.handleReset]);
 
   const pressureValue = useMemo(() => ({
     ...(router.vitalSigns.bloodPressure.value ?? { systolic: 0, diastolic: 0 }),
@@ -746,6 +751,11 @@ const Index = () => {
   ), [measurementMode, lastSignal?.faceDetected, lastSignal?.fingerDetected, lastSignal?.contactState]);
 
   const diagnosticsValue = useMemo(() => router.currentDiagnostics, [router.currentDiagnostics]);
+
+  const getVideoElement = useCallback(
+    () => cameraRef.current?.getVideoElement() ?? canvasRef.current ?? null,
+    [],
+  );
 
   return (
     <div className="fixed inset-0 flex flex-col bg-black" style={{ 
@@ -953,7 +963,7 @@ const Index = () => {
               bpStatus={router.vitalSigns.bloodPressure.status}
               contactState={contactStateValue}
               acquisitionStatus={acquisitionStatusLabel}
-              getVideoElement={() => cameraRef.current?.getVideoElement() ?? canvasRef.current ?? null}
+              getVideoElement={getVideoElement}
               encryptionReady={encryptionReady}
               healthAvail={healthAvail}
               riskResult={riskResult}
@@ -1053,8 +1063,9 @@ const Index = () => {
           ACEPTAR queda inclickeable ("pantalla negra"). Aquí, como hijo del root,
           z-[110] gana sin competir. */}
       {!disclaimerAccepted && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/95 backdrop-blur-md animate-fade-in p-4 overflow-y-auto">
-          <div className="bg-black border border-zinc-900/80 rounded-2xl max-w-sm w-full shadow-2xl p-5 space-y-5 animate-in zoom-in-95 duration-300 max-h-[90vh] flex flex-col">
+        <Suspense fallback={null}>
+          <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/95 backdrop-blur-md animate-fade-in p-4 overflow-y-auto">
+            <div className="bg-black border border-zinc-900/80 rounded-2xl max-w-sm w-full shadow-2xl p-5 space-y-5 animate-in zoom-in-95 duration-300 max-h-[90vh] flex flex-col">
             <div className="text-center space-y-2">
               <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto">
                 <AlertTriangle className="w-6 h-6 text-red-500" />
@@ -1098,8 +1109,9 @@ const Index = () => {
               </a>
               . Producto de bienestar: no es dispositivo médico.
             </p>
+            </div>
           </div>
-        </div>
+        </Suspense>
       )}
     </div>
   );

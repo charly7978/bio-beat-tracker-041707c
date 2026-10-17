@@ -166,6 +166,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const lastHrPushRef = useRef(0);
   const lastVitalsPushRef = useRef(0);
   const lastSignalPushRef = useRef(0);
+  const lastHeartbeatPushRef = useRef(0);
   const lastRrPushRef = useRef(0);
   const lastDiagPushRef = useRef(0);
   const beatMarkerTimerRef = useRef<number | null>(null);
@@ -481,7 +482,10 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     if (ppgMeterRef?.current) {
       ppgMeterRef.current.pushSignal(displaySignal, Date.now());
     }
-    setHeartbeatSignal(displaySignal);
+    if (nowT - lastHeartbeatPushRef.current >= 100) {
+      lastHeartbeatPushRef.current = nowT;
+      setHeartbeatSignal(displaySignal);
+    }
 
     if (hasUsableContact && nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
       lastHrPushRef.current = nowT;
