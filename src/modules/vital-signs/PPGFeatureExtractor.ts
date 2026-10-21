@@ -131,7 +131,7 @@ export class PPGFeatureExtractor {
 
       // 3. Find dicrotic notch and diastolic peak
       const { notch, diastolicPeak } = this.findDicroticFeatures(
-        buffer, vpg, systolicPeak, nextOnset
+        buffer, systolicPeak, nextOnset
       );
 
       cycles.push({
@@ -354,7 +354,7 @@ export class PPGFeatureExtractor {
   }
 
   private static findDicroticFeatures(
-    buffer: number[], vpg: number[], systolicPeak: number, nextOnset: number
+    buffer: number[], systolicPeak: number, nextOnset: number
   ): { notch: number; diastolicPeak: number } {
     // Search for dicrotic notch: local minimum after systolic peak
     const searchStart = systolicPeak + 2;

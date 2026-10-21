@@ -78,7 +78,6 @@ export class GymFaceTracker {
   private calibratedCr = 150; // Prior poblacional para centroide Cr
   private isSkinCalibrated = false;
   private ambientLuxEma = 128;
-  private currentIllumination: GymIlluminationStatus = 'OPTIMAL';
 
   /**
    * Resetea el estado del rastreador al cambiar de sesión o de cámara.
@@ -100,7 +99,6 @@ export class GymFaceTracker {
     this.calibratedCr = 150;
     this.isSkinCalibrated = false;
     this.ambientLuxEma = 128;
-    this.currentIllumination = 'OPTIMAL';
   }
 
   /**
@@ -166,7 +164,6 @@ export class GymFaceTracker {
     } else if (ambientStdY > 60) {
       illuminationStatus = 'HIGH_CONTRAST';
     }
-    this.currentIllumination = illuminationStatus;
 
     // Adaptación dinámica de rango de luminancia permitida
     const yMin = illuminationStatus === 'LOW_LIGHT'

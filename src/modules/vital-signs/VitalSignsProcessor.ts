@@ -88,7 +88,6 @@ export class VitalSignsProcessor {
   private readonly HISTORY_SIZE = VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES;
   private signalHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
   private morphologyHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
-  private placementMode: FingerPlacementMode = 'hybrid';
   /** Buffer más largo para modulación respiratoria (~10 Hz efectivos desde Index). */
   private readonly RESPIRATION_BUFFER = RESPIRATION_DEFAULTS.bufferSamples;
   private respirationHistory: RingF32 = new RingF32(this.RESPIRATION_BUFFER);
@@ -100,8 +99,6 @@ export class VitalSignsProcessor {
 
   // Gating de estabilidad (Consistencia)
   private stableFramesCount: number = 0;
-  private readonly STABILITY_SPO2_FRAMES = 45;  // ~1.5s para SpO2 (actualización rápida)
-  private readonly STABILITY_BP_FRAMES = VITAL_THRESHOLDS.BP.STABILITY_FRAMES_HIGH;
   private lastCoherentSpO2: number = 0;
   /** Frames seguidos con SpO2 fuera de banda de coherencia → adapta cambios reales sostenidos. */
   private spo2IncoherentStreak = 0;
@@ -113,7 +110,6 @@ export class VitalSignsProcessor {
 
   // Contador de pulsos válidos
   private validPulseCount: number = 0;
-  private readonly MIN_PULSES_REQUIRED = 2;
   private lastBPM: number = 0;
   /** Últimos intervalos RR (ms) recibidos — alimentan la modalidad RIFV de respiración. */
   private lastRrIntervals: number[] = [];
@@ -193,7 +189,6 @@ export class VitalSignsProcessor {
   }
 
   setPlacementMode(mode: FingerPlacementMode): void {
-    this.placementMode = mode;
     this.bloodPressureProcessor.setPlacementMode(mode);
   }
 
@@ -311,7 +306,8 @@ export class VitalSignsProcessor {
     // Validar pulso real (BP y arritmias; SpO2 usa ratio RGB y no depende de RR)
     this.validateRealPulse(rrData);
 
-    this.calculateVitalSigns(signalValue, effectiveSqi, currentBPM, rrData);
+    this.calculateVitalSigns(effectiveSqi, currentBPM, 
+rrData);
 
     return this.getFormattedResult();
   }
@@ -612,7 +608,6 @@ export class VitalSignsProcessor {
    * para glucosa, hemoglobina y lípidos con modelos basados en literatura
    */
   private calculateVitalSigns(
-    signalValue: number,
     signalQuality: number,
     currentBPM: number,
     rrData?: RRData,

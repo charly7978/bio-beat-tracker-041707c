@@ -33,7 +33,7 @@ export class BloodPressureProcessor {
   private cycleBuffer: CycleFeatures[] = [];
   private lastSBP = 0;
   private lastDBP = 0;
-  private lastConfidence: BPEstimate['confidence'] = 'INSUFFICIENT';
+  // (lastConfidence removed - unused)
   private staleFrames = 0;
   private anthropometric: AnthropometricProfile | null = null;
 
@@ -130,7 +130,6 @@ export class BloodPressureProcessor {
 
     this.lastSBP = sbp;
     this.lastDBP = dbp;
-    this.lastConfidence = confidence;
     this.staleFrames = 0;
 
     return {
@@ -154,7 +153,6 @@ export class BloodPressureProcessor {
     if (this.staleFrames >= STALE_FRAMES_MAX) {
       this.lastSBP = 0;
       this.lastDBP = 0;
-      this.lastConfidence = 'INSUFFICIENT';
       return insufficient;
     }
 
@@ -208,7 +206,6 @@ export class BloodPressureProcessor {
     this.lastSBP = 0;
     this.lastDBP = 0;
     this.cycleBuffer = [];
-    this.lastConfidence = 'INSUFFICIENT';
     this.staleFrames = 0;
   }
 }

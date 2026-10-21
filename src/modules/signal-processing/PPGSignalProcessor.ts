@@ -27,6 +27,8 @@ import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 import {
   computeTemporalVariance,
   hasFingerHemoglobinSignature,
+  computeFingerEnsemble,
+  isFingerPresentByEnsemble,
   calibrateZlo,
   getZlo,
   resetZlo,
@@ -38,7 +40,6 @@ import {
   passesFingerMaintain,
   passesLiveFingerContact,
   passesPulsatileAcquire,
-  updateFingerDetection,
 } from '../../lib/finger/fingerSceneClassifier';
 import {
   classifyFingerPlacement,
@@ -70,7 +71,7 @@ import {
 import { BioTremorAbsorber } from './BioTremorAbsorber';
 import { bandLimitedDominantFreq, computeWindowMoments } from './shared/dsp';
 import { RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
-import { GymFaceTracker, type GymFaceTrackingResult } from '../../lib/gym/gymFaceTracker';
+import { GymFaceTracker } from '../../lib/gym/gymFaceTracker';
 import { GymMotionCancellation } from '../../lib/gym/gymMotionCancellation';
 import { emaBlend } from '../../lib/measurement/adaptiveEma';
 
@@ -116,7 +117,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private measurementMode: MeasurementMode = 'finger';
   private readonly gymFaceTracker = new GymFaceTracker();
   private readonly gymMotionCancellation = new GymMotionCancellation(30);
-  private lastGymFaceResult: GymFaceTrackingResult | null = null;
+  // (lastGymFaceResult removed - unused)
 
   private readonly ACDC_WINDOW = 120;
   private readonly TILE_COLUMNS = 5;
@@ -183,9 +184,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   // LUTs de teselado: cachean Math.floor((px / roiSize) * cols) por píxel
   // del ROI. Se reconstruyen sólo cuando cambia el tamaño del ROI.
-  private tileXLut: Int8Array | null = null;
-  private tileYLut: Int8Array | null = null;
-  private tileLutKey = '';
+  // (tile LUTs removed - unused)
 
   // AC/DC
   private redDC = 0;
@@ -217,7 +216,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private noContactHardStreak = 0;
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private lastInstantFinger = false;
-  private readonly FINGER_CONFIRM_FRAMES = VITAL_THRESHOLDS.FINGER.FINGER_CONFIRM_FRAMES;
+  // (FINGER_CONFIRM_FRAMES unused)
 
   // Ensemble de detección universal: gray buffer + temporal variance + ZLO
   private grayBuffer: Uint8ClampedArray | null = null;
@@ -271,8 +270,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   // Rastreo de centroide para mitigar micromovimientos del dedo
   private trackedCentroid = { x: 0.5, y: 0.5 };
-  private lastLocalCentroidX = 0.5;
-  private lastLocalCentroidY = 0.5;
+  // (lastLocalCentroid removed - unused)
   private centroidMotionEma = 0;
 
   // Acondicionador ACTIVO de señal (denoise edge-preserving + estabilización baseline).
@@ -383,7 +381,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private processGymFrame(imageData: ImageData, timestamp: number): void {
     const endRoi = ppgPerf.start('roi');
     const face = this.gymFaceTracker.processFrame(imageData, timestamp);
-    this.lastGymFaceResult = face;
     endRoi();
 
     this.gymMotionCancellation.pushMotionSample(face.headVelocity);
@@ -679,13 +676,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.updateContactState(roi);
 
     const motionArtifact = this.motionScore > this.MOTION_THRESHOLD;
-    const fingerEnsemble = updateFingerDetection(
-      { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
-      { red: this.smoothedRed, green: this.smoothedGreen, blue: this.smoothedBlue, coverage: this.smoothedCoverage, fingerScore: this.smoothedFingerScore },
-      { coverageRatio: roi.coverageRatio, fingerScore: roi.fingerScore, fingerTileCount: roi.fingerTileCount },
-      this.grayBuffer,
-      computeTemporalVariance(this.grayBuffer),
-    );
+    const fingerEnsemble = {
+      ensemble: computeFingerEnsemble(
+        { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
+        this.grayBuffer,
+        computeTemporalVariance(this.grayBuffer),
+      ),
+      fingerDetected: false,
+    };
+    fingerEnsemble.fingerDetected = isFingerPresentByEnsemble(fingerEnsemble.ensemble);
     this.lastEnsembleScore = fingerEnsemble.ensemble.ensembleScore;
     const liveFinger = this.isLiveFingerFrame(roi, this.lastEnsembleScore);
 
@@ -722,7 +721,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         rawRed: roi.rawRed,
         rawGreen: roi.rawGreen,
         rawBlue: roi.rawBlue,
-        diagnostics: this.buildFingerDiagnostics(roi, motionArtifact, "NO_FINGER"),
+        diagnostics: this.buildFingerDiagnostics(roi,
+          "NO_FINGER"),
       });
       return;
     }
@@ -731,7 +731,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     let rejectionStatus: MeasurementStatus | null = null;
     const r = this.smoothedRed;
     const g = this.smoothedGreen;
-    const _b = this.smoothedBlue;
 
     const underInstant = r < 12 && g < 10 ? 1 : 0;
     this.underexposureEma = this.underexposureEma * 0.92 + underInstant * 0.08;
@@ -764,7 +763,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         rawRed: roi.rawRed,
         rawGreen: roi.rawGreen,
         rawBlue: roi.rawBlue,
-        diagnostics: this.buildFingerDiagnostics(roi, motionArtifact, rejectionStatus, {
+        diagnostics: this.buildFingerDiagnostics(roi, 
+          rejectionStatus, {
           message: `RECHAZADO: ${rejectionStatus}`,
         }),
       });
@@ -819,7 +819,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const morphSource = this.extractMorphologySignal(
       roi.rawRed,
       roi.rawGreen,
-      roi.rawBlue,
       this.placementMode,
     );
 
@@ -978,7 +977,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       rawBlue: roi.rawBlue,
       accelRespiration: this.accelRespEstimate ?? undefined,
       diagnostics: {
-        ...this.buildFingerDiagnostics(roi, motionArtifact, displayStatus, {
+        ...this.buildFingerDiagnostics(roi, 
+          displayStatus, {
           message:
             `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
             `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
@@ -1325,7 +1325,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   private buildFingerDiagnostics(
     roi: ROIMetrics,
-    motionArtifact: boolean,
     status: MeasurementStatus,
     extras?: {
       message?: string;
@@ -1699,7 +1698,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private extractMorphologySignal(
     rawRed: number,
     rawGreen: number,
-    rawBlue: number,
     placement: FingerPlacementMode,
   ): number {
     const gNorm =
@@ -2082,8 +2080,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.signalMotionScore = 0;
     this.lastRawRedForMotion = 0;
     this.trackedCentroid = { x: 0.5, y: 0.5 };
-    this.lastLocalCentroidX = 0.5;
-    this.lastLocalCentroidY = 0.5;
     this.centroidMotionEma = 0;
     for (const b of this.tileGreenBuffers) b.reset();
     this.tilePulsatilityCache.fill(0);
@@ -2092,7 +2088,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     resetActiveStabilizer(this.activeStabilizer);
     this.gymFaceTracker.reset();
     this.gymMotionCancellation.reset();
-    this.lastGymFaceResult = null;
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
     // Resetear contadores y caches para que el WARMUP gate (frameCount < 28)

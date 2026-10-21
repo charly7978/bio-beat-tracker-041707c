@@ -1,10 +1,7 @@
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import {
-  computeFingerEnsemble,
-  isFingerPresentByEnsemble,
   hasFingerHemoglobinSignature,
   type FingerRgbSnapshot,
-  type FingerEnsembleMetrics,
 } from './fingerContactSignature';
 import { passesUnifiedFingerAcquire } from './fingerPlacementProfile';
 
@@ -178,14 +175,5 @@ export function isFingerOnLensScene(
   );
 }
 
-export function updateFingerDetection(
-  raw: FingerRgbSnapshot,
-  smoothed: FingerRgbSnapshot,
-  spatial: FingerRoiSpatial,
-  grayPixels: Uint8ClampedArray | null,
-  temporalVariance: number,
-): { fingerDetected: boolean; ensemble: FingerEnsembleMetrics } {
-  const ensemble = computeFingerEnsemble(raw, grayPixels, temporalVariance);
-  const fingerDetected = isFingerPresentByEnsemble(ensemble);
-  return { fingerDetected, ensemble };
-}
+// (removed dead updateFingerDetection — no callers; ensemble computed in computeFingerEnsemble)
+
