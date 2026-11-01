@@ -22,6 +22,7 @@
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import { clamp } from '@/utils/math';
 import { MLP_WEIGHTS } from './mlpWeights';
+import { getMlpWeightsIntegrity } from './mlpWeightsProvenance';
 
 export interface PwaMedianFeatures {
   bDivA: number;
@@ -99,6 +100,17 @@ function dotProduct(inputs: number[], weightsRow: number[]): number {
   }
   return sum;
 }
+
+/**
+ * Integridad de los pesos del MLP, evaluada una sola vez al cargar el módulo.
+ *
+ * Si los pesos de `mlpWeights.ts` no coinciden con la huella declarada en
+ * `mlpWeightsProvenance.ts` (es decir, fueron sustituidos sin actualizar su
+ * procedencia y sin informe de validación), el MLP deja de contribuir a la
+ * fusión y la estimación pasa a depender únicamente del modelo físico
+ * Windkessel-PDA. La app sigue funcionando; los pesos no verificados no pesan.
+ */
+const MLP_WEIGHTS_INTEGRITY = getMlpWeightsIntegrity();
 
 /**
  * Inferencia Feedforward del Regresor Neuronal Multicapa (MLP)
@@ -280,8 +292,9 @@ export function estimatePhysiologicalBp(
 
   // ── PASO 3: Fusión Adaptativa Bayesiana Ponderada por Calidad ──
   const fq = assessFeatureQualityLocal(f);
-  // Con alta calidad de pulso se pondera fuertemente el MLP; con señal ruidosa prevalece la física Windkessel
-  const wMlp = clamp((fq - 40) / 40, 0.25, 0.85);
+  // Con alta calidad de pulso se pondera fuertemente el MLP; con señal ruidosa prevalece la física Windkessel.
+  // Si los pesos del MLP no están verificados contra su procedencia declarada, su peso es 0.
+  const wMlp = MLP_WEIGHTS_INTEGRITY.verified ? clamp((fq - 40) / 40, 0.25, 0.85) : 0;
 
   let sbp = sbpMlp * wMlp + sbpWindkessel * (1.0 - wMlp);
   let dbp = dbpMlp * wMlp + dbpWindkessel * (1.0 - wMlp);

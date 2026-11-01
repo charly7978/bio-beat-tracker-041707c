@@ -41,6 +41,10 @@ muestra `--` (regla "prioridad a *sin lectura* sobre lectura falsa").
    sobre datos **sintéticos** (fórmulas sobre features aleatorios, seed 42 —
    ver cabecera del archivo). Sin calibración individual el estado es
    `REQUIRES_CALIBRATION`. **No presentar como medición clínica**.
+   La sustitución de esos pesos está **bloqueada por gate automático** hasta que
+   exista un informe de validación conforme (ver punto 4 y
+   `docs/mlp-weights-promotion.md`). Procedencia declarada y huella de los pesos:
+   `src/lib/vitals/mlpWeightsProvenance.ts`.
 4. **Arritmias.** Detección sobre RR reales con confirmación temporal
    (integrador con fugas) y deadband aprendido; sin validación frente a
    Holter/ECG. Informativa, no diagnóstica.
@@ -61,6 +65,28 @@ Para pasar una métrica de "orientativa" a "validada" se requiere:
 4. Actualización de este documento con resultados y fecha; los coeficientes de
    modelo solo se ajustan con evidencia nueva (regla del proyecto: prohibido
    inventar constantes fisiológicas).
+
+### 4.5 Gate de sustitución de pesos del MLP de PA (implementado)
+
+La regla anterior ya no depende de la disciplina del operador:
+
+- `training/train_bp_mlp.py` **no sobrescribe** `src/lib/vitals/mlpWeights.ts`
+  salvo con `--promote --validation-report <json>` que pase el gate
+  (ISO 81060-2:2018 / ANSI-AAMI ES1: |sesgo| ≤ 5 mmHg y DE ≤ 8 mmHg por brazo;
+  ≥ 30 sujetos; ≥ 3 pares válidos por sujeto; dataset `clinical_reference` con
+  dispositivo de referencia certificado; huella del informe = huella de los
+  pesos candidatos; informe no anterior a la generación de los pesos).
+- La huella de los pesos (`fnv1a64:…`, float64 big-endian + FNV-1a 64) se
+  declara en `MLP_WEIGHTS_PROVENANCE`. Si no coincide, `getMlpWeightsIntegrity()`
+  marca los pesos como no verificados y el motor fija `wMlp = 0`: la estimación
+  pasa a depender solo del modelo físico Windkessel-PDA.
+- CI lo verifica en `src/lib/vitals/__tests__/mlpWeightsProvenance.test.ts`
+  (huella, forma, y comportamiento del gate en ambos sentidos).
+- Comprobación cruzada TS ↔ Python: `python training/check_weights_fingerprint.py`.
+
+**Estado hoy:** no existe informe de validación en `training/validation-reports/`,
+por tanto los pesos siguen siendo los mismos y su estado sigue siendo
+`REQUIRES_CALIBRATION`.
 
 ## 5. Disclaimer obligatorio en UI
 
