@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { readFileSync } from "node:fs";
 import { componentTagger } from "lovable-tagger";
+import { mcpPlugin } from "@lovable.dev/mcp-js/stacks/supabase/vite";
 
 // Versión de la app inyectada en tiempo de build (consumida vía __APP_VERSION__).
 const APP_VERSION = JSON.stringify(
@@ -20,6 +21,7 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     react(),
+    mcpPlugin(),
     mode === 'development' &&
     componentTagger(),
   ].filter(Boolean),
