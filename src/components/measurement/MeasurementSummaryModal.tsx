@@ -119,7 +119,23 @@ export function MeasurementSummaryModal({
                 <div className="text-white text-lg font-bold font-mono">
                   {Math.round(vitalSigns.bloodPressure.value.systolic)}/{Math.round(vitalSigns.bloodPressure.value.diastolic)}
                   <span className="text-xs text-zinc-400 ml-1 font-sans">mmHg</span>
+                  {(() => {
+                    const unc = vitalSigns.bloodPressure.diagnostics?.uncertainty as { sbpP5?: number; sbpP95?: number } | undefined;
+                    return unc && typeof unc.sbpP5 === 'number' && typeof unc.sbpP95 === 'number' ? (
+                      <span className="text-xs text-zinc-400 ml-2 font-mono">
+                        [{Math.round(unc.sbpP5)}–{Math.round(unc.sbpP95)}]
+                      </span>
+                    ) : null;
+                  })()}
                 </div>
+                {(() => {
+                  const nx = vitalSigns.bloodPressure.diagnostics?.nexus as { tauMs?: number; coherenceLevel?: string } | undefined;
+                  return nx && typeof nx.tauMs === 'number' ? (
+                    <div className="text-[9px] font-mono text-zinc-500 mt-0.5">
+                      τ {Math.round(nx.tauMs)} ms · {nx.coherenceLevel}
+                    </div>
+                  ) : null;
+                })()}
               </div>
             </div>
           )}

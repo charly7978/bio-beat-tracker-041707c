@@ -1,7 +1,12 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { VitalSignsProcessor, VitalSignsResult, RGBData } from '../modules/vital-signs/VitalSignsProcessor';
+import type { BPNexusMeta } from '../modules/vital-signs/BloodPressureProcessor';
+import type { NexusBpObservation } from '../lib/vitals/nexusFusionCore';
 import { createDefaultVitalSignsResult } from '../lib/vitals/defaultVitalSignsResult';
 import type { SignalQualityMetrics } from '../types/measurements';
+
+/** Metadatos de coherencia que acompañan a una observación cross-site. */
+export type NexusObservationMeta = Omit<BPNexusMeta, 'sourcesUsed'>;
 
 /**
  * HOOK DE SIGNOS VITALES - OPTIMIZADO
@@ -45,6 +50,18 @@ export const useVitalSignsProcessor = () => {
   const setPlacementMode = useCallback((mode: import('../types/signal').FingerPlacementMode) => {
     processorRef.current?.setPlacementMode(mode);
   }, []);
+
+  /**
+   * Puente NEXUS: publica la observación de tránsito cara→dedo (τ) para que la
+   * próxima estimación de PA la use como evidencia independiente. `null` limpia
+   * el pendiente (p. ej. al detener la captura proximal).
+   */
+  const setNexusCrossSiteObservation = useCallback(
+    (observation: NexusBpObservation | null, meta: NexusObservationMeta | null) => {
+      processorRef.current?.setNexusCrossSiteObservation(observation, meta);
+    },
+    [],
+  );
   
   const processSignal = useCallback((
     value: number, 
@@ -120,6 +137,7 @@ export const useVitalSignsProcessor = () => {
   return {
     processSignal,
     setPlacementMode,
+    setNexusCrossSiteObservation,
     setRGBData,
     reset,
     fullReset,

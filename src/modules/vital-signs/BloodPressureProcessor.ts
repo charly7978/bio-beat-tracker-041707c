@@ -18,6 +18,7 @@ import {
 } from '@/lib/vitals/nexusFusionCore';
 import type { NexusCoherenceLevel } from '@/lib/vitals/nexusCoherence';
 import { CalibrationManager } from './CalibrationManager';
+import { fitHydrostaticSlope, hydrostaticSlopeToK } from '@/lib/vitals/hydrostaticCalibration';
 
 export interface BPUncertainty {
   sbpP5: number;
@@ -64,6 +65,8 @@ export class BloodPressureProcessor {
   private readonly fusionCore = new NexusFusionCore();
   private pendingCrossSite: NexusBpObservation | null = null;
   private pendingCrossSiteSubMeta: Omit<BPNexusMeta, 'sourcesUsed'> | null = null;
+  /** TTL de memoria de fusión por sesión (ms): pasado este margen se reinicia. */
+  private readonly FUSION_TTL_MS = 120000;
 
   setPlacementMode(mode: FingerPlacementMode): void {
     this.placementMode = mode;
@@ -173,8 +176,18 @@ export class BloodPressureProcessor {
     );
 
     const coherent = enforceHemodynamicCoherence(raw.systolic, raw.diastolic);
-    const sbp = coherent.sbp;
-    const dbp = coherent.dbp;
+    let sbp = coherent.sbp;
+    let dbp = coherent.dbp;
+
+    // Offset personal aprendido sobre MAP (pares de calibración NEXUS).
+    const personalMapOffset = CalibrationManager.getInstance().getPersonalMapOffset();
+    if (personalMapOffset) {
+      const pp0 = sbp - dbp;
+      const map0 = dbp + pp0 / 3;
+      const mapAdj = map0 + personalMapOffset.offsetMmHg;
+      sbp = mapAdj + (2 / 3) * pp0;
+      dbp = mapAdj - (1 / 3) * pp0;
+    }
 
     if (!isPhysiologicalBp(sbp, dbp)) {
       return this.staleOrInsufficient(insufficient);
@@ -195,7 +208,7 @@ export class BloodPressureProcessor {
       const subMeta = this.pendingCrossSiteSubMeta;
       this.pendingCrossSite = null;
       this.pendingCrossSiteSubMeta = null;
-      this.fusionCore.reset();
+      this.fusionCore.resetIfStale(cross.timestampMs, this.FUSION_TTL_MS);
       this.fusionCore.pushObservation(
         pwaObservationFromEstimate(dbp + (sbp - dbp) / 3, sbp - dbp, fq, cross.timestampMs),
       );
@@ -312,6 +325,13 @@ export class BloodPressureProcessor {
     if (f.harmonicDistortion > 0.05 && f.harmonicDistortion < 1) score += 4;
     if (typeof f.reflectionIndex === 'number' && f.reflectionIndex > 5 && f.reflectionIndex < 95) score += 4;
     return Math.min(100, score);
+  }
+
+  hydrostaticCalibration(segments: { heightCm: number; tauMs: number }[]): ReturnType<typeof fitHydrostaticSlope> {
+    return fitHydrostaticSlope(segments);
+  }
+  hydrostaticK(slopeMsPerMmHg: number, tauRefMs: number): number | null {
+    return hydrostaticSlopeToK(slopeMsPerMmHg, tauRefMs);
   }
 
   reset(): void {

@@ -12,7 +12,7 @@ import { toast } from "@/hooks/use-toast";
 import { healthBridge } from "@/lib/capacitor/healthBridge";
 import { useHealthAnalysis } from "@/hooks/useHealthAnalysis";
 import { useFrameLoop } from "@/hooks/useFrameLoop";
-import { useSignalRouter } from "@/hooks/useSignalRouter";
+import { useSignalRouter, type NexusObservationPayload } from "@/hooks/useSignalRouter";
 import { useMeasurementSession } from "@/hooks/useMeasurementSession";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
@@ -135,6 +135,26 @@ const Index = () => {
     };
   }, [nexus.pushDistalSignal]);
 
+  // Puente τ → PA: el motor de sesión publica la observación de tránsito
+  // (solo en ACTIVE_NEXUS) y el router la inyecta en el callback caliente,
+  // donde el procesador de PA la consume en la próxima estimación. La
+  // coherencia viaja como metadato para que la fusión module la confianza.
+  const nexusObservationRef = useRef<NexusObservationPayload | null>(null);
+  useEffect(() => {
+    const snap = nexus.snapshot;
+    const observation = snap.observation;
+    const coherenceLevel = snap.coherenceLevel;
+    const coherenceScore = snap.coherenceScore;
+    if (!observation || coherenceLevel === null || coherenceScore === null) {
+      nexusObservationRef.current = null;
+      return;
+    }
+    nexusObservationRef.current = {
+      observation,
+      meta: { coherenceLevel, coherenceScore, tauMs: snap.tauMs },
+    };
+  }, [nexus.snapshot]);
+
   // Signal routing (encapsula todo el routing de señal, throttling, latch, sanity)
   const router = useSignalRouter({
     processHeartBeat: processHeartBeatApi,
@@ -142,6 +162,7 @@ const Index = () => {
     cameraHintsRef,
     ppgMeterRef,
     realtimeExtraRef: nexusFeedRef,
+    nexusObservationRef,
   });
 
 

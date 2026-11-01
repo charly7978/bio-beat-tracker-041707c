@@ -41,7 +41,7 @@ describe('VitalSignsProcessor', () => {
       { redAC: 0.5, redDC: 5, greenAC: 0.3, greenDC: 3 },
       0,
     );
-    expect(result).toBe(0);
+    expect(result.value).toBe(0);
   });
 
   it('procesa señales válidas y actualiza el estado de las mediciones', () => {

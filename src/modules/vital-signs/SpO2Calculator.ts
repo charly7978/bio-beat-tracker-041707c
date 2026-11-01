@@ -6,6 +6,7 @@ import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { CalibrationManager } from './CalibrationManager';
 import { computeTripleRatioFeatures, type TripleRatioFeatures } from '@/lib/vitals/spo2TripleRatio';
 import { tmdsToRatios, type TmdsDifferential } from '@/lib/vitals/spo2Tmds';
+import { computeTgdDifferential, tgdToRatios, type TgdExposureSettings, type TgdLevel, type TgdDifferential } from '@/lib/vitals/spo2TgdDifferential';
 import { predictSpo2, type Spo2PersonalModel, type Spo2Prediction } from '@/lib/vitals/spo2PersonalRegressor';
 import { autocorrAtLag } from '../signal-processing/shared/dsp';
 import { fastICA } from '../../utils/ica';
@@ -19,6 +20,13 @@ export interface RGBData {
   greenDC: number;
   blueAC?: number;
   blueDC?: number;
+}
+
+export interface SpO2Result {
+  value: number;
+  p5: number;
+  p95: number;
+  source: 'camera' | 'personal_regressor' | 'none';
 }
 
 /**
@@ -50,6 +58,8 @@ function cameraLinearizeAC(ac: number, dc: number): number {
  */
 export class SpO2Calculator {
   private rValueHistory: number[] = [];
+  private lastResult: SpO2Result | null = null;
+  getLastResult(): SpO2Result | null { return this.lastResult; }
   private lastTripleRatioFeatures: TripleRatioFeatures | null = null;
   private personalModel: Spo2PersonalModel | null = null;
   private readonly R_HISTORY_SAMPLES = VITAL_THRESHOLDS.SPO2.R_HISTORY_SAMPLES;
@@ -61,11 +71,11 @@ export class SpO2Calculator {
   private readonly ICA_WINDOW_SIZE = 64;
 
   /** Calcula SpO2 a partir de los canales RGB. Retorna 0 si no hay señal válida. */
-  calculate(raw: RGBData, frameCount: number, sampleRate = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE, currentHr?: number): number {
+  calculate(raw: RGBData, frameCount: number, sampleRate = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE, currentHr?: number): SpO2Result {
     const spoCfg = VITAL_THRESHOLDS.SPO2;
     let { redAC, redDC, greenAC, greenDC, blueAC, blueDC } = raw;
 
-    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC) return 0;
+    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC) return { value: 0, p5: 0, p95: 0, source: 'none' };
 
     // ── Corrección inversa del tone mapping sigmoidal ──
     const rawRedDC = redDC;
@@ -94,7 +104,7 @@ export class SpO2Calculator {
     }
 
     // Requerimos al menos 10 muestras para estimar amplitudes AC estables por RMS
-    if (this.redAcHistory.length < 10) return 0;
+    if (this.redAcHistory.length < 10) return { value: 0, p5: 0, p95: 0, source: 'none' };
 
     // Calcular amplitudes AC efectivas mediante RMS de la ventana de componentes AC
     let sumSqRed = 0;
@@ -118,7 +128,7 @@ export class SpO2Calculator {
       log.info(`[SpO2 Debug] ACr_rms:${rmsRed.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg_rms:${rmsGreen.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}% | ACb_rms:${rmsBlue.toFixed(3)} DCb:${typeof blueDC === 'number' ? blueDC.toFixed(0) : 'N/A'} PIb:${piBlue.toFixed(3)}%`);
     }
 
-    if (piRed < spoCfg.MIN_PI_PERCENT) return 0;
+    if (piRed < spoCfg.MIN_PI_PERCENT) return { value: 0, p5: 0, p95: 0, source: 'none' };
 
     // Valores R-value base usando las amplitudes RMS de cada canal
     const ratioRed = rmsRed / redDC;
@@ -136,7 +146,7 @@ export class SpO2Calculator {
       this.lastTripleRatioFeatures = null;
     }
 
-    if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return 0;
+    if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return { value: 0, p5: 0, p95: 0, source: 'none' };
 
     const R_rg = ratioRed / ratioGreen;
     const R_bg = ratioGreen > 0 ? ratioBlue / ratioGreen : 0;
@@ -300,7 +310,7 @@ export class SpO2Calculator {
           if (frameCount % 15 === 0) log.warn(`[SpO2] Divergencia multi-par alta: maxRelDev=${maxRelDev.toFixed(3)}`);
           // Si divergencia muy alta, ser conservador
           if (maxRelDev > 0.35) {
-            return 0;
+            return { value: 0, p5: 0, p95: 0, source: 'none' };
           }
           // Moderada: sesgar hacia RG si disponible
           currentR = usedR_rg * 0.7 + pairMed * 0.3;
@@ -319,7 +329,7 @@ export class SpO2Calculator {
 
     if (currentR < spoCfg.R_VALUE_MIN || currentR > spoCfg.R_VALUE_MAX) {
       if (frameCount % 15 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
-      return 0;
+      return { value: 0, p5: 0, p95: 0, source: 'none' };
     }
 
     this.rValueHistory.push(currentR);
@@ -327,7 +337,7 @@ export class SpO2Calculator {
       this.rValueHistory.shift();
     }
 
-    if (this.rValueHistory.length < 3) return 0;
+    if (this.rValueHistory.length < 3) return { value: 0, p5: 0, p95: 0, source: 'none' };
 
     const medianR = median(this.rValueHistory);
 
@@ -362,11 +372,35 @@ export class SpO2Calculator {
       spo2 = Math.min(spoCfg.DISPLAY_CAP, spo2 + spo2Offset);
     }
 
-    if (frameCount % 30 === 0) {
-      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}% (n=${this.rValueHistory.length})`);
+    // Personal regressor (F4): si hay modelo vigente y features triple-ratio, usarlo.
+    let resultSpo2 = Number.isFinite(spo2) ? spo2 : 0;
+    let p5 = Math.max(0, resultSpo2 - 3);
+    let p95 = Math.min(100, resultSpo2 + 3);
+    let source: SpO2Result['source'] = resultSpo2 > 0 ? 'camera' : 'none';
+
+    if (resultSpo2 > 0 && this.personalModel && this.lastTripleRatioFeatures?.valid) {
+      const f = this.lastTripleRatioFeatures!;
+      const features = [f.ratioRed, f.ratioGreen, f.ratioBlue, f.rg, f.rb, f.bg];
+      const pred = predictSpo2(this.personalModel!, features);
+      if (pred) {
+        resultSpo2 = pred.spo2;
+        p5 = pred.p5;
+        p95 = pred.p95;
+        source = 'personal_regressor';
+      }
     }
 
-    return Number.isFinite(spo2) ? spo2 : 0;
+    if (frameCount % 30 === 0) {
+      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${resultSpo2.toFixed(1)}% (n=${this.rValueHistory.length})`);
+    }
+
+    if (resultSpo2 <= 0) {
+      this.lastResult = { value: 0, p5: 0, p95: 0, source: 'none' };
+      return { value: 0, p5: 0, p95: 0, source: 'none' };
+    }
+    const out = { value: resultSpo2, p5, p95, source };
+    this.lastResult = out;
+    return out;
   }
 
   setPersonalModel(model: Spo2PersonalModel | null): void {
@@ -390,10 +424,18 @@ export class SpO2Calculator {
     return this.rValueHistory;
   }
 
+  computeTgdDifferential(on: TgdLevel, off: TgdLevel, settings: TgdExposureSettings): TgdDifferential {
+    return computeTgdDifferential(on, off, settings);
+  }
+  computeTgdRatios(diff: TgdDifferential, ac: { red: number; green: number; blue: number }): { red: number; green: number; blue: number } | null {
+    return tgdToRatios(diff, ac);
+  }
+
   reset(): void {
     this.rValueHistory = [];
     this.redAcHistory = [];
     this.greenAcHistory = [];
     this.blueAcHistory = [];
+    this.lastResult = null;
   }
 }

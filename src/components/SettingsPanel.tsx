@@ -12,6 +12,9 @@ import {
   computeNexusBlandAltman,
   type NexusCalibrationPair,
 } from '@/lib/vitals/nexusCalibrationFit';
+import { fitSpo2PersonalRegressor, SPO2_REGRESSOR_MIN_PAIRS } from '@/lib/vitals/spo2PersonalRegressor';
+import { fitHydrostaticSlope } from '@/lib/vitals/hydrostaticCalibration';
+import type { Spo2RegressorPair } from '@/lib/vitals/spo2PersonalRegressor';
 import { UNCALIBRATED_PTT_MODEL } from '@/lib/vitals/nexusFusionCore';
 import type { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 
@@ -547,6 +550,12 @@ function NexusCalibrationTab({ lastValidResults }: { lastValidResults: VitalSign
   const [pairs, setPairs] = useState<NexusCalibrationPair[]>(() => mgr.getNexusCalibrationPairs());
   const [refSys, setRefSys] = useState('');
   const [refDia, setRefDia] = useState('');
+  const [spo2Ref, setSpo2Ref] = useState('');
+  const [spo2Status, setSpo2Status] = useState<string | null>(null);
+  const [hydroHeight, setHydroHeight] = useState('');
+  const [hydroTau, setHydroTau] = useState('');
+  const [hydroSegments, setHydroSegments] = useState<{ heightCm: number; tauMs: number }[]>([]);
+  const [hydroStatus, setHydroStatus] = useState<string | null>(null);
   const [tauOverride, setTauOverride] = useState('');
   const [status, setStatus] = useState<string | null>(null);
 
@@ -597,6 +606,66 @@ function NexusCalibrationTab({ lastValidResults }: { lastValidResults: VitalSign
     mgr.revokeNexusPttModel();
     setStatus('Modelo NEXUS revocado (prior público restaurado).');
     refresh();
+  };
+
+  const handleRegisterSpo2 = () => {
+    const ref = Number(spo2Ref);
+    const spo2Val = lastValidResults?.spo2?.value;
+    const trf = (lastValidResults?.spo2?.diagnostics as { tripleRatioFeatures?: { ratioRed: number; ratioGreen: number; ratioBlue: number; rg: number; rb: number; bg: number; valid: boolean } | null } | undefined)?.tripleRatioFeatures;
+    if (!Number.isFinite(ref) || ref < 50 || ref > 100) {
+      setSpo2Status('Introduce SpO2 de referencia válido (50–100).');
+      return;
+    }
+    if (typeof spo2Val !== 'number' || spo2Val <= 0) {
+      setSpo2Status('Sin SpO2 de cámara válido (activa medición).');
+      return;
+    }
+    if (!trf || !trf.valid) {
+      setSpo2Status('Sin features triple-ratio válidas (requiere canal azul + exposición).');
+      return;
+    }
+    const features = [trf.ratioRed, trf.ratioGreen, trf.ratioBlue, trf.rg, trf.rb, trf.bg];
+    mgr.addSpo2PersonalPair({ timestampMs: Date.now(), features, referenceSpo2: ref });
+    setSpo2Status(`Par SpO2 registrado. Total: ${mgr.getSpo2PersonalPairs().length}.`);
+    setSpo2Ref('');
+  };
+
+  const handleFitSpo2 = () => {
+    const list = mgr.getSpo2PersonalPairs();
+    const fit = fitSpo2PersonalRegressor(list as Spo2RegressorPair[]);
+    if (fit.status !== 'FIT' || !fit.model) {
+      setSpo2Status(`Ajuste no disponible: ${fit.status} (mínimo ${SPO2_REGRESSOR_MIN_PAIRS} pares).`);
+      return;
+    }
+    mgr.recordSpo2PersonalModel(fit.model);
+    setSpo2Status(`Modelo SpO2 proclamado. r=${fit.r?.toFixed(2)} · residuo=${fit.residualStd?.toFixed(1)}.`);
+  };
+
+  const handleRevokeSpo2 = () => {
+    mgr.revokeSpo2PersonalModel();
+    setSpo2Status('Modelo SpO2 revocado.');
+  };
+
+  const handleAddHydroSegment = () => {
+    const h = Number(hydroHeight);
+    const t = Number(hydroTau);
+    if (!Number.isFinite(h) || !Number.isFinite(t) || t <= 0) {
+      setHydroStatus('Introduce altura (cm) y τ (ms) válidos.');
+      return;
+    }
+    setHydroSegments((prev) => [...prev, { heightCm: h, tauMs: t }]);
+    setHydroHeight('');
+    setHydroTau('');
+    setHydroStatus(`Segmento añadido. Total: ${hydroSegments.length + 1}.`);
+  };
+
+  const handleFitHydro = () => {
+    const res = fitHydrostaticSlope(hydroSegments);
+    if (!res.valid) {
+      setHydroStatus(`Ajuste no válido: ${res.reason}.`);
+      return;
+    }
+    setHydroStatus(`Pendiente ${res.slopeMsPerMmHg.toFixed(3)} ms/mmHg · r=${res.r.toFixed(2)} · n=${res.n}.`);
   };
 
   const activeModel = mgr.getActiveNexusPttModel() ?? UNCALIBRATED_PTT_MODEL;
@@ -720,6 +789,86 @@ function NexusCalibrationTab({ lastValidResults }: { lastValidResults: VitalSign
             })}
           </div>
         )}
+      </div>
+
+      {/* SpO2 personal */}
+      <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3">
+        <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] font-bold uppercase tracking-wider">
+          <Activity className="w-3.5 h-3.5 text-cyan-400" />
+          <span>Calibración SpO2 personal (regresor ridge)</span>
+        </div>
+        <p className="text-[9px] text-zinc-500 leading-relaxed">
+          Requiere ≥{SPO2_REGRESSOR_MIN_PAIRS} pares (features triple-ratio de cámara + referencia de pulsioxímetro).
+        </p>
+        <div className="grid grid-cols-2 gap-2 text-[9px] font-mono">
+          <div className="bg-black/40 border border-white/5 rounded-lg p-2">
+            <div className="text-zinc-500">Pares</div>
+            <div className="text-cyan-300 font-bold">{mgr.getSpo2PersonalPairs().length}</div>
+          </div>
+          <div className="bg-black/40 border border-white/5 rounded-lg p-2">
+            <div className="text-zinc-500">Modelo</div>
+            <div className="text-cyan-300 font-bold">{mgr.getActiveSpo2PersonalModel() ? 'CALIBRADO' : 'PRIOR'}</div>
+          </div>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[9px] text-zinc-500 font-bold uppercase tracking-wide">Ref. SpO2 (%)</label>
+          <input
+            type="number"
+            value={spo2Ref}
+            onChange={(e) => setSpo2Ref(e.target.value)}
+            placeholder="98"
+            className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-cyan-500 transition-colors"
+          />
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleRegisterSpo2} className="flex-1 py-2 rounded-lg bg-cyan-600/20 border border-cyan-500/30 text-cyan-300 text-[10px] font-bold uppercase tracking-wider hover:bg-cyan-600/30 transition-colors">
+            Registrar par
+          </button>
+          <button onClick={handleFitSpo2} className="flex-1 py-2 rounded-lg bg-cyan-600/20 border border-cyan-500/30 text-cyan-300 text-[10px] font-bold uppercase tracking-wider hover:bg-cyan-600/30 transition-colors">
+            Ajustar modelo
+          </button>
+          <button onClick={handleRevokeSpo2} className="flex-1 py-2 rounded-lg bg-red-600/10 border border-red-500/30 text-red-300 text-[10px] font-bold uppercase tracking-wider hover:bg-red-600/20 transition-colors">
+            Revocar
+          </button>
+        </div>
+        {spo2Status && <div className="text-[9px] font-mono text-zinc-400">{spo2Status}</div>}
+      </div>
+
+      {/* Hidrostática manual */}
+      <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3">
+        <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] font-bold uppercase tracking-wider">
+          <Activity className="w-3.5 h-3.5 text-amber-400" />
+          <span>Auto-calibración hidrostática (pendiente k)</span>
+        </div>
+        <p className="text-[9px] text-zinc-500 leading-relaxed">
+          Introduce pares (altura cm respecto al corazón, τ ms). ΔP = 0.77 mmHg/cm.
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <input
+            type="number"
+            value={hydroHeight}
+            onChange={(e) => setHydroHeight(e.target.value)}
+            placeholder="altura cm"
+            className="bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-amber-500 transition-colors"
+          />
+          <input
+            type="number"
+            value={hydroTau}
+            onChange={(e) => setHydroTau(e.target.value)}
+            placeholder="τ ms"
+            className="bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-amber-500 transition-colors"
+          />
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleAddHydroSegment} className="flex-1 py-2 rounded-lg bg-amber-600/20 border border-amber-500/30 text-amber-300 text-[10px] font-bold uppercase tracking-wider hover:bg-amber-600/30 transition-colors">
+            Añadir segmento
+          </button>
+          <button onClick={handleFitHydro} className="flex-1 py-2 rounded-lg bg-amber-600/20 border border-amber-500/30 text-amber-300 text-[10px] font-bold uppercase tracking-wider hover:bg-amber-600/30 transition-colors">
+            Ajustar pendiente
+          </button>
+        </div>
+        <div className="text-[9px] font-mono text-zinc-500">Segmentos: {hydroSegments.length}</div>
+        {hydroStatus && <div className="text-[9px] font-mono text-zinc-400">{hydroStatus}</div>}
       </div>
     </div>
   );

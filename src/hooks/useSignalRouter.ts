@@ -3,6 +3,8 @@ import type { ProcessedSignal, ContactState, FingerPlacementMode } from '@/types
 import type { VitalSignsResult, RGBData } from '@/modules/vital-signs/VitalSignsProcessor';
 import type { SignalQualityMetrics } from '@/types/measurements';
 import type { CameraRuntimeHints } from '@/lib/device/cameraDeviceProfile';
+import type { NexusBpObservation } from '@/lib/vitals/nexusFusionCore';
+import type { BPNexusMeta } from '@/modules/vital-signs/BloodPressureProcessor';
 
 import { SignalQualityIndex } from '@/modules/signal-quality/SignalQualityIndex';
 import {
@@ -32,6 +34,15 @@ import { recordVerdict as recordAuditVerdict } from '@/lib/sanity/sanityAuditLog
 import { toast } from '@/hooks/use-toast';
 import { triggerArrhythmiaHaptic } from '@/utils/haptics';
 import { logWarn } from '@/utils/logger';
+
+/**
+ * Observación cross-site (cara→dedo) lista para entrar a la fusión de PA,
+ * junto con la coherencia con la que fue emitida.
+ */
+export interface NexusObservationPayload {
+  observation: NexusBpObservation;
+  meta: Omit<BPNexusMeta, 'sourcesUsed'>;
+}
 
 interface HeartBeatProcessorAPI {
   processSignal: (
@@ -88,6 +99,14 @@ interface VitalSignsProcessorAPI {
   ) => VitalSignsResult;
   setPlacementMode: (mode: FingerPlacementMode) => void;
   setRGBData: (data: RGBData) => void;
+  /**
+   * Puente NEXUS τ: entrega (o limpia con `null`) la observación de tránsito
+   * cara→dedo que la próxima estimación de PA usará como evidencia propia.
+   */
+  setNexusCrossSiteObservation?: (
+    observation: NexusBpObservation | null,
+    meta: Omit<BPNexusMeta, 'sourcesUsed'> | null,
+  ) => void;
   getRGBStats: () => { redAC: number; redDC: number; greenAC: number; greenDC: number; blueAC?: number; blueDC?: number; rgRatio: number; ratioOfRatios: number };
 }
 
@@ -101,6 +120,12 @@ interface UseSignalRouterInput {
    * OBSERVA el canal del sitio distal; jamás muta el pipeline clínico.
    */
   realtimeExtraRef?: React.MutableRefObject<((signal: ProcessedSignal) => void) | null>;
+  /**
+   * NEXUS (opcional): buzón de la última observación cross-site publicada por el
+   * motor dual. El router la retira y la entrega al motor de PA una sola vez
+   * (take-and-clear); ningún otro consumidor la lee.
+   */
+  nexusObservationRef?: React.MutableRefObject<NexusObservationPayload | null>;
 }
 
 // Frame-gates de contacto y throttles/cadencia DSP — fuente única en VITAL_THRESHOLDS.
@@ -119,7 +144,7 @@ const {
   VITALS_PROCESS_EVERY_N_FRAMES,
 } = VITAL_THRESHOLDS.ROUTER;
 
-export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHintsRef, ppgMeterRef, realtimeExtraRef }: UseSignalRouterInput) {
+export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHintsRef, ppgMeterRef, realtimeExtraRef, nexusObservationRef }: UseSignalRouterInput) {
   // Refs estables para evitar regeneración y desmontaje de callbacks de alta frecuencia
   const heartBeatApiRef = useRef(processHeartBeat);
   heartBeatApiRef.current = processHeartBeat;
@@ -751,6 +776,23 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
       const effectiveBpm = bpmOut || lastGoodBpmRef.current;
 
+      // ── NEXUS: puente τ (cara→dedo) hacia la fusión de PA ──
+      // Take-and-clear: la observación se entrega UNA sola vez a la estimación
+      // que viene y se retira del buzón; si el motor de PA la rechaza por
+      // caducidad (TTL propio) no se reintenta con un τ viejo.
+      const pendingNexus = nexusObservationRef?.current ?? null;
+      if (nexusObservationRef) nexusObservationRef.current = null;
+      if (pendingNexus) {
+        try {
+          vitalSignsApiRef.current.setNexusCrossSiteObservation?.(
+            pendingNexus.observation,
+            pendingNexus.meta,
+          );
+        } catch (nexusObservationError) {
+          logWarn('useSignalRouter', 'puente NEXUS τ falló', nexusObservationError);
+        }
+      }
+
       const vitals = vitalSignsApiRef.current.processSignal(
         lastSignal.filteredValue,
         rawSqi || lastSignal.quality || 0,
@@ -805,6 +847,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     applyLiveDisplaySmooth,
     ppgMeterRef,
     realtimeExtraRef,
+    nexusObservationRef,
   ]);
 
 

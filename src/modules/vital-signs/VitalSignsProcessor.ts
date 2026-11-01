@@ -1,5 +1,6 @@
 import { ArrhythmiaProcessor } from './arrhythmia-processor';
-import { BloodPressureProcessor } from './BloodPressureProcessor';
+import { BloodPressureProcessor, type BPNexusMeta } from './BloodPressureProcessor';
+import type { NexusBpObservation } from '../../lib/vitals/nexusFusionCore';
 import { SpO2Calculator, type RGBData } from './SpO2Calculator';
 export type { RGBData };
 import { DisplaySmoothing } from './DisplaySmoothing';
@@ -17,6 +18,13 @@ import { estimateRespiratorySmartFusion } from '../../lib/vitals/respiratorySmar
 import type { FingerPlacementMode } from '../../types/signal';
 
 const log = createLogger('VitalSignsProcessor');
+
+/**
+ * Edad máxima de una observación cross-site (ms) antes de descartarla.
+ * El τ se estima sobre una ventana de 8 s y se publica cada 1,5 s; pasado este
+ * margen la observación ya no describe la hemodinámica actual del usuario.
+ */
+const NEXUS_OBSERVATION_TTL_MS = 2500;
 
 export interface VitalSignsDetailedResult {
   heartRate: VitalMeasurement<number>;
@@ -67,6 +75,9 @@ export class VitalSignsProcessor {
   /** Incertidumbre p5–p95 y metadatos NEXUS del último estimate (F0/F3). */
   private lastBPUncertainty: { sbpP5: number; sbpP95: number; dbpP5: number; dbpP95: number } | null = null;
   private lastBPNexus: { coherenceLevel: string; coherenceScore: number; sourcesUsed: string[]; tauMs: number | null } | null = null;
+  /** Observación cross-site pendiente de entrar a la fusión de PA (consume-una-vez). */
+  private pendingNexusCrossSite: NexusBpObservation | null = null;
+  private pendingNexusMeta: Omit<BPNexusMeta, 'sourcesUsed'> | null = null;
   private calibrationSamples: number = 0;
   private readonly CALIBRATION_REQUIRED = 25;
   private isCalibrating: boolean = false;
@@ -148,6 +159,9 @@ export class VitalSignsProcessor {
     if (anthrop) {
       this.bloodPressureProcessor.setAnthropometric(anthrop);
     }
+    // Cargar modelo personal SpO2 si existe.
+    const spo2Model = cal.getActiveSpo2PersonalModel?.();
+    if (spo2Model) this.spo2Calculator.setPersonalModel(spo2Model);
   }
 
   /** Calentamiento in-sesión (muestras internas), no crea perfiles en `CalibrationManager`. */
@@ -178,6 +192,8 @@ export class VitalSignsProcessor {
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
+    this.pendingNexusCrossSite = null;
+    this.pendingNexusMeta = null;
     this.spo2Calculator.reset();
     this.displaySmoothing.reset();
   }
@@ -193,6 +209,40 @@ export class VitalSignsProcessor {
 
   setPlacementMode(mode: FingerPlacementMode): void {
     this.bloodPressureProcessor.setPlacementMode(mode);
+  }
+
+  /**
+   * Puente NEXUS: registra la observación de tránsito cara→dedo para la próxima
+   * estimación de PA. Semántica consume-una-vez y caducidad por tiempo: una
+   * observación vieja jamás se reutiliza como si describiera el presente.
+   * Si el puente no aporta nada, la PA sigue siendo la del motor físico local.
+   */
+  setNexusCrossSiteObservation(
+    observation: NexusBpObservation | null,
+    meta: Omit<BPNexusMeta, 'sourcesUsed'> | null,
+  ): void {
+    if (observation === null || meta === null) {
+      this.pendingNexusCrossSite = null;
+      this.pendingNexusMeta = null;
+      return;
+    }
+    this.pendingNexusCrossSite = observation;
+    this.pendingNexusMeta = meta;
+  }
+
+  /** Entrega la observación pendiente al motor de PA, descartándola si caducó. */
+  private forwardPendingNexusObservation(): void {
+    const observation = this.pendingNexusCrossSite;
+    const meta = this.pendingNexusMeta;
+    this.pendingNexusCrossSite = null;
+    this.pendingNexusMeta = null;
+    if (observation === null || meta === null) return;
+    const ageMs = getMonotonicNow() - observation.timestampMs;
+    if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > NEXUS_OBSERVATION_TTL_MS) {
+      log.debug(`observación NEXUS descartada por edad (${Math.round(ageMs)} ms)`);
+      return;
+    }
+    this.bloodPressureProcessor.setNexusCrossSiteObservation(observation, meta);
   }
 
   processSignal(
@@ -532,7 +582,7 @@ rrData);
             ? "Beer–Lambert ratio-of-ratios con perfil de referencia vigente"
             : "Estimación ratio-of-ratios cámara+flash (no sustituye oxímetro certificado); calibre con oxímetro para uso clínico",
         signalQuality: { ...commonSQM },
-        diagnostics: { rValue: (() => { const h = this.spo2Calculator.getRValueHistory(); return h.length ? h[h.length - 1] : undefined; })() },
+        diagnostics: { rValue: (() => { const h = this.spo2Calculator.getRValueHistory(); return h.length ? h[h.length - 1] : undefined; })(), tripleRatioFeatures: this.spo2Calculator.getLastTripleRatioFeatures() },
         calibration: spo2Calib
       },
       bloodPressure: {
@@ -644,12 +694,13 @@ rrData);
 
     // === SpO2 — Basado en física (Beer-Lambert), no estadística ===
     // SpO2 usa ratios ópticos AC/DC directamente de la cámara.
-    const spo2 = this.spo2Calculator.calculate(
+    const spo2Result = this.spo2Calculator.calculate(
       this.rgbData,
       this.frameCount,
       30,
       currentBPM > 0 ? currentBPM : undefined,
     );
+    const spo2 = spo2Result.value;
     const spo2Conf = this.getSpo2Confidence();
     if (
       spo2 > 0 &&
@@ -684,6 +735,7 @@ rrData);
 
     // === BP ===
     if (validRR.length >= 2) {
+      this.forwardPendingNexusObservation();
       const bpEstimate = this.bloodPressureProcessor.estimate(
         this.morphologyHistory.tail(this.HISTORY_SIZE),
         validRR,
@@ -810,7 +862,11 @@ rrData);
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
-    this.ema2Spo2 = 0;
+    this.pendingNexusCrossSite = null;
+    this.pendingNexusMeta = null;
+    this.lastBPNexus = null;
+    this.lastBPUncertainty = null;
+    this.displaySmoothing.reset();
     return result;
   }
 
@@ -846,8 +902,10 @@ rrData);
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
+    this.pendingNexusCrossSite = null;
+    this.pendingNexusMeta = null;
+    this.lastBPNexus = null;
+    this.lastBPUncertainty = null;
     this.ema2Spo2 = 0;
   }
 }
-
-

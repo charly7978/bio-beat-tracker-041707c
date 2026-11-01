@@ -14,7 +14,7 @@ describe('SpO2Calculator', () => {
       { redAC: 0.5, redDC: 5, greenAC: 0.3, greenDC: 3 },
       0,
     );
-    expect(result).toBe(0);
+    expect(result.value).toBe(0);
   });
 
   it('NO clampea al piso 75%: una desaturación real se devuelve cruda', () => {
@@ -27,7 +27,7 @@ describe('SpO2Calculator', () => {
       last = calc.calculate(
         { redAC: 0.52, redDC: 50, greenAC: 0.15, greenDC: 30 },
         i,
-      );
+      ).value;
     }
     expect(last).toBeGreaterThan(0);
     expect(last).toBeLessThan(75);
@@ -41,7 +41,7 @@ describe('SpO2Calculator', () => {
       last = calc.calculate(
         { redAC: 0.1, redDC: 50, greenAC: 3, greenDC: 30 },
         i,
-      );
+      ).value;
     }
     expect(last).toBeLessThanOrEqual(100);
   });
@@ -54,7 +54,7 @@ describe('SpO2Calculator', () => {
       last = calc.calculate(
         { redAC: 40, redDC: 10, greenAC: 0.001, greenDC: 5 },
         i,
-      );
+      ).value;
     }
     expect(last).toBe(0);
   });

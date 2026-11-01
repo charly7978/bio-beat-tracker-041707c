@@ -213,6 +213,20 @@ export class NexusFusionCore {
     this.sourcesUsed = new Set();
   }
 
+  getLastTimestampMs(): number | null {
+    return this.lastTimestampMs;
+  }
+
+  resetIfStale(nowMs: number, ttlMs: number): boolean {
+    if (this.lastTimestampMs === null) return false;
+    if (!Number.isFinite(nowMs) || !Number.isFinite(ttlMs) || ttlMs <= 0) return false;
+    if (nowMs - this.lastTimestampMs > ttlMs) {
+      this.reset();
+      return true;
+    }
+    return false;
+  }
+
   /**
    * Aporta una observación de una fuente. Las varianzas inválidas o negativas
    * se descartan explícitamente (sin silenciosidad).

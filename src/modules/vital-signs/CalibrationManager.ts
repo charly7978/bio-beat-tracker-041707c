@@ -6,11 +6,14 @@ import {
   type NexusCalibrationPair,
 } from '@/lib/vitals/nexusCalibrationFit';
 import type { PttPersonalModel } from '@/lib/vitals/nexusFusionCore';
+import { pttModelToPressures } from '@/lib/vitals/nexusFusionCore';
+import type { Spo2PersonalModel } from '@/lib/vitals/spo2PersonalRegressor';
+import type { Spo2RegressorPair } from '@/lib/vitals/spo2PersonalRegressor';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('CalibrationManager');
 
-export type CalibrationType = 'SPO2' | 'BP' | 'DEVICE' | 'PPG_BASELINE' | 'NEXUS_PTT';
+export type CalibrationType = 'SPO2' | 'BP' | 'DEVICE' | 'PPG_BASELINE' | 'NEXUS_PTT' | 'SPO2_PERSONAL';
 
 /** Identificador de dispositivo de la fuente PPG por cámara (perfiles de calibración). */
 export const CALIBRATION_DEVICE_ID = 'camera_ppg';
@@ -283,6 +286,35 @@ export class CalibrationManager {
     return { kSbpMmHgS2: kS, cSbpMmHg: cS, kDbpMmHgS2: kD, cDbpMmHg: cD, calibrated: true };
   }
 
+  /**
+   * Offset personal aprendido sobre MAP a partir de los pares de calibración
+   * NEXUS guardados (hasta 50): media (MAP referencia − MAP modelo) con su
+   * varianza muestral. Equivale al "cero" de un tensiómetro de muñeca.
+   * Devuelve null si no hay suficientes pares (<3) o modelo inválido.
+   */
+  public getPersonalMapOffset(): { offsetMmHg: number; varianceMmHg2: number; n: number } | null {
+    const pairs = this.getNexusCalibrationPairs();
+    if (pairs.length < 3) return null;
+    const model = this.getActiveNexusPttModel() ?? {
+      kSbpMmHgS2: 4.2, cSbpMmHg: 25, kDbpMmHgS2: 2.2, cDbpMmHg: 25, calibrated: false,
+    };
+    const diffs: number[] = [];
+    for (const p of pairs) {
+      if (!Number.isFinite(p.tauMs) || p.tauMs <= 0) continue;
+      const { sbp, dbp } = pttModelToPressures(p.tauMs, model);
+      const predMap = dbp + (sbp - dbp) / 3;
+      const refMap = p.dbpMmHg + (p.sbpMmHg - p.dbpMmHg) / 3;
+      const d = refMap - predMap;
+      if (Number.isFinite(d)) diffs.push(d);
+    }
+    if (diffs.length < 3) return null;
+    const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+    let ss = 0;
+    for (const d of diffs) ss += (d - mean) ** 2;
+    const variance = diffs.length > 1 ? ss / (diffs.length - 1) : 0;
+    return { offsetMmHg: mean, varianceMmHg2: variance, n: diffs.length };
+  }
+
   /** Info de vigencia del perfil NEXUS_PTT (para el panel con días restantes). */
   public getNexusPttCalibrationInfo(): CalibrationInfo {
     return this.getCalibrationInfo('NEXUS_PTT');
@@ -301,6 +333,51 @@ export class CalibrationManager {
       }
     }
     if (removed) this.saveToStorage();
+  }
+
+  public getSpo2PersonalPairs(): Spo2RegressorPair[] {
+    if (typeof localStorage === 'undefined') return [];
+    try {
+      const raw = localStorage.getItem('spo2_personal_pairs');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((p) => p && Array.isArray(p.features) && Number.isFinite(p.referenceSpo2));
+    } catch { return []; }
+  }
+
+  public addSpo2PersonalPair(pair: Spo2RegressorPair): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const list = [...this.getSpo2PersonalPairs(), pair].slice(-100);
+      localStorage.setItem('spo2_personal_pairs', JSON.stringify(list));
+    } catch (e) { log.error('Error guardando par SpO2:', e); }
+  }
+
+  public clearSpo2PersonalPairs(): void {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem('spo2_personal_pairs');
+  }
+
+  public getActiveSpo2PersonalModel(): Spo2PersonalModel | null {
+    if (typeof localStorage === 'undefined') return null;
+    try {
+      const raw = localStorage.getItem('spo2_personal_model');
+      if (!raw) return null;
+      const m = JSON.parse(raw) as Spo2PersonalModel;
+      if (!m || !m.calibrated) return null;
+      return m;
+    } catch { return null; }
+  }
+
+  public recordSpo2PersonalModel(model: Spo2PersonalModel): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem('spo2_personal_model', JSON.stringify(model));
+    } catch (e) { log.error('Error guardando modelo SpO2:', e); }
+  }
+
+  public revokeSpo2PersonalModel(): void {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem('spo2_personal_model');
   }
 
   public reset(): void {
