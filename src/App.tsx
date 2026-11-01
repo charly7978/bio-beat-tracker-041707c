@@ -9,6 +9,7 @@ import {
 } from "@/components/error-boundaries";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
+import OAuthConsent from "./pages/OAuthConsent";
 
 const App = () => {
   return (
@@ -29,6 +30,7 @@ const App = () => {
                   </SignalProcessingErrorBoundary>
                 } 
               />
+              <Route path="/.lovable/oauth/consent" element={<OAuthConsent />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Router>
