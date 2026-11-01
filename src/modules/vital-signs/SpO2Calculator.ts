@@ -43,6 +43,7 @@ function cameraLinearizeAC(ac: number, dc: number): number {
 
 /**
  * Calculadora de SpO2 con ratio-of-ratios (Beer-Lambert) corregido por gamma y BSS.
+ * Mejorado con consistencia multi-par, scoring por pureza ICA y incertidumbre.
  */
 export class SpO2Calculator {
   private rValueHistory: number[] = [];
@@ -132,6 +133,7 @@ export class SpO2Calculator {
     let snrRed = 0;
     let snrGreen = 0;
     let snrBlue = 0;
+    let icaComponentPurity = 0; // 0-1, higher is better
 
     // Si tenemos suficientes muestras, corremos FastICA y estimamos SNR
     if (this.redAcHistory.length >= this.ICA_WINDOW_SIZE) {
@@ -186,6 +188,13 @@ export class SpO2Calculator {
             bestComp = i;
           }
         }
+
+        // Componente puro si tiene alta periodicidad y correlación con verde
+        const bestSrc = S[bestComp];
+        const bestR0 = autocorrAtLag(bestSrc, 0);
+        const bestRLag = autocorrAtLag(bestSrc, detectedLag);
+        const bestPeriodicity = bestR0 > 1e-10 ? Math.max(0, bestRLag / bestR0) : 0;
+        icaComponentPurity = clamp(bestPeriodicity * 0.8 + Math.min(1, bestScore / 0.5) * 0.2, 0, 1);
 
         // Obtener coeficientes de mezcla del componente de pulso
         const aR = A[0][bestComp];
@@ -257,6 +266,39 @@ export class SpO2Calculator {
     let currentR = usedR_rg * w_rg + usedR_bg * w_bg + usedR_rb * w_rb;
     if (!isFinite(currentR) || currentR <= 0) {
       currentR = R_rg; // Fallback final de seguridad
+    }
+
+    // Consistencia multi-par: si los pares divergen mucho, bajar confianza / rechazar
+    const pairValues = [usedR_rg, usedR_bg, usedR_rb].filter(v => isFinite(v) && v > 0);
+    if (pairValues.length >= 2) {
+      const pairMed = median(pairValues);
+      if (pairMed > 1e-6) {
+        let maxRelDev = 0;
+        for (let i = 0; i < pairValues.length; i++) {
+          const dev = Math.abs(pairValues[i] - pairMed) / pairMed;
+          if (dev > maxRelDev) maxRelDev = dev;
+        }
+        // Divergencia alta -> reducir peso del componente menos confiable; si extrema -> rechazar
+        if (maxRelDev > 0.25) {
+          // Penalizar fuertemente: favorecer par más estable si existe
+          if (frameCount % 15 === 0) log.warn(`[SpO2] Divergencia multi-par alta: maxRelDev=${maxRelDev.toFixed(3)}`);
+          // Si divergencia muy alta, ser conservador
+          if (maxRelDev > 0.35) {
+            return 0;
+          }
+          // Moderada: sesgar hacia RG si disponible
+          currentR = usedR_rg * 0.7 + pairMed * 0.3;
+        }
+      }
+    }
+
+    // Penalización por pureza ICA si disponible
+    if (icaComponentPurity < 0.4 && this.redAcHistory.length >= this.ICA_WINDOW_SIZE) {
+      // Mezclar con histórico más conservador
+      if (this.rValueHistory.length > 0) {
+        const prevMed = median(this.rValueHistory);
+        currentR = currentR * 0.6 + prevMed * 0.4;
+      }
     }
 
     if (currentR < spoCfg.R_VALUE_MIN || currentR > spoCfg.R_VALUE_MAX) {

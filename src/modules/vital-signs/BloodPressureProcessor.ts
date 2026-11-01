@@ -87,7 +87,21 @@ export class BloodPressureProcessor {
 
     // Si encontramos ciclos válidos en la ventana actual, actualizamos el buffer móvil
     if (validCycles.length >= 1) {
-      this.cycleBuffer = validCycles.slice(-BUFFER_MAX);
+      // Ponderar por calidad de ciclo y homogeneidad para descartar outliers
+      const scores = validCycles.map((c) => c.quality);
+      if (scores.length >= 2) {
+        // Calcular mediana de features clave para detectar outliers
+        const medianSut = median(scores.map((_, i) => validCycles[i].sutMs));
+        const medianPw50 = median(scores.map((_, i) => validCycles[i].pw50Ms));
+        const filtered = validCycles.filter((c) => {
+          const sutOk = Math.abs(c.sutMs - medianSut) / Math.max(1, medianSut) < 0.25;
+          const pw50Ok = Math.abs(c.pw50Ms - medianPw50) / Math.max(1, medianPw50) < 0.25;
+          return sutOk && pw50Ok && c.quality >= Math.max(0.2, this.minCycleQuality() * 0.8);
+        });
+        this.cycleBuffer = (filtered.length >= 1 ? filtered : validCycles).slice(-BUFFER_MAX);
+      } else {
+        this.cycleBuffer = validCycles.slice(-BUFFER_MAX);
+      }
     }
 
     if (this.cycleBuffer.length < this.MIN_CYCLES) {
