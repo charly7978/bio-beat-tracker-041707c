@@ -121,6 +121,15 @@ interface UseSignalRouterInput {
    */
   realtimeExtraRef?: React.MutableRefObject<((signal: ProcessedSignal) => void) | null>;
   /**
+   * Puente directo τ→PA (opcional): cuando el orquestador ya tiene la API de
+   * signos vitales, el router la usa para entregar la observación sin passar
+   * por `processVitalSigns` (desacopla el buzón del shape del callback).
+   */
+  setNexusCrossSiteObservation?: (
+    observation: NexusBpObservation | null,
+    meta: Omit<BPNexusMeta, 'sourcesUsed'> | null,
+  ) => void;
+  /**
    * NEXUS (opcional): buzón de la última observación cross-site publicada por el
    * motor dual. El router la retira y la entrega al motor de PA una sola vez
    * (take-and-clear); ningún otro consumidor la lee.
@@ -144,7 +153,7 @@ const {
   VITALS_PROCESS_EVERY_N_FRAMES,
 } = VITAL_THRESHOLDS.ROUTER;
 
-export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHintsRef, ppgMeterRef, realtimeExtraRef, nexusObservationRef }: UseSignalRouterInput) {
+export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHintsRef, ppgMeterRef, realtimeExtraRef, nexusObservationRef, setNexusCrossSiteObservation }: UseSignalRouterInput) {
   // Refs estables para evitar regeneración y desmontaje de callbacks de alta frecuencia
   const heartBeatApiRef = useRef(processHeartBeat);
   heartBeatApiRef.current = processHeartBeat;
@@ -784,10 +793,14 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       if (nexusObservationRef) nexusObservationRef.current = null;
       if (pendingNexus) {
         try {
-          vitalSignsApiRef.current.setNexusCrossSiteObservation?.(
-            pendingNexus.observation,
-            pendingNexus.meta,
-          );
+          if (setNexusCrossSiteObservation) {
+            setNexusCrossSiteObservation(pendingNexus.observation, pendingNexus.meta);
+          } else {
+            vitalSignsApiRef.current.setNexusCrossSiteObservation?.(
+              pendingNexus.observation,
+              pendingNexus.meta,
+            );
+          }
         } catch (nexusObservationError) {
           logWarn('useSignalRouter', 'puente NEXUS τ falló', nexusObservationError);
         }
@@ -848,6 +861,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     ppgMeterRef,
     realtimeExtraRef,
     nexusObservationRef,
+    setNexusCrossSiteObservation,
   ]);
 
 

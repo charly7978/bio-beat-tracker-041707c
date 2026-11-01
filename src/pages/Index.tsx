@@ -87,7 +87,8 @@ const Index = () => {
     startCalibration,
     forceCalibrationCompletion,
     syncAnthropometric,
-    getCalibrationProgress
+    getCalibrationProgress,
+    setNexusCrossSiteObservation: setVitalsNexusCrossSiteObservation,
   } = useVitalSignsProcessor();
   
   const { saveMeasurement } = useSaveMeasurement();
@@ -126,7 +127,6 @@ const Index = () => {
   const nexus = useNexusSession();
   const nexusStopCapture = nexus.stopProximalCapture;
   const nexusStartCapture = nexus.startProximalCapture;
-  const nexusActive = nexus.proximalActive;
   const nexusFeedRef = useRef<((signal: ProcessedSignal) => void) | null>(null);
   useEffect(() => {
     nexusFeedRef.current = nexus.pushDistalSignal;
@@ -157,12 +157,12 @@ const Index = () => {
     // Semántica consume-una-vez: se envía en el snapshot actual y se consume
     // en la próxima estimación de presión arterial. Si la coherencia es
     // INCOMPATIBLE, el processor la descarta y la PA sigue siendo física.
-    setNexusCrossSiteObservation(observation, {
+    setVitalsNexusCrossSiteObservation(observation, {
       coherenceLevel,
       coherenceScore,
       tauMs: snap.tauMs,
     });
-  }, [nexus.snapshot, setNexusCrossSiteObservation]);
+  }, [nexus.snapshot, setVitalsNexusCrossSiteObservation]);
 
   // Signal routing (encapsula todo el routing de señal, throttling, latch, sanity)
   const router = useSignalRouter({
@@ -172,6 +172,7 @@ const Index = () => {
     ppgMeterRef,
     realtimeExtraRef: nexusFeedRef,
     nexusObservationRef,
+    setNexusCrossSiteObservation: setVitalsNexusCrossSiteObservation,
   });
 
 
@@ -372,7 +373,7 @@ const Index = () => {
     rows.push(esc('NOTA: SpO2/PA son estimaciones experimentales de bienestar, no mediciones clinicas. "no disponible" = sin senal suficiente o sin referencia vigente.'));
 
     // BOM UTF-8 para que Excel/libros abran tildes correctamente.
-    const csvContent = '﻿' + rows.join('\r\n') + '\r\n';
+    const csvContent = '' + rows.join('\r\n') + '\r\n';
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -790,7 +791,13 @@ const Index = () => {
    * en el snapshot del motor (coherencia, τ, motivo técnico) — el toast solo
    * informa la intención; la verdad visible vive en la insignia del HUD.
    */
-  const handleToggleNexus = () => {};
+  const handleToggleNexus = useCallback(() => {
+    if (nexus.proximalActive) {
+      nexusStopCapture();
+    } else {
+      nexusStartCapture();
+    }
+  }, [nexus.proximalActive, nexusStartCapture, nexusStopCapture]);
 
   /** Etiqueta + color de la insignia NEXUS según el snapshot del motor. */
   const nexusBadge = useMemo(() => {
@@ -968,10 +975,9 @@ const Index = () => {
             </button>
 
             {/* NEXUS: captura dual cara+dedo (solo modo CLÍNICO en monitoreo) */}
-            { 
-              
-                  type="button"
-                  
+            <button
+              type="button"
+              onClick={handleToggleNexus}
                   aria-label="Alternar NEXUS dual"
                   title={nexus.proximalActive ? "Apagar captura dual NEXUS" : "Activar captura dual NEXUS (cara + dedo)"}
                   className={`p-1.5 rounded-xl border flex items-center gap-1 transition-all duration-150 active:scale-95 ${
@@ -979,16 +985,13 @@ const Index = () => {
                       ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-[0_0_8px_rgba(34,211,238,0.35)]'
                       : 'bg-white/5 hover:bg-cyan-500/15 text-zinc-400 hover:text-cyan-300 border-white/10 hover:border-cyan-500/40'
                   }`}
-                >
-                  
-                  <span className="text-[8px] font-mono font-bold tracking-wider">NEXUS</span>
-                </button>
-                {nexus.proximalActive && (
-                  <span className={`px-2 py-0.5 rounded-full border text-[8px] font-mono font-bold tracking-wider ${nexusBadge.className}`}>
-                    {nexusBadge.label}
-                  </span>
-                )}
-              </>
+            >
+              <span className="text-[8px] font-mono font-bold tracking-wider">NEXUS</span>
+            </button>
+            {nexus.proximalActive && (
+              <span className={`px-2 py-0.5 rounded-full border text-[8px] font-mono font-bold tracking-wider ${nexusBadge.className}`}>
+                {nexusBadge.label}
+              </span>
             )}
 
             {/* TELEMEDICINA */}

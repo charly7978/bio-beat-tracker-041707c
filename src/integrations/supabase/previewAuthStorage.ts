@@ -137,7 +137,7 @@ export function brokeredPreviewStorage(): PreviewAuthStorage | undefined {
     removeItem: (key) => {
       const local = readLocal(key);
       localStorage.removeItem(key);
-      return request('lovable-preview-auth:remove', key, local ?? undefined).then(() => {});
+      return request('lovable-preview-auth:remove', key, local ?? undefined).then(() => undefined);
     },
   };
 }
