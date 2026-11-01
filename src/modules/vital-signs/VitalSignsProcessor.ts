@@ -230,8 +230,10 @@ export class VitalSignsProcessor {
     this.pendingNexusMeta = meta;
   }
 
-  /** Entrega la observación pendiente al motor de PA, descartándola si caducó. */
+  /** Entrega la observación pendiente al motor de PA, descartándola si caducó o es incoherente. */
   private forwardPendingNexusObservation(): void {
+// Regla de honestidad: si la coherencia es INCOMPATIBLE, no se empuja la
+// observación y la PA queda puramente física con su propio motivo.
     const observation = this.pendingNexusCrossSite;
     const meta = this.pendingNexusMeta;
     this.pendingNexusCrossSite = null;

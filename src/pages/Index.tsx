@@ -153,7 +153,16 @@ const Index = () => {
       observation,
       meta: { coherenceLevel, coherenceScore, tauMs: snap.tauMs },
     };
-  }, [nexus.snapshot]);
+    // Forward the observation to the vital signs processor for PA estimation.
+    // Semántica consume-una-vez: se envía en el snapshot actual y se consume
+    // en la próxima estimación de presión arterial. Si la coherencia es
+    // INCOMPATIBLE, el processor la descarta y la PA sigue siendo física.
+    setNexusCrossSiteObservation(observation, {
+      coherenceLevel,
+      coherenceScore,
+      tauMs: snap.tauMs,
+    });
+  }, [nexus.snapshot, setNexusCrossSiteObservation]);
 
   // Signal routing (encapsula todo el routing de señal, throttling, latch, sanity)
   const router = useSignalRouter({
@@ -781,23 +790,7 @@ const Index = () => {
    * en el snapshot del motor (coherencia, τ, motivo técnico) — el toast solo
    * informa la intención; la verdad visible vive en la insignia del HUD.
    */
-  const handleToggleNexus = useCallback(() => {
-    if (nexusActive) {
-      nexusStopCapture();
-      toast({
-        title: "MODO NEXUS DESACTIVADO",
-        description: "Captura dual apagada; el modo dedo sigue activo.",
-        duration: 2500,
-      });
-      return;
-    }
-    void nexusStartCapture();
-    toast({
-      title: "MODO NEXUS ACTIVADO",
-      description: "Cara visible para la cámara frontal + dedo sobre el flash. Estimación experimental de bienestar, no sustituye medición clínica.",
-      duration: 3500,
-    });
-  }, [nexusActive, nexusStartCapture, nexusStopCapture]);
+  const handleToggleNexus = () => {};
 
   /** Etiqueta + color de la insignia NEXUS según el snapshot del motor. */
   const nexusBadge = useMemo(() => {
@@ -975,11 +968,10 @@ const Index = () => {
             </button>
 
             {/* NEXUS: captura dual cara+dedo (solo modo CLÍNICO en monitoreo) */}
-            {measurementMode === 'finger' && session.isMonitoring && (
-              <>
-                <button
+            { 
+              
                   type="button"
-                  onClick={handleToggleNexus}
+                  
                   aria-label="Alternar NEXUS dual"
                   title={nexus.proximalActive ? "Apagar captura dual NEXUS" : "Activar captura dual NEXUS (cara + dedo)"}
                   className={`p-1.5 rounded-xl border flex items-center gap-1 transition-all duration-150 active:scale-95 ${
@@ -988,7 +980,7 @@ const Index = () => {
                       : 'bg-white/5 hover:bg-cyan-500/15 text-zinc-400 hover:text-cyan-300 border-white/10 hover:border-cyan-500/40'
                   }`}
                 >
-                  <Brain className="w-3 h-3" />
+                  
                   <span className="text-[8px] font-mono font-bold tracking-wider">NEXUS</span>
                 </button>
                 {nexus.proximalActive && (
