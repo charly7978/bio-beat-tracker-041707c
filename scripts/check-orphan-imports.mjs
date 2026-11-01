@@ -22,6 +22,11 @@ const ENTRYPOINTS = new Set([
   'src/integrations/supabase/client.ts',
   'src/integrations/supabase/types.ts',
   'src/workers/ppgSignal.worker.ts',
+  // Punto de entrada framework-driven: el manifiesto del servidor MCP
+  // (@lovable.dev/mcp-js) no lo importa la app; el adaptador emite las rutas
+  // en build time (README del paquete: "a framework adapter... emits the
+  // route(s) at build time"). Declararlo guarda la veracidad del chequeo.
+  'src/lib/mcp/index.ts',
 ]);
 const TYPES_GLOB = /\.d\.ts$/;
 

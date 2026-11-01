@@ -64,6 +64,9 @@ export class VitalSignsProcessor {
   private bloodPressureProcessor: BloodPressureProcessor;
   private lastBPConfidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT' = 'INSUFFICIENT';
   private lastBPFeatureQuality: number = 0;
+  /** Incertidumbre p5–p95 y metadatos NEXUS del último estimate (F0/F3). */
+  private lastBPUncertainty: { sbpP5: number; sbpP95: number; dbpP5: number; dbpP95: number } | null = null;
+  private lastBPNexus: { coherenceLevel: string; coherenceScore: number; sourcesUsed: string[]; tauMs: number | null } | null = null;
   private calibrationSamples: number = 0;
   private readonly CALIBRATION_REQUIRED = 25;
   private isCalibrating: boolean = false;
@@ -555,7 +558,11 @@ rrData);
             ? "PWA morfológica con perfil calibrado"
             : "Estimación PWA desde morfología PPG (sin tensiómetro de referencia); valor orientativo",
         signalQuality: { ...commonSQM },
-        diagnostics: { featureQuality: this.lastBPFeatureQuality },
+        diagnostics: {
+          featureQuality: this.lastBPFeatureQuality,
+          uncertainty: this.lastBPUncertainty ?? undefined,
+          nexus: this.lastBPNexus ?? undefined,
+        },
         calibration: bpCalib
       },
       respiration: {
@@ -686,6 +693,15 @@ rrData);
 
       this.lastBPConfidence = bpEstimate.confidence;
       this.lastBPFeatureQuality = bpEstimate.featureQuality;
+      this.lastBPUncertainty = bpEstimate.uncertainty ?? null;
+      this.lastBPNexus = bpEstimate.nexus
+        ? {
+            coherenceLevel: bpEstimate.nexus.coherenceLevel,
+            coherenceScore: bpEstimate.nexus.coherenceScore,
+            sourcesUsed: bpEstimate.nexus.sourcesUsed,
+            tauMs: bpEstimate.nexus.tauMs,
+          }
+        : null;
 
       if (bpEstimate.systolic > 0 && bpEstimate.confidence !== 'INSUFFICIENT') {
         const finalSys = bpEstimate.systolic;

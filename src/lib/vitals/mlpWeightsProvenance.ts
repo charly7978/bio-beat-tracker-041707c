@@ -24,6 +24,8 @@
  */
 
 import { MLP_WEIGHTS } from './mlpWeights';
+import { PUBLIC_BP_DATASETS } from './bpTrainingDatasets';
+export { PUBLIC_BP_DATASETS };
 import {
   computeMlpWeightsFingerprint,
   verifyMlpWeightsShape,

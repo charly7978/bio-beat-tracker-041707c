@@ -7,6 +7,12 @@
       "pattern": "MATH_RANDOM",
       "reason": "React internals (event listener key, fiber id) and @supabase localStorage probe use Math.random for non-medical, non-signal-path identifier generation. Verified: zero references reach src/modules/signal-processing/** or src/modules/vital-signs/**.",
       "ref": "GUARDRAIL-DIST-RUNTIME"
+    },
+    {
+      "file": "src/integrations/supabase/previewAuthStorage.ts",
+      "pattern": "MATH_RANDOM",
+      "reason": "Generador de requestId (identificador de correlación) para el broker postMessage del editor en preview de LoVable; nunca atraviesa el pipeline fisiológico ni produce datos de medición (solo empareja respuestas de iframe).",
+      "ref": "commit:a1a0356 (previewAuthStorage introduced; NEXUS-F0 keep-hygiene fix)"
     }
   ]
 }

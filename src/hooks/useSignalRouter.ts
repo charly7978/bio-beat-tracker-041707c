@@ -31,6 +31,7 @@ import {
 import { recordVerdict as recordAuditVerdict } from '@/lib/sanity/sanityAuditLog';
 import { toast } from '@/hooks/use-toast';
 import { triggerArrhythmiaHaptic } from '@/utils/haptics';
+import { logWarn } from '@/utils/logger';
 
 interface HeartBeatProcessorAPI {
   processSignal: (
@@ -95,6 +96,11 @@ interface UseSignalRouterInput {
   processVitalSigns: VitalSignsProcessorAPI;
   cameraHintsRef: React.MutableRefObject<CameraRuntimeHints>;
   ppgMeterRef?: React.RefObject<import('@/components/PPGSignalMeter').PPGSignalMeterHandle | null>;
+  /**
+   * NEXUS (opcional): extensión de la señal en caliente — el motor dual
+   * OBSERVA el canal del sitio distal; jamás muta el pipeline clínico.
+   */
+  realtimeExtraRef?: React.MutableRefObject<((signal: ProcessedSignal) => void) | null>;
 }
 
 // Frame-gates de contacto y throttles/cadencia DSP — fuente única en VITAL_THRESHOLDS.
@@ -113,7 +119,7 @@ const {
   VITALS_PROCESS_EVERY_N_FRAMES,
 } = VITAL_THRESHOLDS.ROUTER;
 
-export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHintsRef, ppgMeterRef }: UseSignalRouterInput) {
+export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHintsRef, ppgMeterRef, realtimeExtraRef }: UseSignalRouterInput) {
   // Refs estables para evitar regeneración y desmontaje de callbacks de alta frecuencia
   const heartBeatApiRef = useRef(processHeartBeat);
   heartBeatApiRef.current = processHeartBeat;
@@ -287,6 +293,20 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
     if (!isMonitoringRef.current) return;
+
+    // ── NEXUS: extensión de la señal en caliente (solo-lectura) ──
+    // El motor dual alimenta su canal distal con la señal filtrada que ya
+    // produce el worker; un fallo de la extensión NUNCA detiene el routing
+    // real del pipeline clínico (piel del observador, no del motor).
+    const nexusExtra = realtimeExtraRef?.current;
+    if (nexusExtra) {
+      try {
+        nexusExtra(lastSignal);
+      } catch (nexusError) {
+        logWarn('useSignalRouter', 'extensión NEXUS falló', nexusError);
+      }
+    }
+
     const signalValue = lastSignal.filteredValue;
     const contactState: ContactState =
       lastSignal.contactState ??
@@ -784,6 +804,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     resetFingerContactSession,
     applyLiveDisplaySmooth,
     ppgMeterRef,
+    realtimeExtraRef,
   ]);
 
 

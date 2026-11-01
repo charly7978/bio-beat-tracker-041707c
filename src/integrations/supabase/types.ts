@@ -109,6 +109,14 @@ export type Database = {
           measured_at: string
           measurement_confidence: string | null
           measurement_window_seconds: number | null
+          nexus_sources: Json | null
+          tau_ms: number | null
+          sbp_p5: number | null
+          sbp_p95: number | null
+          dbp_p5: number | null
+          dbp_p95: number | null
+          coherence_level: string | null
+          coherence_score: number | null
           pnn50: number | null
           quality: number
           rmssd: number | null
@@ -136,6 +144,14 @@ export type Database = {
           measured_at?: string
           measurement_confidence?: string | null
           measurement_window_seconds?: number | null
+          nexus_sources?: Json | null
+          tau_ms?: number | null
+          sbp_p5?: number | null
+          sbp_p95?: number | null
+          dbp_p5?: number | null
+          dbp_p95?: number | null
+          coherence_level?: string | null
+          coherence_score?: number | null
           pnn50?: number | null
           quality?: number
           rmssd?: number | null
@@ -163,6 +179,14 @@ export type Database = {
           measured_at?: string
           measurement_confidence?: string | null
           measurement_window_seconds?: number | null
+          nexus_sources?: Json | null
+          tau_ms?: number | null
+          sbp_p5?: number | null
+          sbp_p95?: number | null
+          dbp_p5?: number | null
+          dbp_p95?: number | null
+          coherence_level?: string | null
+          coherence_score?: number | null
           pnn50?: number | null
           quality?: number
           rmssd?: number | null

@@ -85,6 +85,11 @@ async function insertMeasurementAttempt(
  * Guarda intentos siempre que haya sesión (auditoría) y solo escribe en `measurements`
  * cuando la política clínica/técnica permite una fila final válida.
  */
+type NexusBpDiagnostics = {
+  uncertainty?: { sbpP5: number; sbpP95: number; dbpP5: number; dbpP95: number };
+  nexus?: { sourcesUsed: string[]; tauMs: number | null; coherenceLevel: string; coherenceScore: number };
+};
+
 export const useSaveMeasurement = () => {
   const saveMeasurement = useCallback(async (data: MeasurementData): Promise<boolean> => {
     try {
@@ -220,6 +225,14 @@ export const useSaveMeasurement = () => {
           measurement_confidence: vs.measurementConfidence,
           measurement_window_seconds: data.windowSeconds ?? null,
           signal_quality_index: sq,
+          nexus_sources: ((vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.nexus?.sourcesUsed ?? null) as unknown as Json,
+          tau_ms: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.nexus?.tauMs ?? null,
+          sbp_p5: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.uncertainty?.sbpP5 ?? null,
+          sbp_p95: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.uncertainty?.sbpP95 ?? null,
+          dbp_p5: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.uncertainty?.dbpP5 ?? null,
+          dbp_p95: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.uncertainty?.dbpP95 ?? null,
+          coherence_level: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.nexus?.coherenceLevel ?? null,
+          coherence_score: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.nexus?.coherenceScore ?? null,
         };
 
         const { error: insertError } = await supabase.from('measurements').insert(measurementRecord);

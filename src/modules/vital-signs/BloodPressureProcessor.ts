@@ -11,7 +11,27 @@ import {
   type AnthropometricProfile,
   type PwaMedianFeatures,
 } from '@/lib/vitals/pwaPhysiologicalBpEngine';
+import {
+  NexusFusionCore,
+  pwaObservationFromEstimate,
+  type NexusBpObservation,
+} from '@/lib/vitals/nexusFusionCore';
+import type { NexusCoherenceLevel } from '@/lib/vitals/nexusCoherence';
 import { CalibrationManager } from './CalibrationManager';
+
+export interface BPUncertainty {
+  sbpP5: number;
+  sbpP95: number;
+  dbpP5: number;
+  dbpP95: number;
+}
+
+export interface BPNexusMeta {
+  coherenceLevel: NexusCoherenceLevel;
+  coherenceScore: number;
+  tauMs: number | null;
+  sourcesUsed: string[];
+}
 
 export interface BPEstimate {
   systolic: number;
@@ -21,6 +41,9 @@ export interface BPEstimate {
   confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT';
   cyclesUsed: number;
   featureQuality: number;
+  /** Presente solo cuando la fuente cross-site (NEXUS) participó en la estimación. */
+  uncertainty?: BPUncertainty;
+  nexus?: BPNexusMeta;
 }
 
 const BUFFER_MAX = 12;
@@ -37,12 +60,32 @@ export class BloodPressureProcessor {
   private staleFrames = 0;
   private anthropometric: AnthropometricProfile | null = null;
 
+  // NEXUS: fuente opcional de tránsito cara→dedo (consume-una-vez, ver doc del setter)
+  private readonly fusionCore = new NexusFusionCore();
+  private pendingCrossSite: NexusBpObservation | null = null;
+  private pendingCrossSiteSubMeta: Omit<BPNexusMeta, 'sourcesUsed'> | null = null;
+
   setPlacementMode(mode: FingerPlacementMode): void {
     this.placementMode = mode;
   }
 
   setAnthropometric(profile: AnthropometricProfile | null): void {
     this.anthropometric = profile;
+  }
+
+  /**
+   * Registra la observación de la fuente cross-site NEXUS (tránsito cara→dedo)
+   * para LA SIGUIENTE llamada a `estimate()`. Semántica consume-una-vez: la
+   * observación se consume al usarse o al reset; si la coherencia multisitio
+   * fue INCOMPATIBLE, el llamador simplemente no la emite. La observación debe
+   * venir construida por `crossSiteObservationFromTiming` (procedencia única).
+   */
+  setNexusCrossSiteObservation(
+    obs: NexusBpObservation | null,
+    coherenceSubMeta: Omit<BPNexusMeta, 'sourcesUsed'> | null,
+  ): void {
+    this.pendingCrossSite = obs;
+    this.pendingCrossSiteSubMeta = coherenceSubMeta;
   }
 
   getAnthropometric(): AnthropometricProfile | null {
@@ -142,6 +185,61 @@ export class BloodPressureProcessor {
     if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_HIGH) confidence = 'HIGH';
     else if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_MEDIUM) confidence = 'MEDIUM';
 
+    // ── NEXUS: fusión con la fuente de tránsito cara→dedo si fue proveída ──
+    // Semántica consume-una-vez y fusión por medición (sin arrastre entre
+    // ventanas): el resultado físico local sigue siendo la base, y la fuente
+    // cross-site entra con SU propia incertidumbre. Si la fusión no supera la
+    // garantía fisiológica, se cae con elegancia al resultado físico local.
+    if (this.pendingCrossSite !== null && this.pendingCrossSiteSubMeta !== null) {
+      const cross = this.pendingCrossSite;
+      const subMeta = this.pendingCrossSiteSubMeta;
+      this.pendingCrossSite = null;
+      this.pendingCrossSiteSubMeta = null;
+      this.fusionCore.reset();
+      this.fusionCore.pushObservation(
+        pwaObservationFromEstimate(dbp + (sbp - dbp) / 3, sbp - dbp, fq, cross.timestampMs),
+      );
+      this.fusionCore.pushObservation(cross);
+      const fused = this.fusionCore.getState();
+      if (
+        fused.systolic !== null &&
+        fused.diastolic !== null &&
+        fused.map !== null &&
+        fused.pulsePressure !== null &&
+        fused.sbpBand !== null &&
+        fused.dbpBand !== null &&
+        fused.confidence !== null &&
+        isPhysiologicalBp(fused.systolic, fused.diastolic)
+      ) {
+        this.lastSBP = fused.systolic;
+        this.lastDBP = fused.diastolic;
+        this.staleFrames = 0;
+        const uncertainty: BPUncertainty = {
+          sbpP5: Math.round(fused.sbpBand.p5),
+          sbpP95: Math.round(fused.sbpBand.p95),
+          dbpP5: Math.round(fused.dbpBand.p5),
+          dbpP95: Math.round(fused.dbpBand.p95),
+        };
+        return {
+          systolic: Math.round(fused.systolic),
+          diastolic: Math.round(fused.diastolic),
+          map: Math.round(fused.map),
+          pulsePressure: Math.round(fused.pulsePressure),
+          confidence: fused.confidence,
+          cyclesUsed: this.cycleBuffer.length,
+          featureQuality: fq,
+          uncertainty,
+          nexus: {
+            coherenceLevel: subMeta.coherenceLevel,
+            coherenceScore: subMeta.coherenceScore,
+            tauMs: subMeta.tauMs,
+            sourcesUsed: fused.sourcesUsed,
+          },
+        };
+      }
+      // Fusión no válida: continuar con el resultado físico local (fallback)
+    }
+
     this.lastSBP = sbp;
     this.lastDBP = dbp;
     this.staleFrames = 0;
@@ -221,5 +319,8 @@ export class BloodPressureProcessor {
     this.lastDBP = 0;
     this.cycleBuffer = [];
     this.staleFrames = 0;
+    this.fusionCore.reset();
+    this.pendingCrossSite = null;
+    this.pendingCrossSiteSubMeta = null;
   }
 }

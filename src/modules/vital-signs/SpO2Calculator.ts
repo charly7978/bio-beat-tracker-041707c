@@ -4,6 +4,9 @@ import { median } from '../../utils/stats';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { CalibrationManager } from './CalibrationManager';
+import { computeTripleRatioFeatures, type TripleRatioFeatures } from '@/lib/vitals/spo2TripleRatio';
+import { tmdsToRatios, type TmdsDifferential } from '@/lib/vitals/spo2Tmds';
+import { predictSpo2, type Spo2PersonalModel, type Spo2Prediction } from '@/lib/vitals/spo2PersonalRegressor';
 import { autocorrAtLag } from '../signal-processing/shared/dsp';
 import { fastICA } from '../../utils/ica';
 
@@ -47,6 +50,8 @@ function cameraLinearizeAC(ac: number, dc: number): number {
  */
 export class SpO2Calculator {
   private rValueHistory: number[] = [];
+  private lastTripleRatioFeatures: TripleRatioFeatures | null = null;
+  private personalModel: Spo2PersonalModel | null = null;
   private readonly R_HISTORY_SAMPLES = VITAL_THRESHOLDS.SPO2.R_HISTORY_SAMPLES;
 
   // Historiales deslizantes para BSS (ICA) y SNR
@@ -119,6 +124,17 @@ export class SpO2Calculator {
     const ratioRed = rmsRed / redDC;
     const ratioGreen = rmsGreen / greenDC;
     const ratioBlue = typeof blueDC === 'number' && blueDC > 0 ? rmsBlue / blueDC : 0;
+
+    // F4: features de ratio triple (almacenadas para el regresor personal y TMDS)
+    if (typeof blueDC === 'number' && blueDC > 0) {
+      this.lastTripleRatioFeatures = computeTripleRatioFeatures({
+        redAC: rmsRed, redDC,
+        greenAC: rmsGreen, greenDC,
+        blueAC: rmsBlue, blueDC,
+      });
+    } else {
+      this.lastTripleRatioFeatures = null;
+    }
 
     if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return 0;
 
@@ -351,6 +367,23 @@ export class SpO2Calculator {
     }
 
     return Number.isFinite(spo2) ? spo2 : 0;
+  }
+
+  setPersonalModel(model: Spo2PersonalModel | null): void {
+    this.personalModel = model;
+  }
+
+  getPersonalSpo2Estimate(features: number[]): Spo2Prediction | null {
+    if (!this.personalModel) return null;
+    return predictSpo2(this.personalModel, features);
+  }
+
+  computeTmdsRatios(diff: TmdsDifferential, ac: { red: number; green: number; blue: number }): { red: number; green: number; blue: number } | null {
+    return tmdsToRatios(diff, ac);
+  }
+
+  getLastTripleRatioFeatures(): TripleRatioFeatures | null {
+    return this.lastTripleRatioFeatures;
   }
 
   getRValueHistory(): number[] {

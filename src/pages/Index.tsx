@@ -17,7 +17,8 @@ import { useMeasurementSession } from "@/hooks/useMeasurementSession";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
-import type { ContactState } from "@/types/signal";
+import type { ContactState, ProcessedSignal } from "@/types/signal";
+import { useNexusSession } from "@/hooks/useNexusSession";
 import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
 import { triggerCalibrationCompleteHaptic } from "@/utils/haptics";
 import { createLogger } from "@/utils/logger";
@@ -117,12 +118,30 @@ const Index = () => {
     getRGBStats,
   }), [processVitalSigns, setVitalsPlacementMode, setRGBData, getRGBStats]);
 
-  // Signal router (encapsula todo el routing de señal, throttling, latch, sanity)
+  // ── NEXUS F2: puente dual cara+dedo (blueprint docs/nexus-vitals-blueprint.md) ──
+  // El sitio distal (dedo) sigue siendo el pipeline existente; el hook observa
+  // su canal filtrado via realtimeExtraRef y abre el frontal bajo demanda.
+  // Los callbacks del hook son estables (useCallback): destructurarlos aquí
+  // mantiene limpios los arreglos de dependencias de los efectos.
+  const nexus = useNexusSession();
+  const nexusStopCapture = nexus.stopProximalCapture;
+  const nexusStartCapture = nexus.startProximalCapture;
+  const nexusActive = nexus.proximalActive;
+  const nexusFeedRef = useRef<((signal: ProcessedSignal) => void) | null>(null);
+  useEffect(() => {
+    nexusFeedRef.current = nexus.pushDistalSignal;
+    return () => {
+      nexusFeedRef.current = null;
+    };
+  }, [nexus.pushDistalSignal]);
+
+  // Signal routing (encapsula todo el routing de señal, throttling, latch, sanity)
   const router = useSignalRouter({
     processHeartBeat: processHeartBeatApi,
     processVitalSigns: processVitalSignsApi,
     cameraHintsRef,
     ppgMeterRef,
+    realtimeExtraRef: nexusFeedRef,
   });
 
 
@@ -179,6 +198,12 @@ const Index = () => {
   useEffect(() => {
     router.setIsMonitoringRef(session.isMonitoring);
   }, [session.isMonitoring, router]);
+
+  // Fin de monitorización ⇒ apagar el modo NEXUS: el canal distal deja de
+  // fluir y sostener el frontal activo solo gastaría batería sin evidencia.
+  useEffect(() => {
+    if (!session.isMonitoring) nexusStopCapture();
+  }, [session.isMonitoring, nexusStopCapture]);
 
   // Al estabilizarse el contacto, bloquear la exposición de la cámara a la
   // escena real del dedo iluminado. Frena la deriva del auto-exposure (causa del
@@ -730,6 +755,51 @@ const Index = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.handleReset]);
 
+  /**
+   * NEXUS (F2): activa/desactiva la captura dual. El estado real se publica
+   * en el snapshot del motor (coherencia, τ, motivo técnico) — el toast solo
+   * informa la intención; la verdad visible vive en la insignia del HUD.
+   */
+  const handleToggleNexus = useCallback(() => {
+    if (nexusActive) {
+      nexusStopCapture();
+      toast({
+        title: "MODO NEXUS DESACTIVADO",
+        description: "Captura dual apagada; el modo dedo sigue activo.",
+        duration: 2500,
+      });
+      return;
+    }
+    void nexusStartCapture();
+    toast({
+      title: "MODO NEXUS ACTIVADO",
+      description: "Cara visible para la cámara frontal + dedo sobre el flash. Estimación experimental de bienestar, no sustituye medición clínica.",
+      duration: 3500,
+    });
+  }, [nexusActive, nexusStartCapture, nexusStopCapture]);
+
+  /** Etiqueta + color de la insignia NEXUS según el snapshot del motor. */
+  const nexusBadge = useMemo(() => {
+    const s = nexus.snapshot;
+    switch (s.status) {
+      case 'ACTIVE_NEXUS':
+        return {
+          label: `NEXUS τ ${Math.round(s.tauMs ?? 0)}ms`,
+          className: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-[0_0_8px_rgba(34,211,238,0.35)]',
+        };
+      case 'WARMING_UP':
+        return { label: 'NEXUS ESTABILIZANDO', className: 'bg-amber-500/10 text-amber-300 border-amber-500/30' };
+      case 'DEGRADED_NO_EVIDENCE':
+        return { label: 'NEXUS SIN COINCIDENCIA', className: 'bg-zinc-900/60 text-zinc-400 border-zinc-800/60' };
+      case 'DEGRADED_INCOMPATIBLE':
+        return { label: 'NEXUS INCOMPATIBLE', className: 'bg-rose-500/10 text-rose-300 border-rose-500/30' };
+      case 'WAITING_PROXIMAL_CAPTURE':
+        return { label: 'NEXUS SIN FRONTAL', className: 'bg-zinc-900/60 text-zinc-400 border-zinc-800/60' };
+      default:
+        return { label: 'NEXUS', className: 'bg-white/5 text-zinc-400 border-white/10' };
+    }
+  }, [nexus.snapshot]);
+
   const pressureValue = useMemo(() => ({
     ...(router.vitalSigns.bloodPressure.value ?? { systolic: 0, diastolic: 0 }),
     confidence: router.vitalSigns.bloodPressure.status,
@@ -847,6 +917,7 @@ const Index = () => {
                 // invalidada. Reset completo si medía; si no, reset DSP para no
                 // arrastrar baselines del otro modo. Las pistas previas las
                 // libera CameraView al remontar con el nuevo modo.
+                nexus.stopProximalCapture();
                 if (session.isMonitoring) {
                   session.handleReset();
                 } else {
@@ -881,6 +952,31 @@ const Index = () => {
                 </>
               )}
             </button>
+
+            {/* NEXUS: captura dual cara+dedo (solo modo CLÍNICO en monitoreo) */}
+            {measurementMode === 'finger' && session.isMonitoring && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleToggleNexus}
+                  aria-label="Alternar NEXUS dual"
+                  title={nexus.proximalActive ? "Apagar captura dual NEXUS" : "Activar captura dual NEXUS (cara + dedo)"}
+                  className={`p-1.5 rounded-xl border flex items-center gap-1 transition-all duration-150 active:scale-95 ${
+                    nexus.proximalActive
+                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-[0_0_8px_rgba(34,211,238,0.35)]'
+                      : 'bg-white/5 hover:bg-cyan-500/15 text-zinc-400 hover:text-cyan-300 border-white/10 hover:border-cyan-500/40'
+                  }`}
+                >
+                  <Brain className="w-3 h-3" />
+                  <span className="text-[8px] font-mono font-bold tracking-wider">NEXUS</span>
+                </button>
+                {nexus.proximalActive && (
+                  <span className={`px-2 py-0.5 rounded-full border text-[8px] font-mono font-bold tracking-wider ${nexusBadge.className}`}>
+                    {nexusBadge.label}
+                  </span>
+                )}
+              </>
+            )}
 
             {/* TELEMEDICINA */}
             <button

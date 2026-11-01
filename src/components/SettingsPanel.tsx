@@ -6,6 +6,13 @@
 import { useState } from 'react';
 import { Activity, AlertTriangle, Check, Shield, Sliders, User, X } from 'lucide-react';
 import { CalibrationManager } from '@/modules/vital-signs/CalibrationManager';
+import { StudyPanel } from './StudyPanel';
+import {
+  fitPttPersonalModel,
+  computeNexusBlandAltman,
+  type NexusCalibrationPair,
+} from '@/lib/vitals/nexusCalibrationFit';
+import { UNCALIBRATED_PTT_MODEL } from '@/lib/vitals/nexusFusionCore';
 import type { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 
 export interface ActiveUser {
@@ -25,7 +32,7 @@ export interface HistoricalMeasurement {
   isCloud?: boolean;
 }
 
-type SettingsTab = 'profile' | 'calibration' | 'history' | 'account';
+type SettingsTab = 'profile' | 'calibration' | 'history' | 'account' | 'nexus' | 'study';
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -60,6 +67,10 @@ interface SettingsPanelProps {
   handleAuth: (e: React.FormEvent) => void;
   handleSignOut: () => void;
 }
+
+type NexusBpDiagnostics = {
+  nexus?: { tauMs: number | null };
+};
 
 export function SettingsPanel(props: SettingsPanelProps) {
   const {
@@ -153,6 +164,26 @@ export function SettingsPanel(props: SettingsPanelProps) {
               }`}
             >
               SYNC
+            </button>
+            <button
+              onClick={() => setActiveTab('nexus')}
+              className={`flex-1 py-1.5 px-2 text-center rounded-xl transition-all duration-200 ${
+                activeTab === 'nexus'
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-md'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              NEXUS
+            </button>
+            <button
+              onClick={() => setActiveTab('study')}
+              className={`flex-1 py-1.5 px-2 text-center rounded-xl transition-all duration-200 ${
+                activeTab === 'study'
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-md'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              ESTUDIO
             </button>
           </div>
         </div>
@@ -499,7 +530,196 @@ export function SettingsPanel(props: SettingsPanelProps) {
             </div>
           )}
 
+          {activeTab === 'nexus' && (
+            <NexusCalibrationTab lastValidResults={lastValidResults} />
+          )}
+
+          {activeTab === 'study' && <StudyPanel />}
+
         </div>
+      </div>
+    </div>
+  );
+}
+
+function NexusCalibrationTab({ lastValidResults }: { lastValidResults: VitalSignsResult | null }) {
+  const mgr = CalibrationManager.getInstance();
+  const [pairs, setPairs] = useState<NexusCalibrationPair[]>(() => mgr.getNexusCalibrationPairs());
+  const [refSys, setRefSys] = useState('');
+  const [refDia, setRefDia] = useState('');
+  const [tauOverride, setTauOverride] = useState('');
+  const [status, setStatus] = useState<string | null>(null);
+
+  const tauFromHud = (lastValidResults?.bloodPressure?.diagnostics as unknown as NexusBpDiagnostics | undefined)?.nexus?.tauMs ?? null;
+  const tauMs = tauOverride ? Number(tauOverride) : tauFromHud;
+
+  const refresh = () => setPairs(mgr.getNexusCalibrationPairs());
+
+  const handleRegister = () => {
+    const sys = Number(refSys);
+    const dia = Number(refDia);
+    if (!Number.isFinite(tauMs) || (tauMs as number) <= 0) {
+      setStatus('Sin τ válido (activa captura dual y espera la insignia NEXUS).');
+      return;
+    }
+    if (!Number.isFinite(sys) || !Number.isFinite(dia) || dia >= sys) {
+      setStatus('Introduce PA de referencia válida (sistólica > diastólica).');
+      return;
+    }
+    const p = mgr.addNexusCalibrationPair({ tauMs: tauMs as number, sbpMmHg: sys, dbpMmHg: dia });
+    if (!p) {
+      setStatus('No se pudo persistir el par.');
+      return;
+    }
+    setStatus(`Par registrado (τ=${Math.round(tauMs as number)} ms). Total: ${mgr.getNexusCalibrationPairs().length}.`);
+    setRefSys('');
+    setRefDia('');
+    refresh();
+  };
+
+  const handleFit = () => {
+    const list = mgr.getNexusCalibrationPairs();
+    const fit = fitPttPersonalModel(list);
+    if (fit.status !== 'FIT' || !fit.model) {
+      setStatus(`Ajuste no disponible: ${fit.status} (mínimo 3 pares válidos).`);
+      return;
+    }
+    const profile = mgr.recordNexusPttModel(fit);
+    if (!profile) {
+      setStatus('No se pudo proclamar el modelo.');
+      return;
+    }
+    setStatus(`Modelo NEXUS proclamado. Vigente 28 días. rSBP=${fit.fitSummary?.rSbp.toFixed(2)}.`);
+    refresh();
+  };
+
+  const handleRevoke = () => {
+    mgr.revokeNexusPttModel();
+    setStatus('Modelo NEXUS revocado (prior público restaurado).');
+    refresh();
+  };
+
+  const activeModel = mgr.getActiveNexusPttModel() ?? UNCALIBRATED_PTT_MODEL;
+  const altman = computeNexusBlandAltman(pairs, activeModel);
+
+  return (
+    <div className="space-y-4 animate-in fade-in duration-200">
+      <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] font-bold uppercase tracking-wider">
+        <Activity className="w-3.5 h-3.5 text-emerald-400" />
+        <span>Calibración NEXUS (PTT personal cara→dedo)</span>
+      </div>
+
+      <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3">
+        <p className="text-[9px] text-zinc-500 leading-relaxed">
+          Modelo personal PTT↔PA (Moens–Korteweg). Requiere captura dual activa y
+          ≥3 pares (τ de la insignia NEXUS + PA de referencia de brazalete).
+          Vigencia 28 días. Sin calibración se usa el prior público (varianza alta).
+        </p>
+
+        <div className="grid grid-cols-3 gap-2 text-[9px] font-mono">
+          <div className="bg-black/40 border border-white/5 rounded-lg p-2">
+            <div className="text-zinc-500">τ HUD (ms)</div>
+            <div className="text-emerald-300 font-bold">{tauFromHud != null ? Math.round(tauFromHud) : '—'}</div>
+          </div>
+          <div className="bg-black/40 border border-white/5 rounded-lg p-2">
+            <div className="text-zinc-500">Pares</div>
+            <div className="text-emerald-300 font-bold">{pairs.length}</div>
+          </div>
+          <div className="bg-black/40 border border-white/5 rounded-lg p-2">
+            <div className="text-zinc-500">Modelo</div>
+            <div className="text-emerald-300 font-bold">{mgr.getActiveNexusPttModel() ? 'CALIBRADO' : 'PRIOR'}</div>
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-[9px] text-zinc-500 font-bold uppercase tracking-wide">τ manual (ms, opcional)</label>
+          <input
+            type="number"
+            value={tauOverride}
+            onChange={(e) => setTauOverride(e.target.value)}
+            placeholder={tauFromHud != null ? String(Math.round(tauFromHud)) : '140'}
+            className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <label className="text-[9px] text-zinc-500 font-bold uppercase tracking-wide">Ref. sistólica (mmHg)</label>
+            <input
+              type="number"
+              value={refSys}
+              onChange={(e) => setRefSys(e.target.value)}
+              placeholder="120"
+              className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-[9px] text-zinc-500 font-bold uppercase tracking-wide">Ref. diastólica (mmHg)</label>
+            <input
+              type="number"
+              value={refDia}
+              onChange={(e) => setRefDia(e.target.value)}
+              placeholder="80"
+              className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors"
+            />
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={handleRegister}
+            className="flex-1 py-2 rounded-xl bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold text-[10px] tracking-wider transition-all"
+          >
+            REGISTRAR PAR
+          </button>
+          <button
+            type="button"
+            onClick={handleFit}
+            className="flex-1 py-2 rounded-xl bg-indigo-600/80 hover:bg-indigo-500 text-white font-bold text-[10px] tracking-wider transition-all"
+          >
+            AJUSTAR MODELO
+          </button>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleRevoke}
+          className="w-full py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-300 font-bold text-[9px] tracking-wider transition-all border border-red-500/20"
+        >
+          REVOCAR MODELO NEXUS
+        </button>
+
+        {status && (
+          <div className="text-[9px] text-emerald-300 font-mono bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2">
+            {status}
+          </div>
+        )}
+      </div>
+
+      <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-2">
+        <div className="text-[9px] text-zinc-400 font-bold uppercase tracking-wider">Bland–Altman (predicción − referencia)</div>
+        {!altman ? (
+          <div className="text-[9px] text-zinc-600 font-mono">Sin pares válidos.</div>
+        ) : (
+          <div className="space-y-1 text-[9px] font-mono">
+            {(['sbp', 'dbp'] as const).map((ch) => {
+              const c = altman[ch];
+              return (
+                <div key={ch} className="bg-black/40 border border-white/5 rounded-lg p-2">
+                  <div className="text-zinc-300 font-bold mb-1">{ch.toUpperCase()}</div>
+                  <div className="grid grid-cols-2 gap-1 text-zinc-400">
+                    <span>d̄ = {c.biasMmHg.toFixed(2)} mmHg</span>
+                    <span>σ = {c.sdMmHg.toFixed(2)} mmHg</span>
+                    <span>LoA = [{c.loaLowMmHg.toFixed(1)}, {c.loaHighMmHg.toFixed(1)}]</span>
+                    <span>p5/p95 = [{c.p5MmHg.toFixed(1)}, {c.p95MmHg.toFixed(1)}]</span>
+                    <span>n = {c.n}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
