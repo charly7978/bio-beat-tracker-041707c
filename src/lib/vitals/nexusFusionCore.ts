@@ -193,7 +193,8 @@ export function pwaObservationFromEstimate(
 /**
  * Motor de fusión: filtrado de Kalman de dos estados ([MAP, PP]) con proceso
  * caminante (Q por minuto) y actualizaciones secuenciales por observación.
- */export class NexusFusionCore {
+ */
+export class NexusFusionCore {
   private mapState: number | null = null;
   private ppState: number | null = null;
   private mapVar: number = Number.POSITIVE_INFINITY;

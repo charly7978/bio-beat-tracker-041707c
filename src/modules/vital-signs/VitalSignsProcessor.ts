@@ -758,7 +758,6 @@ rrData);
   }
 
   /**
-  /**
    * Segundo pase EMA sobre un valor ya suavizado por {@link DisplaySmoothing}.
    * El primer pase (ponderado por confianza) lo hace displaySmoothing;
    * este segundo pase reduce el residuo ruidoso con alpha fijo, sin añadir

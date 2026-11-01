@@ -19,8 +19,8 @@
  * declara el estado y nada se fabrica.
  */
 
-import { robustPercentile } from '@/modules/signal-processing/shared/dsp';
 import { clamp } from '@/utils/math';
+import { blandAltman as genericBlandAltman } from './blandAltman';
 import {
   UNCALIBRATED_PTT_MODEL,
   pttModelToPressures,
@@ -146,31 +146,11 @@ function olsChannel(xs: number[], ys: number[]): OlsChannel | null {
   return { slope, intercept, r, residualStd };
 }
 
-function diffsBlandAltman(diffs: number[]): NexusAltmanChannel {
-  const sorted = [...diffs].sort((a, b) => a - b);
-  const n = diffs.length;
-  const mean = diffs.reduce((a, b) => a + b, 0) / n;
-  const variance = n > 1
-    ? diffs.reduce((acc, d) => acc + (d - mean) * (d - mean), 0) / (n - 1)
-    : 0;
-  const sd = Math.sqrt(variance);
-  return {
-    n,
-    direction: 'PREDICTED_MINUS_REFERENCE',
-    biasMmHg: mean,
-    sdMmHg: sd,
-    loaLowMmHg: mean - 1.96 * sd,
-    loaHighMmHg: mean + 1.96 * sd,
-    p5MmHg: robustPercentile(sorted, 0.05),
-    p95MmHg: robustPercentile(sorted, 0.95),
-  };
-}
-
 /**
  * Bland–Altman entre el modelo aportado y las referencias de los pares.
  * d = predicción − referencia (dirección declarada en cada resultado).
- * Herramienta pública: el ajuste interno y el panel vivo de calibración la
- * usan SIEMPRE con la misma semántica (una sola estatística, sin copias).
+ * Reutiliza la estadística pública única (blandAltman.ts) — sin copia de
+ * la fórmula (F6).
  */
 export function computeNexusBlandAltman(
   pairs: NexusCalibrationPair[],
@@ -178,14 +158,43 @@ export function computeNexusBlandAltman(
 ): NexusCalibrationAltman | null {
   const clean = pairs.filter((p) => Number.isFinite(p.tauMs) && p.tauMs > 0);
   if (clean.length === 0) return null;
-  const sbpDiff: number[] = [];
-  const dbpDiff: number[] = [];
-  for (const p of clean) {
-    const { sbp, dbp } = pttModelToPressures(p.tauMs, model);
-    sbpDiff.push(sbp - p.sbpMmHg);
-    dbpDiff.push(dbp - p.dbpMmHg);
-  }
-  return { sbp: diffsBlandAltman(sbpDiff), dbp: diffsBlandAltman(dbpDiff) };
+
+  const toChannel = (diffs: { estimate: number; reference: number }[]): NexusAltmanChannel => {
+    const res = genericBlandAltman(diffs);
+    if (!res) {
+      // clean.length > 0 garantiza n>0; este ramal es defensivo únicamente.
+      return {
+        n: 0,
+        direction: 'PREDICTED_MINUS_REFERENCE',
+        biasMmHg: 0,
+        sdMmHg: 0,
+        loaLowMmHg: 0,
+        loaHighMmHg: 0,
+        p5MmHg: 0,
+        p95MmHg: 0,
+      };
+    }
+    return {
+      n: res.n,
+      direction: 'PREDICTED_MINUS_REFERENCE',
+      biasMmHg: res.bias,
+      sdMmHg: res.sd,
+      loaLowMmHg: res.loaLow,
+      loaHighMmHg: res.loaHigh,
+      p5MmHg: res.p5,
+      p95MmHg: res.p95,
+    };
+  };
+
+  const sbpPairs = clean.map((p) => {
+    const { sbp } = pttModelToPressures(p.tauMs, model);
+    return { estimate: sbp, reference: p.sbpMmHg };
+  });
+  const dbpPairs = clean.map((p) => {
+    const { dbp } = pttModelToPressures(p.tauMs, model);
+    return { estimate: dbp, reference: p.dbpMmHg };
+  });
+  return { sbp: toChannel(sbpPairs), dbp: toChannel(dbpPairs) };
 }
 
 /**

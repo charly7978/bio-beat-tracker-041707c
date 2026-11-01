@@ -15,6 +15,7 @@
 import { WINDOW_MS, type PpgRenderState } from './ppgCanvasRenderer';
 import { PPG3D_INTENSITY_MIN, PPG3D_INTENSITY_MAX } from '@/store/ppg3dSettings';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
+import { clamp } from '@/utils/math';
 
 const FONT = '"SF Mono", Consolas, "Roboto Mono", "JetBrains Mono", monospace';
 
@@ -991,6 +992,3 @@ export function drawWaveRibbon3D(
   ctx.restore();
 }
 
-function clamp(v: number, lo: number, hi: number): number {
-  return v < lo ? lo : v > hi ? hi : v;
-}
