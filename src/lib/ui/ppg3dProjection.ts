@@ -320,49 +320,23 @@ export function drawWaveRibbon3D(
     }
   }
 
-  // 1b) Rayos rojos de arritmia desde el piso hacia la fuga + etiqueta ARR en la fuga.
+  // 1b) Rayos rojos de arritmia desde el piso hacia la fuga (punto de fuga vpX, horizonY).
   if (revealed) {
-    let s = 0;
-    while (s < n) {
-      if (!coords[s].isArr) { s++; continue; }
-      let e = s;
-      while (e < n && coords[e].isArr) e++;
-      // Dibujar rayos para el segmento.
-      for (let i = s; i < e; i++) {
-        const p = Pfloor[i];
-        const dx = proj.vpX - p.x;
-        const dy = proj.horizonY - p.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist < 1) continue;
-        const nx = dx / dist, ny = dy / dist;
-        const fade = Math.min(1, (p.y - proj.horizonY) / (proj.nearY - proj.horizonY));
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(p.x + nx * dist, p.y + ny * dist);
-        ctx.strokeStyle = `rgba(${C.arr}, ${(0.08 + 0.12 * fade).toFixed(3)})`;
-        ctx.lineWidth = 1.5 + 1.5 * fade;
-        ctx.stroke();
-      }
-      // Etiqueta ARR en la fuga (cerca del horizonte, centrada en el segmento).
-      const midIdx = s + Math.floor((e - s) / 2);
-      const pMid = Pfloor[midIdx];
-      const dx = proj.vpX - pMid.x;
-      const dy = proj.horizonY - pMid.y;
+    for (let i = 0; i < n; i++) {
+      if (!coords[i].isArr) continue;
+      const p = Pfloor[i];
+      const dx = proj.vpX - p.x;
+      const dy = proj.horizonY - p.y;
       const dist = Math.hypot(dx, dy);
-      if (dist > 1) {
-        const nx = dx / dist, ny = dy / dist;
-        // Posición 75% hacia la fuga.
-        const labelX = pMid.x + nx * dist * 0.75;
-        const labelY = pMid.y + ny * dist * 0.75;
-        ctx.font = `bold 10px ${FONT}`;
-        ctx.fillStyle = `rgba(${C.arr}, 0.95)`;
-        ctx.textAlign = 'center';
-        ctx.shadowColor = `rgba(0,0,0,0.8)`;
-        ctx.shadowBlur = 4;
-        ctx.fillText('ARR', labelX, labelY);
-        ctx.shadowBlur = 0;
-      }
-      s = e;
+      if (dist < 1) continue;
+      const nx = dx / dist, ny = dy / dist;
+      const fade = Math.min(1, (p.y - proj.horizonY) / (proj.nearY - proj.horizonY));
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x + nx * dist, p.y + ny * dist);
+      ctx.strokeStyle = `rgba(${C.arr}, ${(0.08 + 0.12 * fade).toFixed(3)})`;
+      ctx.lineWidth = 1.5 + 1.5 * fade;
+      ctx.stroke();
     }
   }
 
