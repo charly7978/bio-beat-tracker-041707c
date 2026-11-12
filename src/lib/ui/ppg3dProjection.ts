@@ -320,6 +320,52 @@ export function drawWaveRibbon3D(
     }
   }
 
+  // 1b) Rayos rojos de arritmia desde el piso hacia la fuga + etiqueta ARR en la fuga.
+  if (revealed) {
+    let s = 0;
+    while (s < n) {
+      if (!coords[s].isArr) { s++; continue; }
+      let e = s;
+      while (e < n && coords[e].isArr) e++;
+      // Dibujar rayos para el segmento.
+      for (let i = s; i < e; i++) {
+        const p = Pfloor[i];
+        const dx = proj.vpX - p.x;
+        const dy = proj.horizonY - p.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 1) continue;
+        const nx = dx / dist, ny = dy / dist;
+        const fade = Math.min(1, (p.y - proj.horizonY) / (proj.nearY - proj.horizonY));
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x + nx * dist, p.y + ny * dist);
+        ctx.strokeStyle = `rgba(${C.arr}, ${(0.08 + 0.12 * fade).toFixed(3)})`;
+        ctx.lineWidth = 1.5 + 1.5 * fade;
+        ctx.stroke();
+      }
+      // Etiqueta ARR en la fuga (cerca del horizonte, centrada en el segmento).
+      const midIdx = s + Math.floor((e - s) / 2);
+      const pMid = Pfloor[midIdx];
+      const dx = proj.vpX - pMid.x;
+      const dy = proj.horizonY - pMid.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 1) {
+        const nx = dx / dist, ny = dy / dist;
+        // Posición 75% hacia la fuga.
+        const labelX = pMid.x + nx * dist * 0.75;
+        const labelY = pMid.y + ny * dist * 0.75;
+        ctx.font = `bold 10px ${FONT}`;
+        ctx.fillStyle = `rgba(${C.arr}, 0.95)`;
+        ctx.textAlign = 'center';
+        ctx.shadowColor = `rgba(0,0,0,0.8)`;
+        ctx.shadowBlur = 4;
+        ctx.fillText('ARR', labelX, labelY);
+        ctx.shadowBlur = 0;
+      }
+      s = e;
+    }
+  }
+
   // 2) Cara superior de la cinta (entre cresta frontal y trasera) → grosor 3D.
   if (revealed) {
     ctx.beginPath();
@@ -432,32 +478,6 @@ export function drawWaveRibbon3D(
           ctx.strokeStyle = `rgba(${C.arr}, 0.65)`;
           ctx.lineWidth = 1.4;
           ctx.stroke();
-          // Rayo rojo desde el piso del pico ARR hacia la fuga.
-          const fp = Pfloor[i];
-          const dx = proj.vpX - fp.x;
-          const dy = proj.horizonY - fp.y;
-          const d = Math.hypot(dx, dy);
-          if (d > 1) {
-            const nx = dx / d, ny = dy / d;
-            const fade = Math.min(1, (fp.y - proj.horizonY) / (proj.nearY - proj.horizonY));
-            ctx.beginPath();
-            ctx.moveTo(fp.x, fp.y);
-            ctx.lineTo(fp.x + nx * d, fp.y + ny * d);
-            ctx.strokeStyle = `rgba(${C.arr}, ${(0.35 + 0.45 * fade).toFixed(3)})`;
-            ctx.lineWidth = 2 + 3 * fade;
-            ctx.shadowColor = `rgba(${C.arr}, 0.4)`;
-            ctx.shadowBlur = 6;
-            ctx.stroke();
-            ctx.shadowBlur = 0;
-            // Etiqueta ARR en la fuga (75% del camino).
-            ctx.font = `bold 10px ${FONT}`;
-            ctx.fillStyle = `rgba(${C.arr}, 0.90)`;
-            ctx.textAlign = 'center';
-            ctx.shadowColor = `rgba(0,0,0,0.8)`;
-            ctx.shadowBlur = 4;
-            ctx.fillText('ARR', fp.x + nx * d * 0.75, fp.y + ny * d * 0.75);
-            ctx.shadowBlur = 0;
-          }
         }
       }
 
