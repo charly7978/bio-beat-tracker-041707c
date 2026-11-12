@@ -23,8 +23,8 @@ export type MeasurementStatus =
 
 export interface SignalQualityMetrics {
   sqi: number;           // 0..100
-  perfusionIndex: number; // Fracción AC/DC (típico 0.0005–0.02; NO porcentaje)
-  snr: number | null;     // Amplitud de modulación pulsátil ×1000 (0–~70; NO dB)
+  perfusionIndex: number; // 0..20
+  snr: number | null;
   periodicity: number | null;
   motionScore: number | null;
   saturationRatio: number;
@@ -37,10 +37,9 @@ export interface SignalQualityMetrics {
   elgendiConfidence?: number | null;
   /** Acuerdo espectral/estructural de picos (0–1) */
   detectorAgreement?: number | null;
-  /** Skewness de señal (Fisher-Pearson g1): >0 = PPG limpio, ~0 = ruido simétrico (Elgendi 2016) */
+  /** Skewness de señal: >0 = PPG limpio, ~0 = ruido simétrico (Elgendi 2016) */
   skewness?: number;
-  /** Kurtosis de señal en EXCESO (β₂−3; 0 = gaussiana, >0 = picos agudos, <0 = ruido plano).
-   *  Escala obligatoria: los umbrales KURTOSIS_SQI_* y computeWindowMoments usan este convenio. */
+  /** Kurtosis de señal: alta = picos agudos, baja = ruido plano */
   kurtosis?: number;
   /** Hjorth parameters: activity, mobility, complexity */
   hjorthActivity?: number;

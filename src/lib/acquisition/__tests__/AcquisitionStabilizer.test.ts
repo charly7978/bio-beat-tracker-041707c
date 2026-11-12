@@ -3,6 +3,7 @@ import {
   createAcquisitionState,
   updateAcquisition,
   instantAcquisitionConfidence,
+  isAcquisitionReady,
   type AcquisitionSample,
 } from '../AcquisitionStabilizer';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
@@ -53,6 +54,7 @@ describe('AcquisitionStabilizer', () => {
     expect(s.stage).toBe('SEARCHING');
     expect(s.confidence).toBe(0);
     expect(s.progress).toBe(0);
+    expect(isAcquisitionReady(s)).toBe(false);
   });
 
   it('instantAcquisitionConfidence: buenas métricas → alta, nulas → 0', () => {
@@ -60,39 +62,10 @@ describe('AcquisitionStabilizer', () => {
     expect(instantAcquisitionConfidence(poorSample())).toBe(0);
   });
 
-  it('el movimiento alto degrada la confianza con métricas mediocres', () => {
-    // Con métricas medias + alto movimiento, la confianza baja (adaptativa NO compensa todo)
-    const mediocre = instantAcquisitionConfidence(goodSample({
-      perfusionIndex: 0.001,
-      periodicity: 0.2,
-      sqi: 20,
-      coverageRatio: 0.05,
-      motionScore: 1.2,
-    }));
-    const stillMediocre = instantAcquisitionConfidence(goodSample({
-      perfusionIndex: 0.001,
-      periodicity: 0.2,
-      sqi: 20,
-      coverageRatio: 0.05,
-      motionScore: 0.1,
-    }));
-    expect(mediocre).toBeLessThan(stillMediocre);
-  });
-
-  it('el movimiento alto NO anula la confianza con métricas buenas (adaptativo)', () => {
-    // Con métricas buenas + alto movimiento, adaptive compensa → confianza alta
+  it('el movimiento alto degrada la confianza instantánea', () => {
+    const still = instantAcquisitionConfidence(goodSample({ motionScore: 0.1 }));
     const shaky = instantAcquisitionConfidence(goodSample({ motionScore: 1.2 }));
-    expect(shaky).toBeGreaterThan(0.4);
-  });
-
-  it('factor adaptativo: motion 0 → 1.0 (estricto), motion alto → ~0.55 (relajado)', () => {
-    // motionScore = 0 → sin penalización de umbral
-    const s1 = instantAcquisitionConfidence(goodSample({ motionScore: 0 }));
-    // motionScore = 1.2 → umbrales relajados, confianza compensada
-    const s2 = instantAcquisitionConfidence(goodSample({ motionScore: 1.2 }));
-    // Ambos deben ser altos con métricas buenas (adaptativo previene caída excesiva)
-    expect(s1).toBeGreaterThan(0.9);
-    expect(s2).toBeGreaterThan(0.4);
+    expect(shaky).toBeLessThan(still);
   });
 
   it('sin contacto se mantiene en SEARCHING y la confianza decae', () => {
@@ -122,6 +95,7 @@ describe('AcquisitionStabilizer', () => {
       updateAcquisition(s, goodSample());
     }
     expect(s.stage).toBe('READY');
+    expect(isAcquisitionReady(s)).toBe(true);
     expect(s.progress).toBeGreaterThan(0.9);
   });
 

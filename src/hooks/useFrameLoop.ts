@@ -10,26 +10,31 @@ interface UseFrameLoopInput {
 }
 
 /**
- * Bucle de captura ligado al frame del vídeo (`requestVideoFrameCallback` con
- * respaldo `requestAnimationFrame` throttleado), con garantías honestas:
- *
- * - El callback RVFC se cancela SIEMPRE sobre el MISMO elemento <video> que lo
- *   registró (se conserva referencia vinculada); cambiar de cámara sin esto
- *   dejaba callbacks huérfanos del vídeo anterior.
- * - Fotogramas duplicados o antiguos (misma marca temporal o retroceso del
- *   reloj) se descartan antes de llegar al worker: evita procesar dos veces el
- *   mismo frame y corromper la estimación de FPS/jitter. O(1) por frame.
- * - `lastTs` se resetea en cada arranque para no descartar el primer frame
- *   tras un cambio de cámara.
+ * Firma barata del contenido del frame = suma ponderada de los canales verde y
+ * rojo sobre una grilla dispersa (~1 de cada 16 px). Dos canales combinados
+ * reducen colisiones: un cambio en luminancia (afecta a ambos) se distingue de
+ * un cambio cromático puro. Permite descartar FRAMES DUPLICADOS (el dispositivo
+ * entrega ~30 fps reales pero rAF dispara ~60 → la mitad de los frames son
+ * idénticos → valor repetido → onda escalonada + sample-rate mal estimado).
  */
+function frameSignature(img: ImageData): number {
+  const d = img.data;
+  const n = d.length;
+  let sumG = 0, sumR = 0;
+  for (let i = 0; i < n; i += 64) {
+    sumR += d[i];       // canal rojo
+    sumG += d[i + 1];   // canal verde
+  }
+  return sumR * 1e4 + sumG;
+}
+
 export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: UseFrameLoopInput) {
   const frameLoopRef = useRef<number | null>(null);
   const videoFrameLoopRef = useRef<number | null>(null);
-  /** Vídeo sobre el que se registró el RVFC pendiente (cancelación correcta). */
-  const boundVideoRef = useRef<HTMLVideoElement | null>(null);
   const isProcessingRef = useRef(false);
+  const lastFrameSigRef = useRef<number>(-1);
+  const duplicateStreakRef = useRef<number>(0);
   const lastRafTsRef = useRef<number>(0);
-  const lastFrameTsRef = useRef<number>(-Infinity);
 
   const startFrameLoop = useCallback(() => {
     if (isProcessingRef.current) return;
@@ -37,9 +42,9 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
     const ctx = ctxRef.current;
     if (!canvas || !ctx) return;
     isProcessingRef.current = true;
+    lastFrameSigRef.current = -1;
+    duplicateStreakRef.current = 0;
     lastRafTsRef.current = 0;
-    lastFrameTsRef.current = -Infinity;
-    boundVideoRef.current = null;
 
     const captureOneFrame = (frameTimestampMs?: number) => {
       if (!isProcessingRef.current) return;
@@ -48,27 +53,18 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
         frameLoopRef.current = requestAnimationFrame(captureOneFrame);
         return;
       }
-      // Si el elemento cambió bajo nuestros pies (cambio de cámara), el loop
-      // viejo se detiene: el nuevo arranque es el único dueño del pipeline.
-      if (boundVideoRef.current !== null && boundVideoRef.current !== video) {
-        return;
-      }
-      const ts =
-        typeof frameTimestampMs === 'number' && Number.isFinite(frameTimestampMs)
-          ? frameTimestampMs
-          : performance.now();
-      // Descarta duplicados/antiguos: el worker solo ve tiempo monotónico
-      // estrictamente creciente. Sin esto, un rAF repetido tras RVFC
-      // procesaba el mismo frame dos veces (FPS inflado, jitter falso).
-      if (!(ts > lastFrameTsRef.current)) {
-        scheduleNext(video);
-        return;
-      }
-      lastFrameTsRef.current = ts;
       try {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        processFrame(imageData, ts);
+        // Descarta frames DUPLICADOS (idénticos al anterior)
+        const sig = frameSignature(imageData);
+        if (sig === lastFrameSigRef.current && duplicateStreakRef.current < 90) {
+          duplicateStreakRef.current++;
+        } else {
+          duplicateStreakRef.current = 0;
+          lastFrameSigRef.current = sig;
+          processFrame(imageData, frameTimestampMs);
+        }
       } catch {
         logWarn('useFrameLoop', 'drawImage/getImageData failed (video teardown)');
       }
@@ -81,7 +77,6 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
         requestVideoFrameCallback?: (cb: (now: number, metadata: VideoFrameCallbackMetadata) => void) => number;
       };
       if (typeof vAny.requestVideoFrameCallback === 'function') {
-        boundVideoRef.current = video;
         videoFrameLoopRef.current = vAny.requestVideoFrameCallback((now, metadata) => {
           ppgPerf.markFrame(metadata);
           const ts =
@@ -91,7 +86,6 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
           captureOneFrame(ts);
         });
       } else {
-        boundVideoRef.current = null;
         const tick = (ts: number) => {
           if (!isProcessingRef.current) return;
           if (ts - lastRafTsRef.current < 28) {
@@ -111,21 +105,11 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
 
   const stopFrameLoop = useCallback(() => {
     isProcessingRef.current = false;
-    // Cancelar sobre el vídeo vinculado (no sobre el actual, que puede ser otro
-    // tras un cambio de cámara): así no quedan callbacks huérfanos emitiendo.
-    const bound = boundVideoRef.current as (HTMLVideoElement & { cancelVideoFrameCallback?: (handle: number) => void }) | null;
-    if (videoFrameLoopRef.current !== null && bound && typeof bound.cancelVideoFrameCallback === 'function') {
-      try { bound.cancelVideoFrameCallback(videoFrameLoopRef.current); } catch { logWarn('useFrameLoop', 'cancelVideoFrameCallback failed'); }
-      videoFrameLoopRef.current = null;
-    } else if (videoFrameLoopRef.current !== null) {
-      const video = cameraRef.current?.getVideoElement() as (HTMLVideoElement & { cancelVideoFrameCallback?: (handle: number) => void }) | null;
-      if (video && typeof video.cancelVideoFrameCallback === 'function') {
-        try { video.cancelVideoFrameCallback(videoFrameLoopRef.current); } catch { logWarn('useFrameLoop', 'cancelVideoFrameCallback failed'); }
-      }
+    const video = cameraRef.current?.getVideoElement() as (HTMLVideoElement & { cancelVideoFrameCallback?: (handle: number) => void }) | null;
+    if (videoFrameLoopRef.current !== null && typeof video?.cancelVideoFrameCallback === 'function') {
+      video.cancelVideoFrameCallback(videoFrameLoopRef.current);
       videoFrameLoopRef.current = null;
     }
-    boundVideoRef.current = null;
-    lastFrameTsRef.current = -Infinity;
     if (frameLoopRef.current) {
       cancelAnimationFrame(frameLoopRef.current);
       frameLoopRef.current = null;

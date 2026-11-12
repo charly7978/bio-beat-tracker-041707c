@@ -2,19 +2,6 @@
  * Pre-trained Multi-Layer Perceptron (MLP) weights for Blood Pressure estimation.
  * Generated automatically by training/train_bp_mlp.py.
  * Do not edit manually.
- *
- * PROCEDENCIA (auditoría 2026-10 — divulgación obligatoria):
- * Entrenado con `training/train_bp_mlp.py` sobre datos SINTÉTICOS: 5000 muestras
- * de features uniformes (seed 42) con targets generados por fórmulas
- * fisiológicas aproximadas (edad/BIM/stiffness/Hr), NO con mediciones de
- * pacientes ni con datos clínicos reales. Precisión clínica NO validada.
- *
- * Consecuencia de diseño: este MLP solo se usa como UNO de los dos estimadores
- * del motor BP (fusión calidad-ponderada con el modelo físico Windkessel en
- * `pwaPhysiologicalBpEngine`), toda lectura sin calibración de referencia se
- * marca REQUIRES_CALIBRATION, y la app declara la PA como estimación
- * orientativa (ver docs/ARCHITECTURE.md y docs/medical-validation.md).
- * No presentar como medición clínica bajo ninguna circunstancia.
  */
 
 export const MLP_WEIGHTS = {

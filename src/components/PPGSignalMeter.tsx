@@ -1,7 +1,11 @@
-import React, { useEffect, useRef, useCallback, useLayoutEffect, useImperativeHandle } from 'react';
+import React, { useEffect, useRef, useCallback, useState, useLayoutEffect, useImperativeHandle } from 'react';
 import { CircularBuffer } from '../utils/CircularBuffer';
 import { isNative } from '@/lib/device/platform';
 import { calculateHRV, isPhysiologicalRR } from '../utils/physio';
+import {
+  DISPLAY_SMOOTH_ALPHAS,
+  lerpDisplayValue,
+} from '@/lib/measurement/displaySmoothing';
 import {
   TARGET_FPS,
   BUFFER_SIZE,
@@ -13,6 +17,7 @@ import {
   drawHeader,
   drawMetricsBar,
   drawECGGrid,
+  drawPressureGauge,
   drawSignal,
   drawAcquisitionOverlay,
   drawTrendStrip,
@@ -21,14 +26,14 @@ import {
 import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
 import { usePpg3dSettings } from '@/store/ppg3dSettings';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
+import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
+import { Ppg3DToggle } from './Ppg3DToggle';
 
 export interface PPGSignalMeterProps {
   value: number;
   quality: number;
   isFingerDetected: boolean;
-  measurementMode?: 'finger' | 'gym';
-  faceDetected?: boolean;
   onStartMeasurement: () => void;
   onReset: () => void;
   isMonitoring?: boolean;
@@ -50,10 +55,6 @@ export interface PPGSignalMeterProps {
   arrhythmiaCount?: number;
   contactState?: string;
   acquisitionStatus?: string;
-  getVideoElement?: () => HTMLVideoElement | HTMLCanvasElement | null;
-  encryptionReady?: boolean;
-  healthAvail?: 'yes' | 'no' | 'checking';
-  riskResult?: string | null;
   diagnostics?: {
     status?: string;
     message?: string;
@@ -82,33 +83,22 @@ export interface PPGSignalMeterHandle {
   clearBuffer: () => void;
 }
 
-let cachedSafeAreaBottom: number | null = null;
 function getSafeAreaBottom(): number {
   if (typeof document === 'undefined') return 0;
-  if (cachedSafeAreaBottom !== null) return cachedSafeAreaBottom;
-  try {
-    const div = document.createElement('div');
-    div.style.paddingBottom = 'env(safe-area-inset-bottom, 0px)';
-    div.style.position = 'absolute';
-    div.style.visibility = 'hidden';
-    document.body.appendChild(div);
-    const offset = parseInt(window.getComputedStyle(div).paddingBottom, 10) || 0;
-    document.body.removeChild(div);
-    cachedSafeAreaBottom = offset;
-    return offset;
-  } catch {
-    return 0;
-  }
+  const div = document.createElement('div');
+  div.style.paddingBottom = 'env(safe-area-inset-bottom, 0px)';
+  div.style.position = 'absolute';
+  div.style.visibility = 'hidden';
+  document.body.appendChild(div);
+  const offset = parseInt(window.getComputedStyle(div).paddingBottom, 10) || 0;
+  document.body.removeChild(div);
+  return offset;
 }
-
-const TRACE_REVEALED_DEFAULT = false;
 
 const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProps>(({
   value,
   quality,
   isFingerDetected,
-  measurementMode = 'finger',
-  faceDetected = false,
   onStartMeasurement,
   onReset,
   isMonitoring = false,
@@ -126,31 +116,28 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   arrhythmiaCount = 0,
   contactState,
   acquisitionStatus,
-  getVideoElement,
-  encryptionReady = false,
-  healthAvail = 'no',
-  riskResult = null,
   diagnostics,
 }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const animationRef = useRef<number | null>(null);
   const isRunningRef = useRef(false);
   const dataBufferRef = useRef<CircularBuffer | null>(null);
 
   const propsRef = useRef({
-    value, quality, isFingerDetected, measurementMode, faceDetected, isMonitoring, arrhythmiaStatus,
+    value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus,
     arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals,
     rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus,
-    contactState, acquisitionStatus, getVideoElement, diagnostics,
+    contactState, acquisitionStatus, diagnostics,
   });
 
   const sweepPulseRef = useRef(0);
+  const lastPeakTimeRef = useRef(0);
   const lastPeakProcessedRef = useRef(0);
   const arrActiveUntilRef = useRef(0);
   /** Latch: la onda se revela solo cuando la adquisición llega a READY (señal estable). */
-  const traceRevealedRef = useRef(TRACE_REVEALED_DEFAULT);
+  const traceRevealedRef = useRef(false);
+  const [showPulse, setShowPulse] = useState(false);
 
   const lastArrhythmiaCountRef = useRef(0);
   const beatHistoryRef = useRef<{ isArrhythmia: boolean; time: number; rr: number }[]>([]);
@@ -171,13 +158,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const waveGainRef = useRef(4.2);
 
   useImperativeHandle(ref, () => ({
-    pushSignal: (val: number, ts?: number) => {
+    pushSignal: (val: number, _ts: number) => {
       if (!dataBufferRef.current) return;
       const scaledValue = val * waveGainRef.current;
-      // Dominio temporal del canvas: reloj de pared (coherente con `state.now`
-      // y la ventana de tendencia del renderer). Se honra el timestamp
-      // provisto cuando es finito; antes se ignoraba siempre.
-      const now = typeof ts === 'number' && Number.isFinite(ts) ? ts : Date.now();
+      const now = Date.now();
       const isArrhythmia = now < arrActiveUntilRef.current;
       dataBufferRef.current.push({
         time: now,
@@ -201,10 +185,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
 
   useEffect(() => {
     propsRef.current = {
-      value, quality, isFingerDetected, measurementMode, faceDetected, isMonitoring, arrhythmiaStatus,
+      value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus,
       arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals,
       rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus,
-      contactState, acquisitionStatus, getVideoElement, diagnostics,
+      contactState, acquisitionStatus, diagnostics,
     };
 
     if (rrIntervals && rrIntervals.length >= 2) {
@@ -259,29 +243,37 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         bpmTrendRef.current = bpmTrendRef.current.slice(-TREND_MAX_POINTS);
       }
     }
-
-    const isPresent = measurementMode === 'gym' ? (faceDetected || isFingerDetected) : isFingerDetected;
-    if (!isPresent && !preserveResults) {
+    if (!isFingerDetected && !preserveResults) {
       bpmStatsRef.current = { min: 0, max: 0, sum: 0, n: 0 };
       bpmTrendRef.current = [];
       pendingTrendArrRef.current = false;
       smoothedBpmRef.current = 0;
     }
 
-    if (!isPresent && !preserveResults) {
+    if (!isFingerDetected && !preserveResults) {
       displayBpmRef.current = 0;
       displaySpo2Ref.current = 0;
       displaySysRef.current = 0;
       displayDiaRef.current = 0;
     }
   }, [
-    value, quality, isFingerDetected, measurementMode, faceDetected, arrhythmiaStatus, preserveResults,
+    value, quality, isFingerDetected, arrhythmiaStatus, preserveResults,
     isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime,
     perfusionIndex, pressure, bpStatus, arrhythmiaCount, isMonitoring,
-    contactState, acquisitionStatus, diagnostics, getVideoElement,
+    contactState, acquisitionStatus, diagnostics,
   ]);
 
-
+  useEffect(() => {
+    if (isPeak && isFingerDetected) {
+      const now = Date.now();
+      if (now - lastPeakTimeRef.current > 250) {
+        lastPeakTimeRef.current = now;
+        setShowPulse(true);
+        const t = window.setTimeout(() => setShowPulse(false), 120);
+        return () => window.clearTimeout(t);
+      }
+    }
+  }, [isPeak, isFingerDetected]);
 
   useEffect(() => {
     if (!dataBufferRef.current) {
@@ -290,18 +282,17 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   }, []);
 
   useEffect(() => {
-    const isPresent = measurementMode === 'gym' ? (faceDetected || isFingerDetected) : isFingerDetected;
-    if (preserveResults && !isPresent) {
+    if (preserveResults && !isFingerDetected) {
       dataBufferRef.current?.clear();
     }
-  }, [preserveResults, isFingerDetected, faceDetected, measurementMode]);
+  }, [preserveResults, isFingerDetected]);
 
   const recomputeLayout = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
     const rect = container.getBoundingClientRect();
-    const maxDpr = isNative() ? 1.5 : 2.0;
+    const maxDpr = isNative() ? 1.5 : 2.5;
     const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
     const cssW = Math.max(320, Math.floor(rect.width));
     const cssH = Math.max(480, Math.floor(rect.height));
@@ -310,31 +301,26 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     canvas.style.width = `${cssW}px`;
     canvas.style.height = `${cssH}px`;
     const ctx = canvas.getContext('2d', { alpha: false });
-    if (ctx) {
-      ctxRef.current = ctx;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'medium';
-    }
+    if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const header = { x: 0, y: 0, w: cssW, h: 40 };
-    const metricsH = Math.max(90, Math.min(106, Math.round(cssH * 0.11)));
+    const header = { x: 0, y: 0, w: cssW, h: 36 };
+    const metricsH = Math.max(92, Math.min(108, Math.round(cssH * 0.11)));
     const metrics = { x: 0, y: header.h, w: cssW, h: metricsH };
 
-    const lowerH = Math.max(64, Math.min(82, Math.round(cssH * 0.09)));
+    const lowerH = Math.max(88, Math.min(130, Math.round(cssH * 0.15)));
     const footerH = 46;
     const safeAreaBottom = getSafeAreaBottom();
-    const buttonsH = 88 + safeAreaBottom; // Bottom clinical deck unificado
+    const buttonsH = 48 + safeAreaBottom;
     const plotY = header.h + metricsH;
     const plotH = cssH - plotY - lowerH - footerH - buttonsH;
 
     const plotX = 12;
     const plotW = cssW - plotX * 2;
-    const plot = { x: plotX, y: plotY + 4, w: plotW, h: Math.max(160, plotH - 4), centerY: 0 };
+    const plot = { x: plotX, y: plotY + 6, w: plotW, h: Math.max(180, plotH - 6), centerY: 0 };
     plot.centerY = plot.y + plot.h / 2;
 
     const lowerY = plot.y + plot.h + 4;
-    const trend = { x: plotX, y: lowerY, w: plotW, h: Math.max(56, lowerH - 4) };
+    const trend = { x: plotX, y: lowerY, w: plotW, h: Math.max(64, lowerH - 4) };
 
     const footer = { x: 0, y: cssH - buttonsH - footerH, w: cssW, h: footerH };
 
@@ -342,17 +328,13 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   }, []);
 
   useLayoutEffect(() => {
-    const handleOrientation = () => {
-      cachedSafeAreaBottom = null;
-      recomputeLayout();
-    };
     recomputeLayout();
     const ro = new ResizeObserver(() => recomputeLayout());
     if (containerRef.current) ro.observe(containerRef.current);
-    window.addEventListener('orientationchange', handleOrientation);
+    window.addEventListener('orientationchange', recomputeLayout);
     return () => {
       ro.disconnect();
-      window.removeEventListener('orientationchange', handleOrientation);
+      window.removeEventListener('orientationchange', recomputeLayout);
     };
   }, [recomputeLayout]);
 
@@ -371,14 +353,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         animationRef.current = requestAnimationFrame(render);
         return;
       }
-      let ctx = ctxRef.current;
+      const ctx = canvas.getContext('2d', { alpha: false });
       if (!ctx) {
-        ctx = canvas.getContext('2d', { alpha: false });
-        if (!ctx) {
-          animationRef.current = requestAnimationFrame(render);
-          return;
-        }
-        ctxRef.current = ctx;
+        animationRef.current = requestAnimationFrame(render);
+        return;
       }
       const now = Date.now();
       if (now - lastRenderTime < frameTime) {
@@ -388,18 +366,24 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       lastRenderTime = now;
 
       const p = propsRef.current;
-      const fingerOn = p.measurementMode === 'gym' ? (p.faceDetected ?? p.isFingerDetected) : p.isFingerDetected;
+      const fingerOn = p.isFingerDetected;
       const preserve = p.preserveResults;
       const targetBpm = !fingerOn && !preserve ? 0 : Math.max(0, p.bpm ?? 0);
       const targetSpo2 = fingerOn || preserve ? p.spo2 ?? 0 : 0;
       const targetSys = fingerOn || preserve ? p.pressure?.systolic ?? 0 : 0;
       const targetDia = fingerOn || preserve ? p.pressure?.diastolic ?? 0 : 0;
-      // Suavizado único en useSignalRouter.applyLiveDisplaySmooth: aquí solo se
-      // refleja el valor ya suavizado (evita doble EMA que retrasaba la lectura).
-      displayBpmRef.current = targetBpm;
-      displaySpo2Ref.current = targetSpo2;
-      displaySysRef.current = targetSys;
-      displayDiaRef.current = targetDia;
+      displayBpmRef.current = Math.round(
+        lerpDisplayValue(displayBpmRef.current, targetBpm, DISPLAY_SMOOTH_ALPHAS.hr),
+      );
+      displaySpo2Ref.current = Math.round(
+        lerpDisplayValue(displaySpo2Ref.current, targetSpo2, DISPLAY_SMOOTH_ALPHAS.spo2),
+      );
+      displaySysRef.current = Math.round(
+        lerpDisplayValue(displaySysRef.current, targetSys, DISPLAY_SMOOTH_ALPHAS.bp),
+      );
+      displayDiaRef.current = Math.round(
+        lerpDisplayValue(displayDiaRef.current, targetDia, DISPLAY_SMOOTH_ALPHAS.bp),
+      );
 
       // La onda se muestra SIEMPRE, con altura honesta (signalStrength). El latch
       // solo controla el indicador fino de progreso (barra), que desaparece al
@@ -426,14 +410,12 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         layout: layoutRef.current,
         props: {
           value: p.value, quality: p.quality, isFingerDetected: p.isFingerDetected,
-          measurementMode: p.measurementMode, faceDetected: p.faceDetected,
           isMonitoring: p.isMonitoring, isPeak: p.isPeak ?? false, preserveResults: p.preserveResults,
           bpm: p.bpm, spo2: p.spo2 ?? 0, rrIntervals: p.rrIntervals ?? [],
           elapsedTime: p.elapsedTime ?? 0, perfusionIndex: p.perfusionIndex ?? 0,
           pressure: p.pressure, bpStatus: p.bpStatus,
           arrhythmiaStatus: p.arrhythmiaStatus, arrhythmiaCount: p.arrhythmiaCount ?? 0,
           contactState: p.contactState, acquisitionStatus: p.acquisitionStatus,
-          getVideoElement: p.getVideoElement,
           diagnostics: p.diagnostics,
         },
         now,
@@ -464,13 +446,12 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       drawMetricsBar(ctx, renderState);
       if (threeDState.enabled) {
         drawGrid3D(ctx, renderState);
+        drawPressureGauge(ctx, renderState);
       } else {
         drawECGGrid(ctx, renderState);
       }
-      // Dibuja la lente óptica transparente del dedo en el fondo del monitor cardíaco
-      drawAcquisitionOverlay(ctx, renderState);
-      // Dibuja las ondas cardíacas en primer plano por encima de la lente
       drawSignal(ctx, renderState);
+      drawAcquisitionOverlay(ctx, renderState);
       drawTrendStrip(ctx, renderState);
       drawFooter(ctx, renderState);
 
@@ -519,16 +500,15 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
       />
+      <PulseIndicator showPulse={showPulse} />
+      <Ppg3DToggle />
       <ActionButtons
         isMonitoring={isMonitoring}
         onStartMeasurement={onStartMeasurement}
         onReset={handleReset}
-        encryptionReady={encryptionReady}
-        healthAvail={healthAvail}
-        riskResult={riskResult}
       />
     </div>
   );
 });
 
-export default React.memo(PPGSignalMeter);
+export default PPGSignalMeter;

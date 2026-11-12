@@ -1,16 +1,15 @@
 /**
- * Detector de picos sistólicos PPG basado en Elgendi et al. (TERMA canónico + bloques de interés).
- * Implementación de vanguardia SOTA:
- *  - Dos medias móviles de eventos (W1 = pico sistólico ~111 ms, W2 = latido ~600 ms).
- *  - Umbral adaptativo: THR = MA_beat + beta * mean(Energy).
- *  - Búsqueda del máximo local exacto dentro de cada bloque de interés.
- *  - Periodo refractario fisiológico de 280 ms sin descarte erróneo por intervalos largos.
+ * Detector de picos sistólicos PPG inspirado en Elgendi et al. (TMA + bloques de interés).
+ * Entrada: señal PPG (idealmente filtrada); salida: índices/tiempos con diagnóstico auditable.
+ *
+ * Optimizado: sliding MA O(n) con suma acumulativa, arrays pre-asignados.
  */
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
 import { clamp } from '../../../utils/math';
-import { median, skewness } from '../../../utils/stats';
+import { skewness } from '../../../utils/stats';
 import {
+  bandpassOffline,
   detrendLinear,
   hampel1D,
   prepareUniformPpgWindow,
@@ -100,50 +99,55 @@ export class ElgendiPeakDetector {
       }
     }
 
-    // Acondicionamiento canónico Elgendi: filtro Hampel contra spikes + detrending lineal + normalización
     const hampelWin = Math.max(5, Math.round(fs * 0.25) | 1);
     const cleaned = hampel1D(sig, hampelWin, 3);
-    const detrended = detrendLinear(cleaned);
-    const x = robustNormalizeZeroCenter(detrended);
+    let x = bandpassOffline(detrendLinear(cleaned), fs);
+    x = robustNormalizeZeroCenter(x);
 
+    // SQI por skewness (Elgendi 2016) sobre la señal filtrada — PPG limpio tiene
+    // skewness positiva; ruido/movimiento, ≈0 o negativa. Se reporta para que el
+    // ensemble lo use como penalización suave de confianza (anti falsos positivos).
     const signalSkewness = skewness(x);
 
-    // Ventanas temporales TERMA
     const w1 = Math.max(3, Math.round((peakMs / 1000) * fs));
     const w2 = Math.max(w1 + 2, Math.round((beatMs / 1000) * fs));
 
-    // Cuadrado de la señal positiva (realza los picos sistólicos sobre la línea base)
+    // Energy signal + MA pre-alloc
     const energy = new Array<number>(n);
-    let meanEnergy = 0;
     for (let i = 0; i < n; i++) {
       const p = x[i] > 0 ? x[i] : 0;
-      const e = p * p;
-      energy[i] = e;
-      meanEnergy += e;
+      energy[i] = p * p;
     }
-    meanEnergy = n > 0 ? meanEnergy / n : 0;
 
     const maPeak = new Array<number>(n);
     const maBeat = new Array<number>(n);
     slidingMA(energy, w1, maPeak);
     slidingMA(energy, w2, maBeat);
 
-    // Umbral adaptativo Elgendi
-    const beta = PEAK_DETECTION_DEFAULTS.beatOffset * (offsetW / PEAK_DETECTION_DEFAULTS.offsetWeight);
+    // Umbral Elgendi canónico (Elgendi 2013 / NeuroKit2):
+    //   THR1[n] = MA_beat[n] + β · media(energía)
+    // con β = beatOffset · (offsetW / offsetWeight_ref). La calibración por
+    // SQI/PI ajusta offsetW (β sube en señal pobre, baja en señal buena).
+    let meanEnergy = 0;
+    for (let i = 0; i < n; i++) meanEnergy += energy[i];
+    meanEnergy /= n;
+    const beta =
+      PEAK_DETECTION_DEFAULTS.beatOffset * (offsetW / PEAK_DETECTION_DEFAULTS.offsetWeight);
     const thrOffset = beta * meanEnergy;
+
+    const minDist = Math.max(1, Math.round((60000 / maxBpm / 1000) * fs));
+    const maxDist = Math.max(minDist + 1, Math.round((60000 / minBpm / 1000) * fs));
+    // Ancho mínimo del bloque de interés = W1 (peakwindow) — criterio canónico.
+    const minBlock = Math.max(2, w1);
+    const maxBlock = Math.ceil(maxDist * 1.25);
+    const maxPeaks = Math.ceil(n / minDist) + 2;
 
     const thr = new Array<number>(n);
     for (let i = 0; i < n; i++) {
       thr[i] = maBeat[i] + thrOffset;
     }
 
-    const minBlock = Math.max(2, Math.round(w1 * 0.8));
-    const maxDist = Math.max(minBlock + 2, Math.round((60000 / minBpm / 1000) * fs));
-    const maxBlock = Math.ceil(maxDist * 1.5);
-    const minDist = Math.max(2, Math.round((60000 / maxBpm / 1000) * fs));
-    const maxPeaks = Math.ceil(n / minDist) + 2;
-
-    // Detección de bloques de interés donde maPeak > thr
+    // Pre-alloc block detection
     const blocks: Array<{ start: number; end: number }> = [];
     let i = 0;
     while (i < n) {
@@ -152,11 +156,11 @@ export class ElgendiPeakDetector {
       while (i < n && maPeak[i] > thr[i]) i++;
       const end = i - 1;
       const len = end - start + 1;
-      if (len >= minBlock && len <= maxBlock) {
-        blocks.push({ start, end });
-      }
+      if (len < minBlock || len > maxBlock) continue;
+      blocks.push({ start, end });
     }
 
+    // Pre-alloc result arrays
     const rejectedCandidates: Array<{ index: number; reason: string }> = [];
     const peaks = new Array<number>(maxPeaks);
     const peakTimes = new Array<number>(maxPeaks);
@@ -164,46 +168,28 @@ export class ElgendiPeakDetector {
     const peakProms = new Array<number>(maxPeaks);
     let pk = 0;
 
-    // Periodo refractario fisiológico fijo (RR mínimo canónico: 270 ms)
-    const refractorySamples = Math.max(
-      3,
-      Math.round((PEAK_DETECTION_DEFAULTS.minPeakDistanceMs / 1000) * fs),
-    );
-
     for (let bi = 0; bi < blocks.length; bi++) {
       const b = blocks[bi];
       let best = b.start;
       let bestV = x[b.start];
       for (let j = b.start + 1; j <= b.end; j++) {
-        if (x[j] > bestV) {
-          bestV = x[j];
-          best = j;
-        }
+        if (x[j] > bestV) { bestV = x[j]; best = j; }
       }
 
-      // Cálculo de prominencia local
       const left = Math.max(0, best - minDist);
       const right = Math.min(n - 1, best + minDist);
       let localMin = x[best];
-      for (let j = left; j <= right; j++) {
-        if (x[j] < localMin) localMin = x[j];
-      }
+      for (let j = left; j <= right; j++) if (x[j] < localMin) localMin = x[j];
       const prom = bestV - localMin;
-      if (prom < minProm * PEAK_DETECTION_DEFAULTS.candidateProminenceScale) continue;
+      if (prom < minProm) continue;
 
       if (pk > 0) {
         const prev = peaks[pk - 1];
         const dist = best - prev;
-
-        // Comprobación de refractario
-        if (dist < refractorySamples) {
-          // Si dos candidatos están dentro del refractario, conservar el de mayor altura
-          if (x[best] > x[prev]) {
-            peaks[pk - 1] = best;
-            peakTimes[pk - 1] = ts[best] ?? ts[ts.length - 1];
-            peakValues[pk - 1] = sig[best] ?? 0;
-            peakProms[pk - 1] = prom;
-          }
+        if (dist < minDist) {
+          if (x[best] > x[prev]) { pk--; }
+          else { continue; }
+        } else if (dist > maxDist) {
           continue;
         }
       }
@@ -215,12 +201,17 @@ export class ElgendiPeakDetector {
       pk++;
     }
 
-    // Filtrado de picos por amplitud relativa sólo ante artefactos evidentes
-    if (pk >= 4) {
-      const medProm = median(peakProms.slice(0, pk));
+    // Rechazo relativo de amplitud: la muesca dícrota y el ruido tienen menor
+    // prominencia que el pico sistólico. Se descartan los picos por debajo de
+    // una fracción de la prominencia mediana (validado para reducir falsos
+    // positivos sin perder latidos reales con modulación respiratoria).
+    if (pk >= 3) {
+      const promsSorted = peakProms.slice(0, pk).sort((a, b) => a - b);
+      const medProm = promsSorted[Math.floor(promsSorted.length / 2)] ?? 0;
       const promFloor = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectFraction;
+      // Banda de amplitud: descarta picos demasiado bajos (dícrota/ruido) y
+      // demasiado altos (excursiones por micro-movimiento del dedo).
       const promCeil = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectUpper;
-
       if (medProm > 0) {
         let w = 0;
         for (let r = 0; r < pk; r++) {
@@ -240,6 +231,7 @@ export class ElgendiPeakDetector {
       }
     }
 
+    // Trim to actual count
     const outPeaks = peaks.slice(0, pk);
     const outPeakTimes = peakTimes.slice(0, pk);
     const outPeakValues = peakValues.slice(0, pk);
@@ -259,30 +251,29 @@ export class ElgendiPeakDetector {
     let rrRegularity = 0;
     if (rrCount >= 3) {
       let m = 0;
-      for (let k = 0; k < rrCount; k++) m += rrTrim[k];
+      for (let i = 0; i < rrCount; i++) m += rrTrim[i];
       m /= rrCount;
       let v = 0;
-      for (let k = 0; k < rrCount; k++) v += (rrTrim[k] - m) ** 2;
+      for (let i = 0; i < rrCount; i++) v += (rrTrim[i] - m) ** 2;
       v /= rrCount;
       const cv = Math.sqrt(v) / Math.max(1, m);
-      rrRegularity = clamp(1 - cv / 0.40, 0, 1);
+      rrRegularity = clamp(1 - cv / 0.35, 0, 1);
     }
 
     let confidence = rrCount > 0
-      ? clamp(rrCount / 4, 0, 1) * 0.45 +
-        clamp(pk / 5, 0, 1) * 0.35 +
-        rrRegularity * 0.20
-      : (pk > 0 ? 0.65 : 0);
-
+      ? clamp(rrCount / 6, 0, 1) * 0.4 +
+        clamp(pk / 8, 0, 1) * 0.3 +
+        rrRegularity * 0.3
+      : 0;
     if (typeof input.sqi === 'number' && input.sqi < PEAK_DETECTION_DEFAULTS.minSQI) {
-      confidence *= 0.7;
+      confidence *= 0.5;
     }
 
     return {
       peaks: outPeaks,
       peakTimes: outPeakTimes,
       peakValues: outPeakValues,
-      confidence: clamp(confidence, 0, 1),
+      confidence,
       rejectedCandidates,
       diagnostics: {
         blocks: blocks.length,

@@ -1,38 +1,16 @@
 import { PPGFeatureExtractor, CycleFeatures } from './PPGFeatureExtractor';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
-import { DSP_CONSTANTS } from '../../config/signalProcessing';
-import { isPhysiologicalRR, RR_MIN_MS } from '../../utils/physio';
+import { isPhysiologicalRR } from '../../utils/physio';
 import { median } from '../../utils/stats';
+import { resampleCubicUniform } from '../signal-processing/shared/dsp';
 import type { FingerPlacementMode } from '../../types/signal';
 import {
   estimatePhysiologicalBp,
   isPhysiologicalBp,
-  enforceHemodynamicCoherence,
   type AnthropometricProfile,
   type PwaMedianFeatures,
 } from '@/lib/vitals/pwaPhysiologicalBpEngine';
-import {
-  NexusFusionCore,
-  pwaObservationFromEstimate,
-  type NexusBpObservation,
-} from '@/lib/vitals/nexusFusionCore';
-import type { NexusCoherenceLevel } from '@/lib/vitals/nexusCoherence';
 import { CalibrationManager } from './CalibrationManager';
-import { fitHydrostaticSlope, hydrostaticSlopeToK } from '@/lib/vitals/hydrostaticCalibration';
-
-export interface BPUncertainty {
-  sbpP5: number;
-  sbpP95: number;
-  dbpP5: number;
-  dbpP95: number;
-}
-
-export interface BPNexusMeta {
-  coherenceLevel: NexusCoherenceLevel;
-  coherenceScore: number;
-  tauMs: number | null;
-  sourcesUsed: string[];
-}
 
 export interface BPEstimate {
   systolic: number;
@@ -42,31 +20,31 @@ export interface BPEstimate {
   confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT';
   cyclesUsed: number;
   featureQuality: number;
-  /** Presente solo cuando la fuente cross-site (NEXUS) participó en la estimación. */
-  uncertainty?: BPUncertainty;
-  nexus?: BPNexusMeta;
 }
 
-const BUFFER_MAX = 12;
-const STALE_FRAMES_MAX = 90; // ~3 segundos a 30fps
+const BUFFER_MAX = 24;
+const EMIT_EVERY_N_FRAMES = 6;
+/** Frecuencia morfológica objetivo para PWA (pyPPG 2024): resuelve fiduciales finos. */
+const MORPH_TARGET_FS = 250;
+const STALE_FRAMES_MAX = 30;
+const EMA_ALPHA = 0.20;
+const VARIANCE_WINDOW = 5;
+const STALE_VARIANCE_THRESHOLD = 3.0;
 
 export class BloodPressureProcessor {
   private readonly MIN_CYCLES = VITAL_THRESHOLDS.BP.MIN_CYCLES;
   private placementMode: FingerPlacementMode = 'hybrid';
 
   private cycleBuffer: CycleFeatures[] = [];
+  private framesSinceLastEmit = 0;
+
   private lastSBP = 0;
   private lastDBP = 0;
-  // (lastConfidence removed - unused)
+  private lastConfidence: BPEstimate['confidence'] = 'INSUFFICIENT';
   private staleFrames = 0;
-  private anthropometric: AnthropometricProfile | null = null;
+  private estimateHistory: number[] = [];
 
-  // NEXUS: fuente opcional de tránsito cara→dedo (consume-una-vez, ver doc del setter)
-  private readonly fusionCore = new NexusFusionCore();
-  private pendingCrossSite: NexusBpObservation | null = null;
-  private pendingCrossSiteSubMeta: Omit<BPNexusMeta, 'sourcesUsed'> | null = null;
-  /** TTL de memoria de fusión por sesión (ms): pasado este margen se reinicia. */
-  private readonly FUSION_TTL_MS = 120000;
+  private anthropometric: AnthropometricProfile | null = null;
 
   setPlacementMode(mode: FingerPlacementMode): void {
     this.placementMode = mode;
@@ -74,21 +52,6 @@ export class BloodPressureProcessor {
 
   setAnthropometric(profile: AnthropometricProfile | null): void {
     this.anthropometric = profile;
-  }
-
-  /**
-   * Registra la observación de la fuente cross-site NEXUS (tránsito cara→dedo)
-   * para LA SIGUIENTE llamada a `estimate()`. Semántica consume-una-vez: la
-   * observación se consume al usarse o al reset; si la coherencia multisitio
-   * fue INCOMPATIBLE, el llamador simplemente no la emite. La observación debe
-   * venir construida por `crossSiteObservationFromTiming` (procedencia única).
-   */
-  setNexusCrossSiteObservation(
-    obs: NexusBpObservation | null,
-    coherenceSubMeta: Omit<BPNexusMeta, 'sourcesUsed'> | null,
-  ): void {
-    this.pendingCrossSite = obs;
-    this.pendingCrossSiteSubMeta = coherenceSubMeta;
   }
 
   getAnthropometric(): AnthropometricProfile | null {
@@ -105,92 +68,77 @@ export class BloodPressureProcessor {
   estimate(
     signalBuffer: number[],
     rrIntervals: number[],
-    sampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE,
+    sampleRate: number = 30,
     externalHr?: number,
   ): BPEstimate {
     const insufficient: BPEstimate = {
-      systolic: 0,
-      diastolic: 0,
-      map: 0,
-      pulsePressure: 0,
-      confidence: 'INSUFFICIENT',
-      cyclesUsed: 0,
-      featureQuality: 0,
+      systolic: 0, diastolic: 0, map: 0, pulsePressure: 0,
+      confidence: 'INSUFFICIENT', cyclesUsed: 0, featureQuality: 0,
     };
 
-    if (signalBuffer.length < VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES || rrIntervals.length < 1) {
+    if (signalBuffer.length < VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES || rrIntervals.length < 2) {
       return this.staleOrInsufficient(insufficient);
     }
 
-    const cycles = PPGFeatureExtractor.detectCardiacCycles(signalBuffer, sampleRate);
+    // Upsample por spline cúbico a frecuencia morfológica (pyPPG 2024): a la fs
+    // efectiva de vitales (~10 Hz) un ciclo son ~8 muestras y la muesca dícrota /
+    // SUT / PW50 caen entre muestras. Interpolar a MORPH_TARGET_FS resuelve los
+    // fiduciales sin inventar señal (preserva curvatura para la 2ª derivada/APG).
+    const inFs = sampleRate > 0 ? sampleRate : 30;
+    const morphFs = inFs < MORPH_TARGET_FS ? MORPH_TARGET_FS : inFs;
+    const morphBuffer = inFs < MORPH_TARGET_FS
+      ? resampleCubicUniform(signalBuffer, inFs, MORPH_TARGET_FS)
+      : signalBuffer;
+
+    const cycles = PPGFeatureExtractor.detectCardiacCycles(morphBuffer, morphFs);
+    if (cycles.length < this.MIN_CYCLES) return this.staleOrInsufficient(insufficient);
+
     const validCycles: CycleFeatures[] = [];
     for (const cycle of cycles) {
-      const features = PPGFeatureExtractor.extractCycleFeatures(signalBuffer, cycle, sampleRate);
-      if (features && features.quality >= this.minCycleQuality()) {
+      const features = PPGFeatureExtractor.extractCycleFeatures(morphBuffer, cycle, morphFs);
+      if (features && features.quality > this.minCycleQuality()) {
         validCycles.push(features);
       }
     }
 
-    // Si encontramos ciclos válidos en la ventana actual, actualizamos el buffer móvil
-    if (validCycles.length >= 1) {
-      // Ponderar por calidad de ciclo y homogeneidad para descartar outliers
-      const scores = validCycles.map((c) => c.quality);
-      if (scores.length >= 2) {
-        // Calcular mediana de features clave para detectar outliers
-        const medianSut = median(scores.map((_, i) => validCycles[i].sutMs));
-        const medianPw50 = median(scores.map((_, i) => validCycles[i].pw50Ms));
-        const filtered = validCycles.filter((c) => {
-          const sutOk = Math.abs(c.sutMs - medianSut) / Math.max(1, medianSut) < 0.25;
-          const pw50Ok = Math.abs(c.pw50Ms - medianPw50) / Math.max(1, medianPw50) < 0.25;
-          return sutOk && pw50Ok && c.quality >= Math.max(0.2, this.minCycleQuality() * 0.8);
-        });
-        this.cycleBuffer = (filtered.length >= 1 ? filtered : validCycles).slice(-BUFFER_MAX);
-      } else {
-        this.cycleBuffer = validCycles.slice(-BUFFER_MAX);
-      }
+    if (validCycles.length < this.MIN_CYCLES) return this.staleOrInsufficient(insufficient);
+
+    for (const vc of validCycles) {
+      this.cycleBuffer.push(vc);
     }
 
-    if (this.cycleBuffer.length < this.MIN_CYCLES) {
-      return this.staleOrInsufficient(insufficient);
+    if (this.cycleBuffer.length > BUFFER_MAX) {
+      this.cycleBuffer = this.cycleBuffer.slice(-BUFFER_MAX);
     }
+
+    if (this.cycleBuffer.length < this.MIN_CYCLES) return this.staleOrInsufficient(insufficient);
 
     const mf = this.medianFeatures(this.cycleBuffer);
 
     const validRR = rrIntervals.filter((i) => isPhysiologicalRR(i) && i <= 1800);
-    const avgRR = validRR.length > 0
-      ? validRR.reduce((a, b) => a + b, 0) / validRR.length
-      : 800;
+    if (validRR.length < 2) return this.staleOrInsufficient(insufficient);
+
+    const avgRR = validRR.reduce((a, b) => a + b, 0) / validRR.length;
+    // Usar HR del ensemble (Elgendi+Pan) si está disponible — más robusto que mean(RR)
     const hr = typeof externalHr === 'number' && externalHr > 0
       ? externalHr
       : 60000 / avgRR;
-    const rrVar = PPGFeatureExtractor.extractRRVariability(validRR.length >= 2 ? validRR : [avgRR, avgRR]);
-    const cyclePeriodMs = Math.max(RR_MIN_MS, mf.sutMs + mf.diastolicPhaseMs);
+    const rrVar = PPGFeatureExtractor.extractRRVariability(validRR);
+    const cyclePeriodMs = Math.max(280, mf.sutMs + mf.diastolicPhaseMs);
 
-    const calibrationOffsets = CalibrationManager.getInstance().getActiveBpOffsets();
+    const calib = CalibrationManager.getInstance();
+    const activeBpProfile = calib.getActiveProfile('BP');
+    const calibrationOffsets = activeBpProfile && activeBpProfile.expiresAt > Date.now() ? {
+      sbpOffset: activeBpProfile.coefficients.sbpOffset ?? activeBpProfile.coefficients.systolicOffset ?? 0,
+      dbpOffset: activeBpProfile.coefficients.dbpOffset ?? activeBpProfile.coefficients.diastolicOffset ?? 0,
+    } : null;
 
-    const raw = estimatePhysiologicalBp(
-      mf,
-      { hr, rmssd: rrVar.rmssd, cyclePeriodMs },
-      this.anthropometric,
-      calibrationOffsets
-    );
-
-    const coherent = enforceHemodynamicCoherence(raw.systolic, raw.diastolic);
-    let sbp = coherent.sbp;
-    let dbp = coherent.dbp;
-
-    // Offset personal aprendido sobre MAP (pares de calibración NEXUS).
-    const personalMapOffset = CalibrationManager.getInstance().getPersonalMapOffset();
-    if (personalMapOffset) {
-      const pp0 = sbp - dbp;
-      const map0 = dbp + pp0 / 3;
-      const mapAdj = map0 + personalMapOffset.offsetMmHg;
-      sbp = mapAdj + (2 / 3) * pp0;
-      dbp = mapAdj - (1 / 3) * pp0;
-    }
+    const raw = estimatePhysiologicalBp(mf, { hr, rmssd: rrVar.rmssd, cyclePeriodMs }, this.anthropometric, calibrationOffsets);
+    let sbp = raw.systolic;
+    let dbp = raw.diastolic;
 
     if (!isPhysiologicalBp(sbp, dbp)) {
-      return this.staleOrInsufficient(insufficient);
+      return insufficient;
     }
 
     const fq = this.assessFeatureQuality(mf, this.cycleBuffer.length);
@@ -198,70 +146,79 @@ export class BloodPressureProcessor {
     if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_HIGH) confidence = 'HIGH';
     else if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_MEDIUM) confidence = 'MEDIUM';
 
-    // ── NEXUS: fusión con la fuente de tránsito cara→dedo si fue proveída ──
-    // Semántica consume-una-vez y fusión por medición (sin arrastre entre
-    // ventanas): el resultado físico local sigue siendo la base, y la fuente
-    // cross-site entra con SU propia incertidumbre. Si la fusión no supera la
-    // garantía fisiológica, se cae con elegancia al resultado físico local.
-    if (this.pendingCrossSite !== null && this.pendingCrossSiteSubMeta !== null) {
-      const cross = this.pendingCrossSite;
-      const subMeta = this.pendingCrossSiteSubMeta;
-      this.pendingCrossSite = null;
-      this.pendingCrossSiteSubMeta = null;
-      this.fusionCore.resetIfStale(cross.timestampMs, this.FUSION_TTL_MS);
-      this.fusionCore.pushObservation(
-        pwaObservationFromEstimate(dbp + (sbp - dbp) / 3, sbp - dbp, fq, cross.timestampMs),
-      );
-      this.fusionCore.pushObservation(cross);
-      const fused = this.fusionCore.getState();
-      if (
-        fused.systolic !== null &&
-        fused.diastolic !== null &&
-        fused.map !== null &&
-        fused.pulsePressure !== null &&
-        fused.sbpBand !== null &&
-        fused.dbpBand !== null &&
-        fused.confidence !== null &&
-        isPhysiologicalBp(fused.systolic, fused.diastolic)
-      ) {
-        this.lastSBP = fused.systolic;
-        this.lastDBP = fused.diastolic;
-        this.staleFrames = 0;
-        const uncertainty: BPUncertainty = {
-          sbpP5: Math.round(fused.sbpBand.p5),
-          sbpP95: Math.round(fused.sbpBand.p95),
-          dbpP5: Math.round(fused.dbpBand.p5),
-          dbpP95: Math.round(fused.dbpBand.p95),
-        };
-        return {
-          systolic: Math.round(fused.systolic),
-          diastolic: Math.round(fused.diastolic),
-          map: Math.round(fused.map),
-          pulsePressure: Math.round(fused.pulsePressure),
-          confidence: fused.confidence,
-          cyclesUsed: this.cycleBuffer.length,
-          featureQuality: fq,
-          uncertainty,
-          nexus: {
-            coherenceLevel: subMeta.coherenceLevel,
-            coherenceScore: subMeta.coherenceScore,
-            tauMs: subMeta.tauMs,
-            sourcesUsed: fused.sourcesUsed,
-          },
-        };
-      }
-      // Fusión no válida: continuar con el resultado físico local (fallback)
+    // La estimación del motor ya incluye los ajustes del perfil antropométrico
+    // y de coherencia hemodinámica de forma nativa e integrada.
+
+    if (this.lastSBP > 0) {
+      sbp = this.lastSBP * (1 - EMA_ALPHA) + sbp * EMA_ALPHA;
+      dbp = this.lastDBP * (1 - EMA_ALPHA) + dbp * EMA_ALPHA;
+    }
+
+    if (!isPhysiologicalBp(sbp, dbp)) {
+      return insufficient;
     }
 
     this.lastSBP = sbp;
     this.lastDBP = dbp;
+    this.lastConfidence = confidence;
     this.staleFrames = 0;
 
+    this.estimateHistory.push(sbp);
+    if (this.estimateHistory.length > VARIANCE_WINDOW) {
+      this.estimateHistory.shift();
+    }
+
+    if (this.isEstimateStale(confidence)) {
+      confidence = 'LOW';
+    }
+
+    this.framesSinceLastEmit++;
+    if (this.framesSinceLastEmit < EMIT_EVERY_N_FRAMES) {
+      const emitSbp = calibrationOffsets ? this.lastSBP - calibrationOffsets.sbpOffset : this.lastSBP;
+      const emitDbp = calibrationOffsets ? this.lastDBP - calibrationOffsets.dbpOffset : this.lastDBP;
+      return {
+        systolic: Math.round(emitSbp),
+        diastolic: Math.round(emitDbp),
+        map: Math.round(emitDbp + (emitSbp - emitDbp) / 3),
+        pulsePressure: Math.round(emitSbp - emitDbp),
+        confidence,
+        cyclesUsed: this.cycleBuffer.length,
+        featureQuality: fq,
+      };
+    }
+    this.framesSinceLastEmit = 0;
+
+
+
+    const finalSbp = calibrationOffsets ? sbp - calibrationOffsets.sbpOffset : sbp;
+    const finalDbp = calibrationOffsets ? dbp - calibrationOffsets.dbpOffset : dbp;
+
     return {
-      systolic: Math.round(sbp),
-      diastolic: Math.round(dbp),
-      map: Math.round(dbp + (sbp - dbp) / 3),
-      pulsePressure: Math.round(sbp - dbp),
+      systolic: Math.round(finalSbp),
+      diastolic: Math.round(finalDbp),
+      map: Math.round(finalDbp + (finalSbp - finalDbp) / 3),
+      pulsePressure: Math.round(finalSbp - finalDbp),
+      confidence,
+      cyclesUsed: this.cycleBuffer.length,
+      featureQuality: fq,
+    };
+  }
+
+  private isEstimateStale(confidence: BPEstimate['confidence']): boolean {
+    if (this.estimateHistory.length < VARIANCE_WINDOW) return false;
+    const mean = this.estimateHistory.reduce((a, b) => a + b, 0) / this.estimateHistory.length;
+    const variance = Math.sqrt(
+      this.estimateHistory.reduce((sum, v) => sum + (v - mean) ** 2, 0) / this.estimateHistory.length,
+    );
+    return variance < STALE_VARIANCE_THRESHOLD && confidence === 'LOW';
+  }
+
+  private buildThrottledEmit(confidence: BPEstimate['confidence'], fq: number): BPEstimate {
+    return {
+      systolic: Math.round(this.lastSBP),
+      diastolic: Math.round(this.lastDBP),
+      map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
+      pulsePressure: Math.round(this.lastSBP - this.lastDBP),
       confidence,
       cyclesUsed: this.cycleBuffer.length,
       featureQuality: fq,
@@ -278,14 +235,24 @@ export class BloodPressureProcessor {
     if (this.staleFrames >= STALE_FRAMES_MAX) {
       this.lastSBP = 0;
       this.lastDBP = 0;
+      this.lastConfidence = 'INSUFFICIENT';
       return insufficient;
     }
 
+    const calib = CalibrationManager.getInstance();
+    const activeBpProfile = calib.getActiveProfile('BP');
+    const sbpOff = activeBpProfile && activeBpProfile.expiresAt > Date.now()
+      ? (activeBpProfile.coefficients.sbpOffset ?? activeBpProfile.coefficients.systolicOffset ?? 0)
+      : 0;
+    const dbpOff = activeBpProfile && activeBpProfile.expiresAt > Date.now()
+      ? (activeBpProfile.coefficients.dbpOffset ?? activeBpProfile.coefficients.diastolicOffset ?? 0)
+      : 0;
+
     return {
-      systolic: Math.round(this.lastSBP),
-      diastolic: Math.round(this.lastDBP),
-      map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
-      pulsePressure: Math.round(this.lastSBP - this.lastDBP),
+      systolic: Math.round(this.lastSBP - sbpOff),
+      diastolic: Math.round(this.lastDBP - dbpOff),
+      map: Math.round((this.lastDBP - dbpOff) + ((this.lastSBP - sbpOff) - (this.lastDBP - dbpOff)) / 3),
+      pulsePressure: Math.round((this.lastSBP - sbpOff) - (this.lastDBP - dbpOff)),
       confidence: 'LOW',
       cyclesUsed: this.cycleBuffer.length,
       featureQuality: 0,
@@ -308,39 +275,30 @@ export class BloodPressureProcessor {
       kValue: median(take.map((c) => c.kValue)),
       vMax: median(take.map((c) => c.vMax)),
       harmonicDistortion: median(take.map((c) => c.harmonicDistortion)),
-      reflectionIndex: median(take.map((c) => c.reflectionIndex ?? 0)),
-      elasticModulusProxy: median(take.map((c) => c.elasticModulusProxy ?? 0)),
     };
   }
 
   private assessFeatureQuality(f: PwaMedianFeatures, cycleCount: number): number {
     let score = 0;
-    score += Math.min(25, cycleCount * 5);
-    if (f.sutMs > 40 && f.sutMs < 400) score += 16;
-    if (f.diastolicPhaseMs > 50 && f.diastolicPhaseMs < 800) score += 14;
+    score += Math.min(30, cycleCount * 2);
+    if (f.sutMs > 40 && f.sutMs < 400) score += 18;
+    if (f.diastolicPhaseMs > 50 && f.diastolicPhaseMs < 800) score += 15;
     if (f.stiffnessIndex > 0.5 && f.stiffnessIndex < 25) score += 12;
     if (f.augmentationIndex > 2 && f.augmentationIndex < 45) score += 10;
     if (f.dicroticDepth > 0 && f.dicroticDepth < 0.8) score += 8;
     if (f.pw50Ms > 60 && f.pw50Ms < 600) score += 7;
-    if (f.harmonicDistortion > 0.05 && f.harmonicDistortion < 1) score += 4;
-    if (typeof f.reflectionIndex === 'number' && f.reflectionIndex > 5 && f.reflectionIndex < 95) score += 4;
+    if (f.harmonicDistortion > 0.05 && f.harmonicDistortion < 1) score += 5;
     return Math.min(100, score);
-  }
-
-  hydrostaticCalibration(segments: { heightCm: number; tauMs: number }[]): ReturnType<typeof fitHydrostaticSlope> {
-    return fitHydrostaticSlope(segments);
-  }
-  hydrostaticK(slopeMsPerMmHg: number, tauRefMs: number): number | null {
-    return hydrostaticSlopeToK(slopeMsPerMmHg, tauRefMs);
   }
 
   reset(): void {
     this.lastSBP = 0;
     this.lastDBP = 0;
     this.cycleBuffer = [];
+    this.framesSinceLastEmit = 0;
+    this.lastConfidence = 'INSUFFICIENT';
     this.staleFrames = 0;
-    this.fusionCore.reset();
-    this.pendingCrossSite = null;
-    this.pendingCrossSiteSubMeta = null;
+    this.estimateHistory = [];
   }
+
 }

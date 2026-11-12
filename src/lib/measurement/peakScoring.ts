@@ -56,3 +56,9 @@ export function rrMedianMs(intervals: number[]): number {
   const v = intervals.filter((x) => x > 0);
   return v.length ? median(v) : 0;
 }
+
+export function passesRrPlausibility(rrMs: number, prevMedianMs: number): boolean {
+  if (prevMedianMs <= 0) return true;
+  const rel = Math.abs(rrMs - prevMedianMs) / prevMedianMs;
+  return rel <= PEAK_SCORE_THRESHOLDS.rrMedianMaxRelDev;
+}

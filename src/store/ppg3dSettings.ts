@@ -12,20 +12,17 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 
-/** Rango de intensidad de profundidad 3D (escala la inclinación del piso). */
-export const PPG3D_INTENSITY_MIN = 0.6;
-export const PPG3D_INTENSITY_MAX = 1.4;
-
 export interface Ppg3DSettings {
   /** Activa el render en perspectiva 3D (true) o el monitor 2D clásico (false). */
   enabled: boolean;
   /**
-   * Intensidad de la profundidad [PPG3D_INTENSITY_MIN .. PPG3D_INTENSITY_MAX].
-   * Escala la inclinación del piso y la altura máxima de la cinta de onda.
-   * 1 = calibración por defecto.
+   * Intensidad de la profundidad [0.6 .. 1.4]. Escala la inclinación del piso y la
+   * altura máxima de la cinta de onda. 1 = calibración por defecto.
    */
   intensity: number;
   toggle: () => void;
+  setEnabled: (v: boolean) => void;
+  setIntensity: (v: number) => void;
 }
 
 export const usePpg3dSettings = create<Ppg3DSettings>()(
@@ -34,6 +31,8 @@ export const usePpg3dSettings = create<Ppg3DSettings>()(
       enabled: true,
       intensity: 1,
       toggle: () => set((s) => ({ enabled: !s.enabled })),
+      setEnabled: (v) => set({ enabled: v }),
+      setIntensity: (v) => set({ intensity: Math.max(0.6, Math.min(1.4, v)) }),
     }),
     {
       name: 'ppg-3d-settings',

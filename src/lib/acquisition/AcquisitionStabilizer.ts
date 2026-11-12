@@ -1,5 +1,4 @@
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import { clamp01 } from '@/utils/math';
 import type { ContactState } from '@/types/signal';
 
 /**
@@ -54,28 +53,18 @@ export function createAcquisitionState(): AcquisitionState {
   };
 }
 
-/**
- * Factor adaptativo por nivel de movimiento [0.5..1.0].
- * motion 0 -> 1.0 (umbrales estrictos, senal estable)
- * motion alto -> ~0.55 (umbrales relajados, compensa inestabilidad)
- */
-function motionAdaptiveFactor(motionScore: number): number {
-  const TOL = 1.2;
-  if (motionScore <= 0) return 1;
-  const f = 1 - (Math.min(motionScore, TOL) / TOL) * 0.45;
-  return Math.max(0.55, f);
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
 /** Confianza instantánea fusionando las métricas del frame (sin memoria). */
 export function instantAcquisitionConfidence(sample: AcquisitionSample): number {
   const A = VITAL_THRESHOLDS.ACQUISITION;
 
-  const adaptive = motionAdaptiveFactor(sample.motionScore);
-
-  const piScore = clamp01(sample.perfusionIndex / (A.PI_TARGET * adaptive));
-  const periodicityScore = clamp01(sample.periodicity / (A.PERIODICITY_TARGET * adaptive));
-  const sqiScore = clamp01(sample.sqi / (A.SQI_TARGET * adaptive));
-  const coverageScore = clamp01(sample.coverageRatio / (A.COVERAGE_TARGET * adaptive));
+  const piScore = clamp01(sample.perfusionIndex / A.PI_TARGET);
+  const periodicityScore = clamp01(sample.periodicity / A.PERIODICITY_TARGET);
+  const sqiScore = clamp01(sample.sqi / A.SQI_TARGET);
+  const coverageScore = clamp01(sample.coverageRatio / A.COVERAGE_TARGET);
 
   const fused =
     piScore * A.W_PI +
@@ -160,3 +149,7 @@ export function updateAcquisition(state: AcquisitionState, sample: AcquisitionSa
   return state;
 }
 
+/** Conveniencia: ¿la adquisición está firme para revelar métricas en vivo? */
+export function isAcquisitionReady(state: AcquisitionState): boolean {
+  return state.stage === 'READY';
+}

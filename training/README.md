@@ -1,26 +1,5 @@
 # PPG/APG ONNX Model Training
 
-> **ESTADO REAL (auditoría 2026-10-15):**
-> - **INTEGRADO en la app:** solo `train_bp_mlp.py` → `src/lib/vitals/mlpWeights.ts`
->   (MLP de PA, entrenado sobre datos sintéticos — ver cabecera de mlpWeights.ts).
-> - **SUSTITUCIÓN DE PESOS BLOQUEADA:** `train_bp_mlp.py` ya NO sobrescribe
->   `mlpWeights.ts` por defecto. Escribe `training/artifacts/mlpWeights.candidate.ts`
->   y solo promociona con `--promote --validation-report <json>` que pase el gate
->   (ISO 81060-2:2018: |sesgo| ≤ 5 mmHg, DE ≤ 8 mmHg, ≥ 30 sujetos, ≥ 3 pares/sujeto,
->   dataset `clinical_reference`). No existe ningún informe en el repo → los pesos
->   actuales no se sustituyen. Ver `docs/mlp-weights-promotion.md`.
-> - **NO INTEGRADO:** los modelos ONNX de este README (`peak_scorer_v1.onnx`,
->   `sqi_refiner_v1.onnx`, `denoiser_v1.onnx`) no se exportan a `public/models/`,
->   no existen en el repo, y no hay runtime ONNX ni flag `useNN` en `src/`
->   (`src/config/features.ts` no existe). El pipelineNN permanece DESACTIVADO:
->   los módulos caen siempre a la heurística validada. Los tres scripts
->   `train_peak_scorer.py`, `train_sqi_refiner.py`, `train_denoiser.py` son
->   trabajo experimental sin consumidor.
-> - `generate_synthetic_ppg.py` es un generador sintético de EJEMPLO para
->   entrenamiento offline. Nunca se importa desde `src/` ni se empaqueta en la
->   app; la señal en producción proviene exclusivamente de frames reales de
->   cámara (ver docs/no-simulation-audit.md).
-
 Scripts para entrenar los 3 modelos ONNX que usa el motor de señales vitales.
 
 ## Requisitos

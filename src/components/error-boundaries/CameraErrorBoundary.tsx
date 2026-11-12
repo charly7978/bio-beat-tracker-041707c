@@ -1,8 +1,18 @@
+/**
+ * CAMERA ERROR BOUNDARY - OPTIMIZADO
+ * 
+ * Error Boundary especializado para la cámara.
+ * Proporciona fallback a cámara alternativa o modo degradado.
+ * 
+ * Optimizaciones:
+ * - Detección de permisos denegados
+ * - Auto-reintento con backoff
+ * - Logging estructurado
+ * - Detección de tipo de error (permisos, hardware, etc.)
+ */
+
 import React, { Component, ReactNode } from 'react';
 import { Camera, AlertCircle, RefreshCw, ShieldAlert } from 'lucide-react';
-import { createLogger } from '@/utils/logger';
-
-const log = createLogger('CameraErrorBoundary');
 
 interface Props {
   children: ReactNode;
@@ -48,14 +58,16 @@ export class CameraErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    // Detectar tipo de error
     let errorType: 'permission' | 'hardware' | 'unknown' = 'unknown';
-
+    
     if (error.name === 'NotAllowedError' || error.message.includes('permission')) {
       errorType = 'permission';
     } else if (error.name === 'NotFoundError' || error.message.includes('device')) {
       errorType = 'hardware';
     }
 
+    // Logging estructurado
     const errorContext = {
       boundary: 'CameraErrorBoundary',
       error: {
@@ -69,7 +81,17 @@ export class CameraErrorBoundary extends Component<Props, State> {
       retryCount: this.state.retryCount,
     };
 
-    log.error('Camera error:', errorContext);
+    console.error('[CameraErrorBoundary] Camera error:', errorContext);
+
+    // Enviar a servicio de monitoreo
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (typeof window !== 'undefined' && (window as any).Sentry) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).Sentry.captureException(error, {
+        tags: { boundary: 'Camera', errorType },
+        extra: errorContext,
+      });
+    }
   }
 
   componentWillUnmount() {
@@ -94,7 +116,7 @@ export class CameraErrorBoundary extends Component<Props, State> {
 
   handleRetry = () => {
     const maxRetries = this.props.maxRetries || 3;
-
+    
     if (this.state.retryCount >= maxRetries) {
       return;
     }
@@ -102,7 +124,7 @@ export class CameraErrorBoundary extends Component<Props, State> {
     this.setState({ isRetrying: true });
 
     const delay = 1000 * Math.pow(2, this.state.retryCount);
-
+    
     this.retryTimer = setTimeout(() => {
       this.setState({
         hasError: false,
@@ -111,7 +133,7 @@ export class CameraErrorBoundary extends Component<Props, State> {
         retryCount: this.state.retryCount + 1,
         isRetrying: false,
       });
-
+      
       if (this.props.onRetry) {
         this.props.onRetry();
       }
@@ -137,31 +159,31 @@ export class CameraErrorBoundary extends Component<Props, State> {
       const canRetry = this.state.retryCount < maxRetries;
 
       return (
-        <div className="flex flex-col items-center justify-center min-h-[400px] p-6 bg-rose-950/20 border border-rose-900/30 rounded-lg">
+        <div className="flex flex-col items-center justify-center min-h-[400px] p-6 bg-blue-950/20 border border-blue-900/30 rounded-lg">
           {isPermissionError ? (
-            <ShieldAlert className="w-16 h-16 text-rose-400 mb-4" />
+            <ShieldAlert className="w-16 h-16 text-blue-500 mb-4" />
           ) : (
-            <Camera className="w-16 h-16 text-rose-400 mb-4" />
+            <Camera className="w-16 h-16 text-blue-500 mb-4" />
           )}
-          <h3 className="text-xl font-semibold text-rose-300 mb-2">
+          <h3 className="text-xl font-semibold text-blue-400 mb-2">
             {isPermissionError ? 'Permisos de Cámara Denegados' : 'Error de Cámara'}
           </h3>
-          <p className="text-zinc-400 text-center mb-4 max-w-md">
+          <p className="text-blue-300/70 text-center mb-4 max-w-md">
             {isPermissionError
               ? 'La aplicación necesita permisos para acceder a la cámara. Por favor, habilite los permisos en la configuración del navegador.'
               : isHardwareError
               ? 'No se detectó ninguna cámara en el dispositivo.'
               : 'No se pudo acceder a la cámara. Intente reiniciar o usar una cámara alternativa.'}
           </p>
-          <div className="text-xs text-zinc-500 mb-4 font-mono max-w-md break-all">
+          <div className="text-xs text-blue-400/50 mb-4 font-mono max-w-md break-all">
             {this.state.error?.message}
           </div>
-          <div className="text-xs text-zinc-600 mb-4">
+          <div className="text-xs text-blue-400/30 mb-4">
             Intento {this.state.retryCount} de {maxRetries}
           </div>
-
+          
           {this.state.isRetrying ? (
-            <div className="flex items-center gap-2 text-rose-300">
+            <div className="flex items-center gap-2 text-blue-300">
               <RefreshCw className="w-4 h-4 animate-spin" />
               Reintentando...
             </div>
@@ -170,7 +192,7 @@ export class CameraErrorBoundary extends Component<Props, State> {
               {!isPermissionError && canRetry && (
                 <button
                   onClick={this.handleRetry}
-                  className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-lg transition-colors"
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
                 >
                   <RefreshCw className="w-4 h-4" />
                   Reintentar
@@ -179,7 +201,7 @@ export class CameraErrorBoundary extends Component<Props, State> {
               {this.props.onAlternativeCamera && (
                 <button
                   onClick={this.handleAlternativeCamera}
-                  className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg transition-colors"
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-800 hover:bg-blue-900 text-white rounded-lg transition-colors"
                 >
                   <AlertCircle className="w-4 h-4" />
                   Cámara Alternativa
@@ -187,7 +209,7 @@ export class CameraErrorBoundary extends Component<Props, State> {
               )}
               <button
                 onClick={this.handleReset}
-                className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg transition-colors"
+                className="flex items-center gap-2 px-4 py-2 bg-blue-800 hover:bg-blue-900 text-white rounded-lg transition-colors"
               >
                 Reiniciar Manual
               </button>

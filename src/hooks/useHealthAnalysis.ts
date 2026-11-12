@@ -5,7 +5,6 @@ import { createLogger } from '@/utils/logger';
 const log = createLogger('useHealthAnalysis');
 import { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 import { toast } from '@/hooks/use-toast';
-import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 
 interface AnalysisInput {
   vitalSigns: VitalSignsResult;
@@ -32,7 +31,7 @@ export const useHealthAnalysis = () => {
       return;
     }
 
-    if (vitalSigns.heartRate.status !== 'VALID' || quality < VITAL_THRESHOLDS.QUALITY.AI_ANALYSIS_MIN) {
+    if (vitalSigns.heartRate.status !== 'VALID' || quality < 40) {
       toast({
         title: "Calidad insuficiente",
         description: "El análisis IA requiere HR en estado VALID y señal razonablemente estable.",

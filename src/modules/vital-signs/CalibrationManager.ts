@@ -1,29 +1,7 @@
 import { CalibrationInfo } from '../../types/measurements';
 import type { AnthropometricProfile } from '@/lib/vitals/pwaPhysiologicalBpEngine';
-import {
-  NEXUS_CALIBRATION_VALIDITY_MS,
-  type NexusCalibrationFitResult,
-  type NexusCalibrationPair,
-} from '@/lib/vitals/nexusCalibrationFit';
-import type { PttPersonalModel } from '@/lib/vitals/nexusFusionCore';
-import { pttModelToPressures } from '@/lib/vitals/nexusFusionCore';
-import type { Spo2PersonalModel } from '@/lib/vitals/spo2PersonalRegressor';
-import type { Spo2RegressorPair } from '@/lib/vitals/spo2PersonalRegressor';
-import { createLogger } from '@/utils/logger';
 
-const log = createLogger('CalibrationManager');
-
-export type CalibrationType = 'SPO2' | 'BP' | 'DEVICE' | 'PPG_BASELINE' | 'NEXUS_PTT' | 'SPO2_PERSONAL';
-
-/** Identificador de dispositivo de la fuente PPG por cámara (perfiles de calibración). */
-export const CALIBRATION_DEVICE_ID = 'camera_ppg';
-
-/**
- * Clave localStorage del registro de pares de calibración NEXUS (τ + PA de
- * referencia del brazalete). Registro independiente de los perfiles: el par es
- * materia prima del ajuste, el perfil NEXUS_PTT es el modelo ya ajustado.
- */
-export const NEXUS_CALIBRATION_PAIRS_KEY = 'nexus_calibration_pairs';
+export type CalibrationType = 'SPO2' | 'BP' | 'DEVICE' | 'PPG_BASELINE';
 
 export interface CalibrationProfile {
   id: string;
@@ -67,7 +45,7 @@ export class CalibrationManager {
       }
       this.activeProfileId = localStorage.getItem('active_calibration_id');
     } catch (e) {
-      log.error('Error loading calibrations:', e);
+      console.error('Error loading calibrations:', e);
     }
   }
 
@@ -83,7 +61,7 @@ export class CalibrationManager {
         localStorage.setItem('active_calibration_id', this.activeProfileId);
       }
     } catch (e) {
-      log.error('Error saving calibrations:', e);
+      console.error('Error saving calibrations:', e);
     }
   }
 
@@ -119,6 +97,10 @@ export class CalibrationManager {
     this.profiles.set(profile.id, profile);
     this.activeProfileId = profile.id;
     this.saveToStorage();
+  }
+
+  public getProfile(id: string): CalibrationProfile | undefined {
+    return this.profiles.get(id);
   }
 
   public getActiveProfile(type: CalibrationType): CalibrationProfile | undefined {
@@ -158,226 +140,22 @@ export class CalibrationManager {
     };
   }
 
-  /** Offsets de PA del perfil BP vigente (null si no hay calibración activa). */
-  public getActiveBpOffsets(): { sbpOffset: number; dbpOffset: number } | null {
+  /** Aplica offsets de perfil BP vigente (referencia tensiómetro). */
+  public applyBloodPressureCalibration(
+    systolic: number,
+    diastolic: number,
+  ): { systolic: number; diastolic: number; applied: boolean } {
     const profile = this.getActiveProfile('BP');
-    if (!profile || profile.expiresAt <= Date.now()) return null;
+    if (!profile || profile.expiresAt <= Date.now()) {
+      return { systolic, diastolic, applied: false };
+    }
+    const sbpOff = profile.coefficients.sbpOffset ?? profile.coefficients.systolicOffset ?? 0;
+    const dbpOff = profile.coefficients.dbpOffset ?? profile.coefficients.diastolicOffset ?? 0;
     return {
-      sbpOffset: profile.coefficients.sbpOffset ?? profile.coefficients.systolicOffset ?? 0,
-      dbpOffset: profile.coefficients.dbpOffset ?? profile.coefficients.diastolicOffset ?? 0,
+      systolic: systolic + sbpOff,
+      diastolic: diastolic + dbpOff,
+      applied: sbpOff !== 0 || dbpOff !== 0,
     };
-  }
-
-  /** Offset de SpO2 del perfil SPO2 vigente (0 si no hay calibración activa). */
-  public getActiveSpo2Offset(): number {
-    const profile = this.getActiveProfile('SPO2');
-    if (!profile || profile.expiresAt <= Date.now()) return 0;
-    return profile.coefficients.spo2Offset ?? 0;
-  }
-
-  // ═══════════════ NEXUS (F3): modelo personal PTT↔PA y pares de calibración ═══════════════
-
-  /** Registro de pares NEXUS leído del almacenamiento local (vacío si no hay). */
-  public getNexusCalibrationPairs(): NexusCalibrationPair[] {
-    if (typeof localStorage === 'undefined') return [];
-    try {
-      const raw = localStorage.getItem(NEXUS_CALIBRATION_PAIRS_KEY);
-      if (!raw) return [];
-      const parsed: unknown = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter(
-        (p): p is NexusCalibrationPair =>
-          !!p &&
-          typeof p === 'object' &&
-          Number.isFinite((p as NexusCalibrationPair).timestampMs) &&
-          Number.isFinite((p as NexusCalibrationPair).tauMs) &&
-          Number.isFinite((p as NexusCalibrationPair).sbpMmHg) &&
-          Number.isFinite((p as NexusCalibrationPair).dbpMmHg),
-      );
-    } catch (e) {
-      log.error('Error leyendo pares NEXUS:', e);
-      return [];
-    }
-  }
-
-  /**
-   * Registra un trío (τ de la insignia NEXUS + PA de referencia del brazalete)
-   * con sello temporal del runtime. Devuelve el par completo persistido.
-   */
-  public addNexusCalibrationPair(
-    input: { tauMs: number; sbpMmHg: number; dbpMmHg: number; quality0to100?: number },
-  ): NexusCalibrationPair | null {
-    const pair: NexusCalibrationPair = {
-      timestampMs: Date.now(),
-      tauMs: input.tauMs,
-      sbpMmHg: input.sbpMmHg,
-      dbpMmHg: input.dbpMmHg,
-      ...(input.quality0to100 !== undefined ? { quality0to100: input.quality0to100 } : {}),
-    };
-    if (typeof localStorage === 'undefined') return null;
-    try {
-      const list = [...this.getNexusCalibrationPairs(), pair].slice(-50);
-      localStorage.setItem(NEXUS_CALIBRATION_PAIRS_KEY, JSON.stringify(list));
-    } catch (e) {
-      log.error('Error guardando par NEXUS:', e);
-      return null;
-    }
-    return pair;
-  }
-
-  /** Borra el registro de pares (la materia prima; el modelo revocado aparte). */
-  public clearNexusCalibrationPairs(): void {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem(NEXUS_CALIBRATION_PAIRS_KEY);
-    }
-  }
-
-  /**
-   * Proclama el modelo personal ajustado por el fit como perfil NEXUS_PTT
-   * activo, con vigencia de NEXUS_CALIBRATION_VALIDITY_MS (28 días) y las
-   * estadísticas de acuerdo (Bland–Altman) guardadas como referencia.
-   */
-  public recordNexusPttModel(fit: NexusCalibrationFitResult): CalibrationProfile | null {
-    if (fit.status !== 'FIT' || !fit.model || !fit.altman) return null;
-    const now = Date.now();
-    const profile: CalibrationProfile = {
-      id: `nexus_ptt_${now}`,
-      type: 'NEXUS_PTT',
-      deviceId: CALIBRATION_DEVICE_ID,
-      modelName: 'nexus_ppg_ptt_v1',
-      coefficients: {
-        kSbpMmHgS2: fit.model.kSbpMmHgS2,
-        cSbpMmHg: fit.model.cSbpMmHg,
-        kDbpMmHgS2: fit.model.kDbpMmHgS2,
-        cDbpMmHg: fit.model.cDbpMmHg,
-      },
-      referenceValues: {
-        biasSbpMmHg: fit.altman.sbp.biasMmHg,
-        loaLowSbpMmHg: fit.altman.sbp.loaLowMmHg,
-        loaHighSbpMmHg: fit.altman.sbp.loaHighMmHg,
-        biasDbpMmHg: fit.altman.dbp.biasMmHg,
-        loaLowDbpMmHg: fit.altman.dbp.loaLowMmHg,
-        loaHighDbpMmHg: fit.altman.dbp.loaHighMmHg,
-        pairsCount: fit.altman.sbp.n,
-        rSbp: fit.fitSummary?.rSbp ?? 0,
-        rDbp: fit.fitSummary?.rDbp ?? 0,
-      },
-      createdAt: now,
-      expiresAt: now + NEXUS_CALIBRATION_VALIDITY_MS,
-      method: 'NEXUS_PTT_DUAL_CAMERA',
-    };
-    this.addProfile(profile);
-    return profile;
-  }
-
-  /**
-   * Modelo personal PTT↔PA vigente (null si no hay modelo o venció). El
-   * consumidor (sesión NEXUS) cae al prior público cuando devuelve null.
-   */
-  public getActiveNexusPttModel(): PttPersonalModel | null {
-    const profile = this.getActiveProfile('NEXUS_PTT');
-    if (!profile || profile.expiresAt <= Date.now()) return null;
-    const c = profile.coefficients;
-    const kS = c.kSbpMmHgS2;
-    const cS = c.cSbpMmHg;
-    const kD = c.kDbpMmHgS2;
-    const cD = c.cDbpMmHg;
-    if (![kS, cS, kD, cD].every((v) => typeof v === 'number' && Number.isFinite(v))) return null;
-    return { kSbpMmHgS2: kS, cSbpMmHg: cS, kDbpMmHgS2: kD, cDbpMmHg: cD, calibrated: true };
-  }
-
-  /**
-   * Offset personal aprendido sobre MAP a partir de los pares de calibración
-   * NEXUS guardados (hasta 50): media (MAP referencia − MAP modelo) con su
-   * varianza muestral. Equivale al "cero" de un tensiómetro de muñeca.
-   * Devuelve null si no hay suficientes pares (<3) o modelo inválido.
-   */
-  public getPersonalMapOffset(): { offsetMmHg: number; varianceMmHg2: number; n: number } | null {
-    const pairs = this.getNexusCalibrationPairs();
-    if (pairs.length < 3) return null;
-    const model = this.getActiveNexusPttModel() ?? {
-      kSbpMmHgS2: 4.2, cSbpMmHg: 25, kDbpMmHgS2: 2.2, cDbpMmHg: 25, calibrated: false,
-    };
-    const diffs: number[] = [];
-    for (const p of pairs) {
-      if (!Number.isFinite(p.tauMs) || p.tauMs <= 0) continue;
-      const { sbp, dbp } = pttModelToPressures(p.tauMs, model);
-      const predMap = dbp + (sbp - dbp) / 3;
-      const refMap = p.dbpMmHg + (p.sbpMmHg - p.dbpMmHg) / 3;
-      const d = refMap - predMap;
-      if (Number.isFinite(d)) diffs.push(d);
-    }
-    if (diffs.length < 3) return null;
-    const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
-    let ss = 0;
-    for (const d of diffs) ss += (d - mean) ** 2;
-    const variance = diffs.length > 1 ? ss / (diffs.length - 1) : 0;
-    return { offsetMmHg: mean, varianceMmHg2: variance, n: diffs.length };
-  }
-
-  /** Info de vigencia del perfil NEXUS_PTT (para el panel con días restantes). */
-  public getNexusPttCalibrationInfo(): CalibrationInfo {
-    return this.getCalibrationInfo('NEXUS_PTT');
-  }
-
-  /**
-   * Revoca SOLO los perfiles NEXUS_PTT (los demás perfiles de brazalete y
-   * oxímetro permanecen intactos).
-   */
-  public revokeNexusPttModel(): void {
-    let removed = false;
-    for (const [id, p] of this.profiles) {
-      if (p.type === 'NEXUS_PTT') {
-        this.profiles.delete(id);
-        removed = true;
-      }
-    }
-    if (removed) this.saveToStorage();
-  }
-
-  public getSpo2PersonalPairs(): Spo2RegressorPair[] {
-    if (typeof localStorage === 'undefined') return [];
-    try {
-      const raw = localStorage.getItem('spo2_personal_pairs');
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter((p) => p && Array.isArray(p.features) && Number.isFinite(p.referenceSpo2));
-    } catch { return []; }
-  }
-
-  public addSpo2PersonalPair(pair: Spo2RegressorPair): void {
-    if (typeof localStorage === 'undefined') return;
-    try {
-      const list = [...this.getSpo2PersonalPairs(), pair].slice(-100);
-      localStorage.setItem('spo2_personal_pairs', JSON.stringify(list));
-    } catch (e) { log.error('Error guardando par SpO2:', e); }
-  }
-
-  public clearSpo2PersonalPairs(): void {
-    if (typeof localStorage !== 'undefined') localStorage.removeItem('spo2_personal_pairs');
-  }
-
-  public getActiveSpo2PersonalModel(): Spo2PersonalModel | null {
-    if (typeof localStorage === 'undefined') return null;
-    try {
-      const raw = localStorage.getItem('spo2_personal_model');
-      if (!raw) return null;
-      const m = JSON.parse(raw) as Spo2PersonalModel;
-      if (!m || !m.calibrated) return null;
-      return m;
-    } catch { return null; }
-  }
-
-  public recordSpo2PersonalModel(model: Spo2PersonalModel): void {
-    if (typeof localStorage === 'undefined') return;
-    try {
-      localStorage.setItem('spo2_personal_model', JSON.stringify(model));
-    } catch (e) { log.error('Error guardando modelo SpO2:', e); }
-  }
-
-  public revokeSpo2PersonalModel(): void {
-    if (typeof localStorage !== 'undefined') localStorage.removeItem('spo2_personal_model');
   }
 
   public reset(): void {
@@ -388,7 +166,6 @@ export class CalibrationManager {
       localStorage.removeItem('calibration_profiles');
       localStorage.removeItem('active_calibration_id');
       localStorage.removeItem('anthropometric_profile');
-      localStorage.removeItem(NEXUS_CALIBRATION_PAIRS_KEY);
     }
   }
 }

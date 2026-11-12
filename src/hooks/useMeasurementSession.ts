@@ -6,18 +6,12 @@ import { inferCameraRuntimeHints } from '@/lib/device/cameraDeviceProfile';
 import { createDefaultVitalSignsResult } from '@/lib/vitals/defaultVitalSignsResult';
 import type { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import { DSP_CONSTANTS } from '@/config/signalProcessing';
-import { startSession as startAuditSession } from '@/lib/sanity/sanityAuditLog';
 import {
-  MeasurementWindowValidator,
-  type ValidationFrame,
-  type ValidationVerdict,
-} from '@/lib/acquisition/MeasurementWindowValidator';
-import { healthBridge } from '@/lib/capacitor/healthBridge';
+  setActiveProfile as setAuditProfile,
+} from '@/lib/sanity/sanityAuditLog';
 import type { CameraViewHandle } from '@/components/CameraView';
-
-/** Contador monótono local: fallback determinista cuando crypto.randomUUID no existe. */
-let auditSessionFallbackSeq = 0;
+import type { ValidationFrame } from '@/lib/acquisition/MeasurementWindowValidator';
+import { healthBridge } from '@/lib/capacitor/healthBridge';
 
 interface UseMeasurementSessionInput {
   cameraRef: React.RefObject<CameraViewHandle>;
@@ -39,13 +33,13 @@ interface UseMeasurementSessionInput {
       underexposureRatio: number;
       totalFrames: number;
     };
-    windowSeconds?: number;
   }) => Promise<boolean>;
-  /** Reset duro del procesador PPG (fin/inicio de sesión y cambio de cámara). */
-  resetProcessor: () => void;
+  setCameraRuntimeHints: (diag: Record<string, unknown> | null | undefined) => void;
   syncCameraHints: () => void;
   resetFingerContactSession: () => void;
   resetSessionRefs: () => void;
+  setShowResults: (v: boolean) => void;
+  setMeasurementSummary: (v: { totalBeats: number; arrhythmiaBeats: number; normalPercent: number } | null) => void;
   setHeartbeatSignal: (v: number) => void;
   setBeatMarker: (v: number) => void;
   setRRIntervals: (v: number[]) => void;
@@ -61,6 +55,7 @@ interface UseMeasurementSessionInput {
   isMonitoringRef: React.MutableRefObject<boolean>;
   lastSignal: import('@/types/signal').ProcessedSignal | null;
   sanityProfileId: string;
+  getBackpressureConfig: () => import('@/lib/perf/backpressureConfig').BackpressureConfig;
   setHeartBeatRuntimeHints: (hints: import('@/lib/device/cameraDeviceProfile').CameraRuntimeHints) => void;
 }
 
@@ -72,10 +67,11 @@ export function useMeasurementSession({
   resetVitalSigns, fullResetVitalSigns,
   resetHeartBeat,
   saveMeasurement,
-  resetProcessor,
+  setCameraRuntimeHints: _setCameraRuntimeHints,
   syncCameraHints,
   resetFingerContactSession,
   resetSessionRefs,
+  setShowResults: _setShowResults, setMeasurementSummary: _setMeasurementSummary,
   setHeartbeatSignal, setBeatMarker, setRRIntervals,
   setVitalSigns,
   vitalSignsRef,
@@ -86,6 +82,7 @@ export function useMeasurementSession({
   isMonitoringRef,
   lastSignal,
   sanityProfileId,
+  getBackpressureConfig: _getBackpressureConfig,
   setHeartBeatRuntimeHints,
 }: UseMeasurementSessionInput) {
   const [isMonitoring, setIsMonitoring] = useState(false);
@@ -98,15 +95,13 @@ export function useMeasurementSession({
     normalPercent: number;
   } | null>(null);
   const [showResults, setLocalShowResults] = useState(false);
-  const [validationVerdict, setValidationVerdict] = useState<ValidationVerdict | null>(null);
+  const [validationVerdict, setValidationVerdict] = useState<import('@/lib/acquisition/MeasurementWindowValidator').ValidationVerdict | null>(null);
 
   const validationBufferRef = useRef<ValidationFrame[]>([]);
   const measurementTimerRef = useRef<number | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
   const monitoringStartedAtRef = useRef<number>(0);
-  /** Identidad de la cámara activa: cambiarla obliga a un reset del pipeline. */
-  const activeCameraKeyRef = useRef<string | null>(null);
 
   // Fullscreen
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -173,33 +168,13 @@ export function useMeasurementSession({
 
   useEffect(() => {
     if (isMonitoring) {
-      if (monitoringStartedAtRef.current === 0) {
+      if (isMonitoring && monitoringStartedAtRef.current === 0) {
         monitoringStartedAtRef.current = performance.now();
       }
     } else {
       monitoringStartedAtRef.current = 0;
     }
   }, [isMonitoring]);
-
-  // Acumular fotogramas en el buffer de validación clínica durante la sesión
-  useEffect(() => {
-    if (!isMonitoring || !lastSignal) return;
-    const diag = lastSignal.diagnostics as Record<string, unknown> | undefined;
-    const sqm = diag?.sqm as Record<string, number> | undefined;
-    const hasContact =
-      (!!lastSignal.fingerDetected || !!lastSignal.faceDetected) &&
-      lastSignal.contactState !== 'NO_CONTACT';
-    const frame: ValidationFrame = {
-      sqi: lastSignal.quality || 0,
-      pi: lastSignal.perfusionIndex || 0,
-      fps: sqm?.fpsEffective ?? DSP_CONSTANTS.DEFAULT_SAMPLE_RATE,
-      jitter: sqm?.timestampJitterMs ?? 0,
-      motion: sqm?.motionScore ?? (lastSignal.motionArtifact ? 1 : 0),
-      isClipping: (sqm?.saturationRatio ?? 0) > VITAL_THRESHOLDS.QUALITY.CLIPPING_SATURATION_RATIO,
-      hasContact,
-    };
-    validationBufferRef.current.push(frame);
-  }, [lastSignal, isMonitoring]);
 
   // Fullscreen
   const enterFullScreen = useCallback(async () => {
@@ -240,10 +215,6 @@ export function useMeasurementSession({
     arrhythmiaBeatsRef.current = 0;
     // arrhythmia se resetea desde VitalSignsProcessor; no hay propiedad plana
 
-    // Reset duro ANTES de arrancar: la sesión nueva no hereda baselines,
-    // banda adaptativa, hints de cámara ni estadísticas de la anterior.
-    activeCameraKeyRef.current = null;
-    resetProcessor();
     startProcessing();
     setIsCameraOn(true);
     setIsMonitoring(true);
@@ -256,27 +227,16 @@ export function useMeasurementSession({
       setElapsedTime(prev => prev + 1);
     }, 1000);
 
-    const auditSessionId =
-      globalThis.crypto?.randomUUID?.() ?? `s-${Date.now().toString(36)}-${auditSessionFallbackSeq++}`;
-    startAuditSession(auditSessionId, sanityProfileId);
+    setAuditProfile(sanityProfileId);
 
     startCalibration();
     resetFingerContactSession();
     setHeartBeatRuntimeHints(inferCameraRuntimeHints());
-  }, [isMonitoring, enterFullScreen, startProcessing, startCalibration, requestWakeLock, sanityProfileId, setHeartBeatRuntimeHints, totalBeatsRef, arrhythmiaBeatsRef, resetFingerContactSession, resetProcessor]);
+  }, [isMonitoring, enterFullScreen, startProcessing, startCalibration, requestWakeLock, sanityProfileId, setHeartBeatRuntimeHints, totalBeatsRef, arrhythmiaBeatsRef, resetFingerContactSession]);
 
   // === CUANDO LA CÁMARA ESTÁ LISTA ===
   const handleStreamReady = useCallback((stream: MediaStream) => {
     setCameraStream(stream);
-    // Cambio de cámara/track (o re-negociación del stream) ⇒ el pipeline queda
-    // caracterizado para otro sensor: reset duro para no arrastrar estado.
-    const track = stream.getVideoTracks()[0];
-    const settings = track?.getSettings?.();
-    const cameraKey = `${settings?.deviceId ?? track?.id ?? 'unknown'}|${settings?.width ?? 0}x${settings?.height ?? 0}`;
-    if (activeCameraKeyRef.current !== null && activeCameraKeyRef.current !== cameraKey) {
-      resetProcessor();
-    }
-    activeCameraKeyRef.current = cameraKey;
     syncCameraHints();
     const video = cameraRef.current?.getVideoElement();
     if (video && video.readyState >= 2 && video.videoWidth > 0) {
@@ -290,7 +250,7 @@ export function useMeasurementSession({
       };
       video.addEventListener('canplay', onCanPlay, { once: true });
     }
-  }, [cameraRef, startFrameLoop, syncCameraHints, resetProcessor]);
+  }, [cameraRef, startFrameLoop, syncCameraHints]);
 
   // === FINALIZAR MEDICIÓN ===
   const finalizeMeasurement = useCallback(async () => {
@@ -307,30 +267,13 @@ export function useMeasurementSession({
 
     stopProcessing();
 
-    // Validación de la ventana acumulada contra DURACIÓN REAL de sesión
-    // (elapsedTime del reloj de sesión, no conteo de frames con FPS supuesto).
-    const verdict = MeasurementWindowValidator.validate(validationBufferRef.current, elapsedTime);
-    setValidationVerdict(verdict);
-
-    // La calibración solo se fuerza a cierre si la ventana es aceptada: cerrar
-    // la calibración de una sesión inválida fabricaba resultados "completos".
-    if (vitalSignsRef.current.isCalibrating && verdict.accepted) {
+    if (vitalSignsRef.current.isCalibrating) {
       forceCalibrationCompletion();
     }
 
     const savedResults = resetVitalSigns();
 
-    let dataToSave = savedResults ?? vitalSignsRef.current;
-    // Puerta de honestidad: sin HR listo por veredicto, el pulso se publica
-    // como NO disponible (0/NO_VALID_SIGNAL), nunca se conserva un latido
-    // anterior como "resultado". SpO₂/PA dependen de HR listo por
-    // construcción del validador, así que tampoco sobreviven.
-    if (!verdict.vitalReadiness.hr) {
-      dataToSave = {
-        ...dataToSave,
-        heartRate: { ...dataToSave.heartRate, value: 0, status: 'NO_VALID_SIGNAL' as const },
-      };
-    }
+    const dataToSave = savedResults ?? vitalSignsRef.current;
     const sqForSave = Math.round(
       dataToSave.signalQuality ?? lastSignal?.quality ?? 0,
     );
@@ -355,13 +298,10 @@ export function useMeasurementSession({
         vitalSigns: dataToSave,
         signalQuality: sqForSave,
         artifactMetrics,
-        windowSeconds: elapsedTime,
       });
       healthBridge.checkAvailability().then(avail => {
         if (avail) healthBridge.saveVitals(dataToSave);
-      }).catch((err) => {
-        logWarn('useMeasurementSession', 'HealthBridge save failed: ' + String(err));
-      });
+      }).catch(() => {});
     }
 
     setIsCameraOn(false);
@@ -389,7 +329,7 @@ export function useMeasurementSession({
     });
 
     setElapsedTime(0);
-  }, [isMonitoring, cameraStream, elapsedTime, stopFrameLoop, stopProcessing, forceCalibrationCompletion, resetVitalSigns, saveMeasurement, vitalSignsRef, lastSignal, releaseWakeLock, isMonitoringRef, totalBeatsRef, arrhythmiaBeatsRef, motionArtifactFramesRef, saturationFramesRef, underexposedFramesRef, artifactCheckFramesRef, setVitalSigns]);
+  }, [isMonitoring, cameraStream, stopFrameLoop, stopProcessing, forceCalibrationCompletion, resetVitalSigns, saveMeasurement, vitalSignsRef, lastSignal, releaseWakeLock, isMonitoringRef, totalBeatsRef, arrhythmiaBeatsRef, motionArtifactFramesRef, saturationFramesRef, underexposedFramesRef, artifactCheckFramesRef, setVitalSigns]);
 
   // === RESET COMPLETO ===
   const handleReset = useCallback(() => {
@@ -425,19 +365,6 @@ export function useMeasurementSession({
     setRRIntervals([]);
     lastArrhythmiaData.current = null;
   }, [cameraStream, stopFrameLoop, stopProcessing, fullResetVitalSigns, resetHeartBeat, resetSessionRefs, isMonitoringRef, setHeartbeatSignal, setBeatMarker, setRRIntervals, lastArrhythmiaData, setVitalSigns]);
-
-  // Interrupción de adquisición (pestaña oculta / descarga de página):
-  // CameraView ya liberó pistas y torch. La sesión interrumpida NO es válida:
-  // reset completo sin guardar (BPM a `--`, buffers vaciados, sin filas).
-  useEffect(() => {
-    const onInterrupted = () => {
-      if (isMonitoringRef.current) {
-        handleReset();
-      }
-    };
-    window.addEventListener('camera-interrupted', onInterrupted);
-    return () => window.removeEventListener('camera-interrupted', onInterrupted);
-  }, [handleReset, isMonitoringRef]);
 
   // Auto-finalizar a los 90 segundos
   useEffect(() => {

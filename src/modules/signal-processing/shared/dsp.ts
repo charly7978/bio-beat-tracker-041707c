@@ -5,6 +5,7 @@
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { clamp } from '../../../utils/math';
 import { median } from '../../../utils/stats';
+import { BandpassFilter } from '../BandpassFilter';
 
 const TWO_PI_DSP = Math.PI * 2;
 
@@ -60,6 +61,31 @@ export function movingAverage(x: number[], win: number): number[] {
       }
     }
     out[i] = c > 0 ? sum / c : x[i];
+  }
+  return out;
+}
+
+export function derivativeCentral(x: number[], fs: number): number[] {
+  const n = x.length;
+  const out = new Array<number>(n).fill(0);
+  if (n < 3 || fs <= 0) return out;
+  for (let i = 1; i < n - 1; i++) {
+    out[i] = ((x[i + 1] - x[i - 1]) / 2) * fs;
+  }
+  return out;
+}
+
+export function movingWindowIntegration(x: number[], samples: number): number[] {
+  const n = x.length;
+  if (n === 0 || samples < 1) return [];
+  const out = new Array<number>(n).fill(0);
+  let acc = 0;
+  const q: number[] = [];
+  for (let i = 0; i < n; i++) {
+    acc += x[i];
+    q.push(x[i]);
+    if (q.length > samples) acc -= q.shift()!;
+    out[i] = acc / q.length;
   }
   return out;
 }
@@ -126,7 +152,7 @@ export function prepareUniformPpgWindow(
   const gaps: number[] = [];
   for (let i = 1; i < timestampsMs.length; i++) gaps.push(timestampsMs[i]! - timestampsMs[i - 1]!);
   const sortedG = [...gaps].sort((a, b) => a - b);
-  const med = median(gaps);
+  const med = sortedG[Math.floor(sortedG.length / 2)] ?? 1000 / samplingRateHz;
   const jitterP95 = sortedG[Math.floor(sortedG.length * 0.95)] ?? med;
   const needsResample =
     jitterP95 > med * cfg.RESAMPLE_JITTER_FACTOR ||
@@ -146,19 +172,6 @@ export function prepareUniformPpgWindow(
     ts[i] = r.t0 + (i * (r.t1 - r.t0)) / Math.max(1, r.y.length - 1);
   }
   return { signal: r.y, timestampsMs: ts, samplingRateHz: r.fs, resampled: true };
-}
-
-/**
- * Autocorrelación (media de productos, no normalizada) de una señal a un lag fijo.
- * Primitiva compartida: la usa el ratio-of-ratios de SpO2 (r0/rLag por canal) y
- * cualquier consumidor que necesite el valor en un lag específico.
- */
-export function autocorrAtLag(sig: readonly number[], lag: number): number {
-  const n = sig.length;
-  if (lag < 0 || n <= lag) return 0;
-  let sum = 0;
-  for (let i = 0; i < n - lag; i++) sum += sig[i]! * sig[i + lag]!;
-  return sum / (n - lag);
 }
 
 export function autocorrDominantLag(
@@ -186,6 +199,18 @@ export function autocorrDominantLag(
     }
   }
   return { lag: bestLag, score: best };
+}
+
+export function bpmFromAutocorr(signal: number[], fs: number): { bpm: number; score: number } {
+  if (signal.length < 40 || fs < 8) return { bpm: 0, score: 0 };
+  const det = detrendLinear(signal);
+  const mean = det.reduce((a, b) => a + b, 0) / det.length;
+  const centered = det.map((v) => v - mean);
+  const minLag = Math.max(3, Math.round((fs * 60) / 200));
+  const maxLag = Math.min(centered.length - 3, Math.round((fs * 60) / 38));
+  const { lag, score } = autocorrDominantLag(centered, minLag, maxLag);
+  if (lag <= 0 || score < 0.12) return { bpm: 0, score };
+  return { bpm: (60 * fs) / lag, score };
 }
 
 /**
@@ -250,60 +275,120 @@ export function bandLimitedDominantFreq(
   return { freqHz: bestF, quality };
 }
 
-/**
- * Momentos estadísticos de una ventana de señal (una sola pasada, sin allocations).
- *
- * Convenciones (idénticas a `src/utils/stats.ts`, fuente única de semántica):
- *  - `skewness`  = asimetría de Fisher-Pearson g1 = m3 / m2^{3/2} (0 = simétrica).
- *  - `kurtosis`  = EXCESO de kurtosis (β₂ − 3; 0 = gaussiana, >0 = leptocúrtica
- *    con picos agudos, <0 = platicúrtica/aplanada). NUNCA devuelve la kurtosis
- *    cruda de Pearson β₂: los umbrales de scoring SQI
- *    (VITAL_THRESHOLDS.QUALITY.KURTOSIS_SQI_LOW/HIGH, Elgendi 2016) están
- *    definidos sobre el EXCESO. Alimentar β₂ cruda (≥0 siempre, ≈3 para ruido
- *    gaussiano) saturaba el término en puntuación máxima para cualquier ventana,
- *    incluido ruido puro → inflaba el SQI de señales inválidas.
- *
- * Ventana degenerada (varianza ≈ 0): devuelve todos los momentos en 0.
- */
-export function computeWindowMoments(values: readonly number[]): {
-  mean: number;
-  variance: number;
-  std: number;
-  skewness: number;
-  kurtosis: number;
-} {
-  const n = values.length;
-  if (n < 3) {
-    return { mean: 0, variance: 0, std: 0, skewness: 0, kurtosis: 0 };
-  }
-  let s1 = 0;
-  let s2 = 0;
-  let s3 = 0;
-  let s4 = 0;
-  for (let i = 0; i < n; i++) {
-    const v = values[i]!;
-    s1 += v;
-    s2 += v * v;
-    s3 += v * v * v;
-    s4 += v * v * v * v;
-  }
-  const mean = s1 / n;
-  const m2 = s2 / n - mean * mean;
-  if (!(m2 > 1e-18)) {
-    return { mean, variance: Math.max(0, m2), std: 0, skewness: 0, kurtosis: 0 };
-  }
-  const m3 = s3 / n - 3 * mean * (s2 / n) + 2 * mean * mean * mean;
-  const m4 =
-    s4 / n - 4 * mean * (s3 / n) + 6 * mean * mean * (s2 / n) - 3 * mean * mean * mean * mean;
-  const std = Math.sqrt(m2);
-  return {
-    mean,
-    variance: m2,
-    std,
-    skewness: m3 / (std * std * std),
-    // Exceso de kurtosis (β₂ − 3): convención compartida con stats.ts y con los
-    // umbrales KURTOSIS_SQI_* de vitalThresholds.
-    kurtosis: m4 / (m2 * m2) - 3,
-  };
+export function bandpassOffline(signal: number[], fs: number): number[] {
+  const f = new BandpassFilter(fs);
+  f.reset();
+  return signal.map((s) => f.filter(s));
 }
 
+/**
+ * Magnitud (amplitud sinusoidal) de una serie en una frecuencia exacta vía Goertzel.
+ *
+ * Filtro pasa-banda de UN solo bin: aísla la energía AC en la frecuencia cardíaca
+ * detectada, descartando ruido fuera de banda. Es el "narrowband AC locked to HR"
+ * que el estado del arte de oximetría por cámara usa para obtener la componente
+ * pulsátil más limpia por canal (mejor SNR que el RMS de banda ancha). La media se
+ * elimina internamente. Devuelve la amplitud (2·|X|/N), comparable entre canales.
+ */
+export function goertzelMagnitude(x: number[], freqHz: number, fs: number): number {
+  const n = x.length;
+  if (n < 4 || fs <= 0 || freqHz <= 0 || freqHz >= fs / 2) return 0;
+  let mean = 0;
+  for (let i = 0; i < n; i++) mean += x[i];
+  mean /= n;
+  const w = (TWO_PI_DSP * freqHz) / fs;
+  const coeff = 2 * Math.cos(w);
+  let s1 = 0;
+  let s2 = 0;
+  for (let i = 0; i < n; i++) {
+    const s0 = (x[i] - mean) + coeff * s1 - s2;
+    s2 = s1;
+    s1 = s0;
+  }
+  const power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+  return power > 0 ? (2 * Math.sqrt(power)) / n : 0;
+}
+
+/**
+ * Segunda derivada por Savitzky-Golay (ajuste cuadrático por mínimos cuadrados en
+ * ventana deslizante). Es el método de referencia para derivar PPG: combina
+ * suavizado + diferenciación en un solo paso, sin amplificar el ruido como la
+ * diferencia finita cruda (y[i+1]−2y[i]+y[i−1]). Crítico para la APG (2ª derivada),
+ * cuyos puntos b/c/d/e son los predictores morfológicos más fuertes de presión.
+ *
+ * Espaciado unitario (h=1): devuelve la misma escala que la diferencia finita, por
+ * lo que los umbrales aguas abajo se conservan. `half` = semiventana (≥2).
+ */
+export function savitzkyGolaySecondDeriv(y: number[], half: number): number[] {
+  const n = y.length;
+  const out = new Array<number>(n).fill(0);
+  const h = Math.max(2, Math.floor(half));
+  if (n < 2 * h + 1) {
+    for (let i = 1; i < n - 1; i++) out[i] = y[i + 1] - 2 * y[i] + y[i - 1];
+    return out;
+  }
+  // Momentos del kernel simétrico (constantes; impares = 0 por simetría).
+  let S0 = 0;
+  let S2 = 0;
+  let S4 = 0;
+  for (let x = -h; x <= h; x++) {
+    S0++;
+    S2 += x * x;
+    S4 += x * x * x * x;
+  }
+  const denom = S0 * S4 - S2 * S2;
+  if (denom === 0) return out;
+  for (let i = h; i < n - h; i++) {
+    let sy = 0;
+    let sx2y = 0;
+    for (let x = -h; x <= h; x++) {
+      const v = y[i + x];
+      sy += v;
+      sx2y += x * x * v;
+    }
+    // a2 = coeficiente cuadrático del ajuste; 2ª derivada = 2·a2.
+    out[i] = (2 * (S0 * sx2y - S2 * sy)) / denom;
+  }
+  // Bordes: replican el valor válido más cercano (evita transitorios espurios).
+  for (let i = 0; i < h; i++) out[i] = out[h];
+  for (let i = n - h; i < n; i++) out[i] = out[n - h - 1];
+  return out;
+}
+
+/**
+ * Upsample uniforme por spline cúbico de Catmull-Rom de `srcFs` → `dstFs`.
+ *
+ * Para análisis morfológico de pulso (BP/PWA), el estado del arte (pyPPG 2024)
+ * recomienda interpolar a 125–250 Hz: a la fs efectiva de cámara (~10–30 Hz) un
+ * ciclo cardíaco son muy pocas muestras y los fiduciales finos (muesca dícrota,
+ * tiempo de subida sistólica, PW50) caen ENTRE muestras y no se resuelven. El
+ * spline cúbico preserva curvatura (la 2ª derivada / APG es clave para BP),
+ * a diferencia de la interpolación lineal que la aplana.
+ *
+ * No se usa en la ruta de detección de picos (HR) — solo morfología de vitales.
+ */
+export function resampleCubicUniform(signal: number[], srcFs: number, dstFs: number): number[] {
+  const n = signal.length;
+  if (n < 4 || srcFs <= 0 || dstFs <= 0 || dstFs <= srcFs) return signal.slice();
+  const ratio = srcFs / dstFs;
+  const outN = Math.max(2, Math.floor((n - 1) / ratio) + 1);
+  const out = new Array<number>(outN);
+  for (let i = 0; i < outN; i++) {
+    const srcPos = i * ratio;
+    const k = Math.floor(srcPos);
+    const t = srcPos - k;
+    const p0 = signal[Math.max(0, k - 1)];
+    const p1 = signal[k];
+    const p2 = signal[Math.min(n - 1, k + 1)];
+    const p3 = signal[Math.min(n - 1, k + 2)];
+    const t2 = t * t;
+    const t3 = t2 * t;
+    out[i] = 0.5 * (
+      2 * p1 +
+      (-p0 + p2) * t +
+      (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+      (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+    );
+  }
+  return out;
+}

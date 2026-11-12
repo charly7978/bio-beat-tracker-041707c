@@ -47,16 +47,7 @@ self.onmessage = async (event: MessageEvent) => {
       case 'stop':
         if (processor) {
           processor.stop();
-          // Reset duro al cerrar la sesión: nada de estado arrastrado.
-          processor.resetSession();
           self.postMessage({ type: 'stopped' });
-        }
-        break;
-
-      case 'reset':
-        if (processor) {
-          processor.resetSession();
-          self.postMessage({ type: 'resetDone' });
         }
         break;
 
@@ -75,13 +66,19 @@ self.onmessage = async (event: MessageEvent) => {
           rotationRate: { alpha: number; beta: number; gamma: number } | null;
         };
         
-        // Inyectar evento de movimiento del hardware en el procesador
-        const motionPayload = {
+        // Simular DeviceMotionEvent compatible con el procesador
+        const mockEvent = {
           accelerationIncludingGravity,
           rotationRate
         } as unknown as DeviceMotionEvent;
 
-        processor.handleMotionEvent(motionPayload);
+        // Acceder al manejador de eventos interno de movimiento
+        const pWithMotion = processor as unknown as {
+          handleMotionEvent?: (e: DeviceMotionEvent) => void;
+        };
+        if (typeof pWithMotion.handleMotionEvent === 'function') {
+          pWithMotion.handleMotionEvent(mockEvent);
+        }
         break;
       }
 
@@ -97,16 +94,6 @@ self.onmessage = async (event: MessageEvent) => {
           self.postMessage({
             type: 'backpressureConfigChanged',
             data: newCfg
-          });
-        }
-        break;
-
-      case 'setMeasurementMode':
-        if (processor) {
-          processor.setMeasurementMode(data);
-          self.postMessage({
-            type: 'measurementModeChanged',
-            data: processor.getMeasurementMode()
           });
         }
         break;

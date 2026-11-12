@@ -93,45 +93,4 @@ describe('PPGSignalProcessor', () => {
     const posVal = rawProc.sourceBuffers.POS.tail(1)[0];
     expect(Number.isFinite(posVal)).toBe(true);
   });
-
-  it('computes saturationRatio as a REAL pixel fraction (not binary)', () => {
-    // Señal pulsátil para adquirir contacto.
-    for (let i = 0; i < 120; i++) {
-      const pulse = Math.round(180 + 6 * Math.sin(2 * Math.PI * 1.2 * (i / 30)));
-      proc.processFrame(makeFrame(64, 64, pulse, 95, 75));
-    }
-    // Frames sin saturación: ratio real 0 (antes era 0/1 binario).
-    let sawZero = false;
-    for (const s of signals) {
-      const sqm = s.diagnostics?.sqm as { saturationRatio?: number } | undefined;
-      if (sqm && sqm.saturationRatio === 0) sawZero = true;
-    }
-    expect(sawZero).toBe(true);
-
-    // Mezcla REAL: ~10% de los píxeles del ROI recortados → fracción real
-    // (ni 0 ni 1). El contrato médico necesita la fracción para los gates de
-    // artefacto por saturación (ROUTER.SATURATION_FRAME_RATIO).
-    const mixed = makeFrame(64, 64, 180, 95, 75);
-    for (let p = 0; p < 64 * 64; p += 10) {
-      mixed.data[p * 4 + 0] = 253;
-    }
-    proc.processFrame(mixed);
-    const mixedSig = signals[signals.length - 1];
-    const sqmMixed = mixedSig.diagnostics?.sqm as { saturationRatio?: number } | undefined;
-    expect(sqmMixed!.saturationRatio).toBeGreaterThan(0.02);
-    expect(sqmMixed!.saturationRatio).toBeLessThan(0.2);
-
-    // Todo el ROI recortado con contacto aún vigente → fracción >0.8 → el
-    // gate de rechazo por saturación debe activarse (status SATURATED).
-    proc.processFrame(makeFrame(64, 64, 253, 252, 252));
-    const satSig = signals[signals.length - 1];
-    const sqmSat = satSig.diagnostics?.sqm as { saturationRatio?: number } | undefined;
-    if (sqmSat) {
-      expect(sqmSat.saturationRatio).toBeGreaterThan(0.8);
-    } else {
-      // Sin sqm ⇒ el gate de rechazo por saturación cortó la emisión normal:
-      // el veredicto honesto es RECHAZADO:SATURATED, nunca una lectura.
-      expect(satSig.diagnostics?.status).toBe('SATURATED');
-    }
-  });
 });

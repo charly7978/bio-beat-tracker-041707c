@@ -41,16 +41,3 @@ android/capacitor-cordova-android-plugins/.gradle/
 *.apk
 *.aab
 *.patch
-
-# Keystores (nunca versionar material de firma)
-*.jks
-*.keystore
-
-# Directorios de herramientas locales (no son parte del proyecto)
-.lovable/
-.run/
-.kilo/
-.opencode/
-.playwright-mcp/
-.qodo/
-.andromity/

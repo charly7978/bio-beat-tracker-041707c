@@ -1,9 +1,8 @@
-import type { ProcessedSignal, ProcessingError, SignalProcessor as SignalProcessorInterface, ContactState, MeasurementMode } from '../../types/signal';
+import type { ProcessedSignal, ProcessingError, SignalProcessor as SignalProcessorInterface, ContactState } from '../../types/signal';
 import { BandpassFilter } from './BandpassFilter';
 import { PPGSignalSplitter } from './PPGSignalSplitter';
 import { createLogger, ppgPerf } from '../../utils/logger';
 import { clamp } from '../../utils/math';
-import { median, robustBounds, stdDev } from '../../utils/stats';
 import { RingF32 } from '../../utils/RingBuffer';
 import {
   DEFAULT_BACKPRESSURE_CONFIG,
@@ -17,18 +16,10 @@ import {
   type DiagnosticStatusState,
 } from '../signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
-import {
-  createAdaptivePolicy,
-  resetAdaptivePolicy,
-  updateAdaptivePolicy,
-} from './AdaptiveRuntimePolicy';
 import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 import {
-  computeTemporalVariance,
   hasFingerHemoglobinSignature,
-  computeFingerEnsemble,
-  isFingerPresentByEnsemble,
   calibrateZlo,
   getZlo,
   resetZlo,
@@ -40,6 +31,7 @@ import {
   passesFingerMaintain,
   passesLiveFingerContact,
   passesPulsatileAcquire,
+  updateFingerDetection,
 } from '../../lib/finger/fingerSceneClassifier';
 import {
   classifyFingerPlacement,
@@ -68,12 +60,8 @@ import {
   stabilizeSample,
   resetActiveStabilizer,
 } from '../../lib/signal/activeStabilizer';
-import { BioTremorAbsorber } from './BioTremorAbsorber';
-import { bandLimitedDominantFreq, computeWindowMoments } from './shared/dsp';
+import { bandLimitedDominantFreq } from './shared/dsp';
 import { RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
-import { GymFaceTracker } from '../../lib/gym/gymFaceTracker';
-import { GymMotionCancellation } from '../../lib/gym/gymMotionCancellation';
-import { emaBlend } from '../../lib/measurement/adaptiveEma';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -83,8 +71,6 @@ interface ROIMetrics {
   rawGreen: number;
   rawBlue: number;
   coverageRatio: number;
-  /** Fracción de píxeles muestreados del ROI con canal rojo saturado (>250). */
-  saturationRatio: number;
   fingerScore: number;
   fingerTileCount: number;
   roiX: number;
@@ -108,16 +94,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   private bandpassFilter: BandpassFilter;
   private morphBandpassFilter: BandpassFilter;
-  private readonly signalSplitter = new PPGSignalSplitter();
-  /** BPM estimado para el notch adaptativo del canal 5 (arritmias) */
-  private lastKnownBpm = 0;
+  private readonly signalSplitter = new PPGSignalSplitter(30);
   private placementMode: FingerPlacementMode = 'hybrid';
   private placementStreak = { mode: 'hybrid' as FingerPlacementMode, count: 0 };
   private readonly pulseAgcState = createPulseAgcState();
-  private measurementMode: MeasurementMode = 'finger';
-  private readonly gymFaceTracker = new GymFaceTracker();
-  private readonly gymMotionCancellation = new GymMotionCancellation(30);
-  // (lastGymFaceResult removed - unused)
 
   private readonly ACDC_WINDOW = 120;
   private readonly TILE_COLUMNS = 5;
@@ -136,8 +116,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private backpressureConfig: BackpressureConfig = { ...DEFAULT_BACKPRESSURE_CONFIG };
 
   // Buffer reutilizable de tiles (evita Array.from + map por frame).
-  private readonly tileBuffer: { red: number; green: number; blue: number; sat: number; count: number }[] =
-    Array.from({ length: this.TILE_COLUMNS * this.TILE_ROWS }, () => ({ red: 0, green: 0, blue: 0, sat: 0, count: 0 }));
+  private readonly tileBuffer: { red: number; green: number; blue: number; count: number }[] =
+    Array.from({ length: this.TILE_COLUMNS * this.TILE_ROWS }, () => ({ red: 0, green: 0, blue: 0, count: 0 }));
 
   // Buffer pre-asignado para tile metrics (evita map/filter chain en hot path).
   // Cada slot corresponde a un tile; se reutiliza cada frame.
@@ -184,7 +164,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   // LUTs de teselado: cachean Math.floor((px / roiSize) * cols) por píxel
   // del ROI. Se reconstruyen sólo cuando cambia el tamaño del ROI.
-  // (tile LUTs removed - unused)
+  private tileXLut: Int8Array | null = null;
+  private tileYLut: Int8Array | null = null;
+  private tileLutKey = '';
 
   // AC/DC
   private redDC = 0;
@@ -216,7 +198,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private noContactHardStreak = 0;
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private lastInstantFinger = false;
-  // (FINGER_CONFIRM_FRAMES unused)
+  private readonly FINGER_CONFIRM_FRAMES = VITAL_THRESHOLDS.FINGER.FINGER_CONFIRM_FRAMES;
 
   // Ensemble de detección universal: gray buffer + temporal variance + ZLO
   private grayBuffer: Uint8ClampedArray | null = null;
@@ -270,18 +252,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   // Rastreo de centroide para mitigar micromovimientos del dedo
   private trackedCentroid = { x: 0.5, y: 0.5 };
-  // (lastLocalCentroid removed - unused)
+  private lastLocalCentroidX = 0.5;
+  private lastLocalCentroidY = 0.5;
   private centroidMotionEma = 0;
 
   // Acondicionador ACTIVO de señal (denoise edge-preserving + estabilización baseline).
   private readonly activeStabilizer = createActiveStabilizer();
-
-  // Absorbedor de micro-temblor y memoria espaciotemporal 4D de cámara
-  private readonly bioTremorAbsorber = new BioTremorAbsorber({
-    gridRows: this.TILE_ROWS,
-    gridCols: this.TILE_COLUMNS,
-    temporalMemoryDepth: 16,
-  });
 
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
@@ -307,15 +283,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     RG: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
     POS: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
   };
-  // Política adaptativa (ROI/filtros/rangos de calidad) sin umbrales fijos.
-  private readonly adaptivePolicy = createAdaptivePolicy();
-
   private activeSource: string = 'RG';
   private sourceScores: { [key: string]: number } = { R: 0, G: 0, RG: 0, POS: 0 };
   private lastSourceSwitch = 0;
-  private get SOURCE_HYSTERESIS_MS(): number {
-    return this.adaptivePolicy.sourceHysteresisMs;
-  }
+  private readonly SOURCE_HYSTERESIS_MS = 4000;
 
   // Buffers deslizantes para la proyección del algoritmo POS (Plane-Orthogonal-to-Skin)
   private readonly xBuffer = new RingF32(30);
@@ -326,13 +297,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     public onSignalReady?: (signal: ProcessedSignal) => void,
     public onError?: (error: ProcessingError) => void
   ) {
-    // Pulso (HR): 0.5-4.5 Hz — rango cardíaco estándar (DSP_CONSTANTS.PPG_BAND_HZ)
-    this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, DSP_CONSTANTS.PPG_BAND_HZ[1]);
-    // Morfología (BP): 0.5-12 Hz — preserva escotadura dicrótica completa (PPG_MORPH_BAND_HZ)
-    this.morphBandpassFilter = new BandpassFilter(
-      this.estimatedSampleRate,
-      DSP_CONSTANTS.PPG_MORPH_BAND_HZ[1],
-    );
+    // Pulso (HR): 0.5-4.5Hz — rango cardíaco estándar, 4º orden para mejor rechazo
+    this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, 4.5);
+    // Morfología (BP): 0.5-8Hz — preserva escotadura dicrótica y forma completa del pulso
+    this.morphBandpassFilter = new BandpassFilter(this.estimatedSampleRate, 8.0);
   }
 
   async initialize(): Promise<void> {
@@ -360,274 +328,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.cameraHints = inferCameraRuntimeHints(diag);
   }
 
-  /**
-   * Configura el modo de medición: 'finger' (trasera con flash) o 'gym' (frontal rPPG).
-   */
-  setMeasurementMode(mode: MeasurementMode): void {
-    if (this.measurementMode !== mode) {
-      this.measurementMode = mode;
-      this.resetSignalTrackingBuffers();
-      log.info(`PPGSignalProcessor: Modo de medición cambiado a "${mode}"`);
-    }
-  }
-
-  getMeasurementMode(): MeasurementMode {
-    return this.measurementMode;
-  }
-
-  /**
-   * Pipeline especializado para Modo GYM (Cámara frontal rPPG con compensación activa de movimiento).
-   */
-  private processGymFrame(imageData: ImageData, timestamp: number): void {
-    const endRoi = ppgPerf.start('roi');
-    const face = this.gymFaceTracker.processFrame(imageData, timestamp);
-    endRoi();
-
-    this.gymMotionCancellation.pushMotionSample(face.headVelocity);
-
-    // 1. Pérdida o ausencia de rostro en el encuadre
-    if (!face.faceDetected) {
-      this.consecutiveNoContactFrames++;
-      this.signalQuality = 0;
-      this.displaySqiEma = 0;
-      this.contactState = 'NO_CONTACT';
-      this.fingerDetected = false;
-      this.stepAcquisition(false);
-
-      // Resetear baselines para que ante el reenganche facial se inicialicen de inmediato
-      this.redBaseline = 0;
-      this.greenBaseline = 0;
-      this.blueBaseline = 0;
-
-      this.onSignalReady?.({
-        timestamp,
-        rawValue: 0,
-        filteredValue: 0,
-        quality: 0,
-        fingerDetected: false,
-        faceDetected: false,
-        contactState: 'NO_CONTACT',
-        measurementMode: 'gym',
-        motionArtifact: face.motionScore > VITAL_THRESHOLDS.GYM_FACE.MOTION_ARTIFACT_DIAG,
-        roi: {
-          x: face.faceBox.x,
-          y: face.faceBox.y,
-          width: face.faceBox.width,
-          height: face.faceBox.height,
-        },
-        perfusionIndex: 0,
-        rawRed: face.rawRed,
-        rawGreen: face.rawGreen,
-        rawBlue: face.rawBlue,
-        diagnostics: {
-          message: 'ENFOCA TU ROSTRO EN CÁMARA',
-          hasPulsatility: false,
-          pulsatilityValue: 0,
-          status: 'NO_FINGER',
-          gymMetrics: {
-            ...this.gymMotionCancellation.getState(),
-            faceTrackConfidence: face.confidence,
-            headVelocity: face.headVelocity,
-            ambientLuminance: face.ambientLuminance ?? 0,
-            illuminationStatus: face.illuminationStatus ?? 'OPTIMAL',
-            isCalibrated: false,
-          },
-        },
-      });
-      return;
-    }
-
-    // 2. Rostro detectado: presencia confirmada
-    const wasLost = this.consecutiveNoContactFrames > 0;
-    this.consecutiveNoContactFrames = 0;
-    const motionArtifact = face.motionScore > VITAL_THRESHOLDS.GYM_FACE.MOTION_ARTIFACT_STRICT;
-    const isStable =
-      face.confidence >= VITAL_THRESHOLDS.GYM_FACE.CONF_STABLE_MIN &&
-      face.motionScore < VITAL_THRESHOLDS.GYM_FACE.MOTION_STABLE_MAX;
-    this.contactState = isStable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
-    this.fingerDetected = true;
-
-    // Inicialización instantánea o reenganche rápido de baselines al detectar el rostro
-    if (this.redBaseline === 0 || wasLost) {
-      this.redBaseline = face.rawRed;
-      this.greenBaseline = face.rawGreen;
-      this.blueBaseline = face.rawBlue;
-    }
-
-    // Actualizar baselines DC con seguimiento adaptativo a variaciones lumínicas
-    this.updateChannelBaselines(face.rawRed, face.rawGreen, face.rawBlue, motionArtifact);
-
-    this.redBuffer.push(face.rawRed);
-    this.greenBuffer.push(face.rawGreen);
-    this.blueBuffer.push(face.rawBlue);
-
-    // Calcular AC/DC periódico
-    if (this.redBuffer.length >= 36 && this.frameCount % 2 === 0) {
-      this.calculateACDCPrecise();
-    }
-    const acPi = this.calculatePerfusionIndex();
-    if (acPi > 0) {
-      this.cachedPI = acPi;
-    }
-
-    // 3. Algoritmo POS (Plane-Orthogonal-to-Skin, Wang et al. IEEE TBME 2017)
-    // Proyecta sobre el plano ortogonal al tono de piel para eliminar variaciones de modo común por movimiento
-    const rNorm = this.redBaseline > 0 ? (this.redBaseline - face.rawRed) / this.redBaseline : 0;
-    const gNorm = this.greenBaseline > 0 ? (this.greenBaseline - face.rawGreen) / this.greenBaseline : 0;
-    const bNorm = this.blueBaseline > 0 ? (this.blueBaseline - face.rawBlue) / this.blueBaseline : 0;
-
-    const clampMax = 0.06;
-    const clampPulse = (v: number) => clamp(v, -clampMax, clampMax);
-    const rPulse = clampPulse(rNorm);
-    const gPulse = clampPulse(gNorm);
-    const bPulse = clampPulse(bNorm);
-
-    const X = gPulse - bPulse;
-    const Y = gPulse + bPulse - 2 * rPulse;
-    this.xBuffer.push(X);
-    this.yBuffer.push(Y);
-
-    const stdX = this.xBuffer.stdDev();
-    const stdY = this.yBuffer.stdDev();
-    const rawAlpha = stdY > 1e-9 ? stdX / stdY : this.smoothedPosAlpha;
-    const reliability = clamp(stdY / Math.max(1, stdX * 0.5 + stdY), 0, 1);
-    const blendedAlpha = rawAlpha * reliability + this.smoothedPosAlpha * (1 - reliability);
-    this.smoothedPosAlpha = this.smoothedPosAlpha * 0.9 + blendedAlpha * 0.1;
-    const posPulse = (X + this.smoothedPosAlpha * Y) * 4400;
-
-    // 4. Cancelador de armónicos de cadencia biomecánica (Adaptive Notch)
-    const cleanedPos = this.gymMotionCancellation.filterSample(posPulse);
-
-    // 5. Acondicionamiento activo + Filtros Bandpass
-    const endFilt = ppgPerf.start('bandpass');
-    const stabilizedInput = stabilizeSample(this.activeStabilizer, cleanedPos);
-    const filtered = this.bandpassFilter.filter(stabilizedInput);
-    const morphFiltered = this.morphBandpassFilter.filter(cleanedPos);
-    const enhanced = applyPulseAgc(
-      this.pulseAgcState,
-      filtered,
-      this.cachedPeriodicity > 0 ? this.cachedPeriodicity : this.periodicityEma,
-      face.motionScore,
-      DEFAULT_PULSE_AGC,
-      this.contactState === 'STABLE_CONTACT',
-    );
-    endFilt();
-
-    this.rawBuffer.push(cleanedPos);
-    this.filteredBuffer.push(enhanced);
-
-    // 6. Banco de filtros por signo vital (Splitter)
-    const splitOut = this.signalSplitter.process(
-      face.rawRed,
-      face.rawGreen,
-      face.rawBlue,
-      this.lastKnownBpm,
-    );
-
-    // 7. Métricas de periodicidad y calidad — SQI CENTRAL (mismo motor que
-    // finger: SignalQualityIndex, sin fórmula paralela). Métricas honestas
-    // disponibles en modo facial: fuerza de la señal POS como SNR proxy del
-    // pulso, movimiento del tracker y saturación del canal rojo del rostro.
-    const endSqi = ppgPerf.start('sqi');
-    this.refreshSlowWindows();
-    const { snapPerf } = this.computeCentralSqi({
-      perfusionIndex: this.cachedPI,
-      snr: Math.abs(cleanedPos),
-      motionScore: face.motionScore,
-      saturationRatio: face.rawRed > 250 ? 1 : 0,
-    });
-
-    this.displaySqiEma = SignalQualityIndex.smoothDisplayedSqi(
-      this.displaySqiEma,
-      this.signalQuality,
-      this.contactState,
-      motionArtifact ? 0.8 : 1.0,
-    );
-    endSqi();
-
-    // 8. Actualización de Filtro de Kalman predictivo de frecuencia cardíaca
-    const dt = 1 / Math.max(15, this.estimatedSampleRate);
-    const kalmanBpm = this.gymMotionCancellation.updateKalmanHR(
-      this.lastKnownBpm,
-      dt,
-      this.displaySqiEma,
-    );
-    const gymState = this.gymMotionCancellation.getState();
-
-    this.stepAcquisition(true);
-
-    const now = timestamp;
-    if (now - this.lastLogTime >= 2000) {
-      this.lastLogTime = now;
-      log.info(
-        `[GYM-POS] Filt=${enhanced.toFixed(3)} Q=${Math.round(this.displaySqiEma)} ` +
-        `Kalman=${kalmanBpm}BPM Cadence=${gymState.cadenceBpm}BPM Motion=${face.motionScore.toFixed(2)} ` +
-        `Contact=${this.contactState} Notch=${gymState.isNotchActive ? 'ON' : 'OFF'}`
-      );
-    }
-
-    this.onSignalReady?.({
-      timestamp,
-      rawValue: cleanedPos,
-      filteredValue: enhanced,
-      morphologyValue: morphFiltered,
-      morphologyFiltered: splitOut.morphology,
-      respirationFiltered: splitOut.respiration,
-      arrhythmiaFiltered: splitOut.arrhythmia,
-      spo2Channels: splitOut.spo2,
-      placementMode: 'hybrid',
-      quality: Math.round(this.displaySqiEma),
-      fingerDetected: true,
-      faceDetected: true,
-      contactState: this.contactState,
-      measurementMode: 'gym',
-      motionArtifact,
-      roi: {
-        x: face.faceBox.x,
-        y: face.faceBox.y,
-        width: face.faceBox.width,
-        height: face.faceBox.height,
-      },
-      perfusionIndex: this.cachedPI,
-      rawRed: face.rawRed,
-      rawGreen: face.rawGreen,
-      rawBlue: face.rawBlue,
-      diagnostics: {
-        message: motionArtifact
-          ? 'MODO GYM · COMPENSANDO MOVIMIENTO'
-          : 'MODO GYM · SEÑAL FACIAL ESTABLE',
-        hasPulsatility: this.cachedPeriodicity > 0.25,
-        pulsatilityValue: this.cachedPeriodicity,
-        coverageRatio: face.confidence,
-        status: 'VALID',
-        sqm: {
-          sqi: Math.round(this.displaySqiEma),
-          perfusionIndex: this.cachedPI,
-          periodicity: this.cachedPeriodicity,
-          motionScore: face.motionScore,
-          fpsEffective: this.estimatedSampleRate,
-          timestampJitterMs: snapPerf.jitterMs,
-        },
-        gymMetrics: {
-          ...gymState,
-          kalmanBpm,
-          faceTrackConfidence: face.confidence,
-          headVelocity: face.headVelocity,
-          ambientLuminance: face.ambientLuminance ?? 128,
-          illuminationStatus: face.illuminationStatus ?? 'OPTIMAL',
-          isCalibrated: face.isCalibrated ?? false,
-        },
-      },
-    });
-  }
-
   processFrame(imageData: ImageData, frameTimestampMs?: number): void {
     if (!this.isProcessing || !this.onSignalReady) return;
-    // Prevenir condición de carrera: si reset() se ejecuta durante processFrame,
-    // los buffers quedarían en estado inconsistente. Se verifica isProcessing.
-    if (this.frameCount === 0 && this.redBuffer.length > 0) {
-      this.resetSignalTrackingBuffers();
-    }
 
     this.frameCount++;
     const timestamp = typeof frameTimestampMs === 'number' && Number.isFinite(frameTimestampMs)
@@ -635,12 +337,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       : (typeof performance !== 'undefined' ? performance.now() : Date.now());
     this.updateSampleRate(timestamp);
     this.maybeAdaptBackpressure(timestamp);
-
-    // En Modo GYM, despachar al pipeline especializado rPPG frontal
-    if (this.measurementMode === 'gym') {
-      this.processGymFrame(imageData, timestamp);
-      return;
-    }
 
     const endRoi = ppgPerf.start('roi');
     const roi = this.extractROI(imageData);
@@ -676,15 +372,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.updateContactState(roi);
 
     const motionArtifact = this.motionScore > this.MOTION_THRESHOLD;
-    const fingerEnsemble = {
-      ensemble: computeFingerEnsemble(
-        { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
-        this.grayBuffer,
-        computeTemporalVariance(this.grayBuffer),
-      ),
-      fingerDetected: false,
-    };
-    fingerEnsemble.fingerDetected = isFingerPresentByEnsemble(fingerEnsemble.ensemble);
+    const fingerEnsemble = updateFingerDetection(
+      { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
+      { red: this.smoothedRed, green: this.smoothedGreen, blue: this.smoothedBlue, coverage: this.smoothedCoverage, fingerScore: this.smoothedFingerScore },
+      { coverageRatio: roi.coverageRatio, fingerScore: roi.fingerScore, fingerTileCount: roi.fingerTileCount },
+      this.grayBuffer,
+      this.lastEnsembleScore,
+    );
     this.lastEnsembleScore = fingerEnsemble.ensemble.ensembleScore;
     const liveFinger = this.isLiveFingerFrame(roi, this.lastEnsembleScore);
 
@@ -721,8 +415,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         rawRed: roi.rawRed,
         rawGreen: roi.rawGreen,
         rawBlue: roi.rawBlue,
-        diagnostics: this.buildFingerDiagnostics(roi,
-          "NO_FINGER"),
+        diagnostics: this.buildFingerDiagnostics(roi, motionArtifact, "NO_FINGER"),
       });
       return;
     }
@@ -731,17 +424,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     let rejectionStatus: MeasurementStatus | null = null;
     const r = this.smoothedRed;
     const g = this.smoothedGreen;
+    const _b = this.smoothedBlue;
 
     const underInstant = r < 12 && g < 10 ? 1 : 0;
     this.underexposureEma = this.underexposureEma * 0.92 + underInstant * 0.08;
     
-    // Gates de rechazo: smoothed RGB (respuesta lenta, estable) + ratio de
-    // saturación REAL del ROI (reacción inmediata ante flash con dedo apretando
-    // el lente: >80% de píxeles recortados = señal inservible, no lecturas).
     if (r > 253 && g > 252) rejectionStatus = "SATURATED";
-    else if (roi.saturationRatio > VITAL_THRESHOLDS.QUALITY.SQI_SCORING.SATURATION_GATE) {
-      rejectionStatus = "SATURATED";
-    }
     else if (
       r < (this.cameraHints.constrained ? 8 : 15) &&
       g < (this.cameraHints.constrained ? 6 : 10)
@@ -763,8 +451,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         rawRed: roi.rawRed,
         rawGreen: roi.rawGreen,
         rawBlue: roi.rawBlue,
-        diagnostics: this.buildFingerDiagnostics(roi, 
-          rejectionStatus, {
+        diagnostics: this.buildFingerDiagnostics(roi, motionArtifact, rejectionStatus, {
           message: `RECHAZADO: ${rejectionStatus}`,
         }),
       });
@@ -819,6 +506,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const morphSource = this.extractMorphologySignal(
       roi.rawRed,
       roi.rawGreen,
+      roi.rawBlue,
       this.placementMode,
     );
 
@@ -848,34 +536,64 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       roi.rawRed,
       roi.rawGreen,
       roi.rawBlue,
-      this.lastKnownBpm,
     );
 
     const endSqi = ppgPerf.start('sqi');
-    this.refreshSlowWindows();
+    this.periodicitySkip++;
+    if (this.periodicitySkip >= 4 || this.filteredBuffer.length < 90) {
+      this.periodicitySkip = 0;
+      const pInstant = this.calculatePeriodicity();
+      this.periodicityEma =
+        this.periodicityEma <= 0
+          ? pInstant
+          : this.periodicityEma * 0.72 + pInstant * 0.28;
+    }
+    this.cachedPeriodicity = this.periodicityEma;
 
-    // SQI CENTRAL (SignalQualityIndex) — mismo motor que el modo gym; el único
-    // snapshot de perf del frame se toma aquí y se reutiliza en sqm y log.
-    const { snapPerf } = this.computeCentralSqi({
+    this.sqiMetricsCounter++;
+    if (this.sqiMetricsCounter >= 8 && this.filteredBuffer.length >= 60) {
+      this.sqiMetricsCounter = 0;
+      const fLen = this.filteredBuffer.length;
+      const fTail = this.filteredBuffer.tail(fLen);
+      if (fTail.length >= 30) {
+        const n = fTail.length;
+        let s1 = 0, s2 = 0, s3 = 0, s4 = 0;
+        for (let i = 0; i < n; i++) {
+          const v = fTail[i];
+          s1 += v;
+          s2 += v * v;
+          s3 += v * v * v;
+          s4 += v * v * v * v;
+        }
+        const mean = s1 / n;
+        const var_ = s2 / n - mean * mean;
+        const std = Math.sqrt(var_);
+        if (std > 1e-8) {
+          this.cachedSkewness = (s3 / n - 3 * mean * (s2 / n) + 2 * mean * mean * mean) / (std * std * std);
+          this.cachedKurtosis = (s4 / n - 4 * mean * (s3 / n) + 6 * mean * mean * (s2 / n) - 3 * mean * mean * mean * mean) / (var_ * var_);
+          this.cachedRelativePower = this.cachedPeriodicity;
+        }
+      }
+    }
+
+    const snapPerf = ppgPerf.snapshot();
+    const metrics: SignalQualityMetrics = {
+      sqi: 0,
       perfusionIndex: this.cachedPI,
       snr: pulseSource.strength,
-      motionScore: this.motionScore,
-      saturationRatio: roi.saturationRatio,
-    });
-
-    updateAdaptivePolicy(this.adaptivePolicy, {
-      sqi: this.cachedSqi,
-      motion: Math.max(this.motionScore, this.signalMotionScore),
-      perfusionIndex: this.cachedPI,
       periodicity: this.cachedPeriodicity,
-      bpm: this.lastKnownBpm,
-    });
-    if (this.frameCount % 8 === 0) {
-      this.bandpassFilter.setBand(
-        this.adaptivePolicy.bandLowHz,
-        this.adaptivePolicy.bandHighHz,
-      );
-    }
+      motionScore: this.motionScore,
+      saturationRatio: roi.rawRed > 250 ? 1 : 0,
+      underexposureRatio: this.underexposureEma,
+      frameDropRatio: snapPerf.droppedEstimate / Math.max(1, this.frameCount),
+      fpsEffective: this.estimatedSampleRate,
+      timestampJitterMs: snapPerf.jitterMs,
+      skewness: this.cachedSkewness,
+      relativePower: this.cachedRelativePower,
+    };
+
+    this.cachedSqi = SignalQualityIndex.calculate(metrics);
+    this.signalQuality = this.cachedSqi;
 
     const rejectionScale =
       rejectionStatus === 'MOTION_ARTIFACT'
@@ -902,11 +620,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       (hemoglobinScene || ensembleScene) &&
       (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT');
 
-    // Con BioTremorAbsorber (Spatio-Temporal Memory Matrix), los micro-temblores
-    // se absorben en el buffer óptico sin requerir supresión forzada a cero.
-    // Solo un movimiento brusco/violento del dispositivo aplica una breve atenuación.
-    if (this.motionScore > 1.2) {
-      this.postMotionSuppression = 2;
+    // Post-motion hold-off: despues de que el motion cesa, el BPF 4° orden aun
+    // tiene ringing (~0.5s). Suprimimos la salida durante ese tiempo.
+    if (motionArtifact) {
+      this.postMotionSuppression = 20; // ~670ms a 30fps
     } else if (this.postMotionSuppression > 0) {
       this.postMotionSuppression--;
     }
@@ -916,6 +633,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       (this.lastInstantFinger &&
         (hemoglobinScene || ensembleScene) &&
         this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85)) &&
+      !motionArtifact &&
       this.postMotionSuppression <= 0;
     const displayQuality = signalPathActive
       ? fingerUi
@@ -929,7 +647,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const now = timestamp;
     if (now - this.lastLogTime >= 2000) {
       this.lastLogTime = now;
-      const snap = snapPerf;
+      const snap = ppgPerf.snapshot();
       log.info(
         `[${pulseSource.label}] Filt=${enhanced.toFixed(3)} agc=${this.pulseAgcState.scale.toFixed(2)} Q=${displayQuality} raw=${this.signalQuality} ` +
         `PI=${perfusionIndex.toFixed(4)} P=${this.cachedPeriodicity.toFixed(2)} Contact=${this.contactState} ` +
@@ -963,7 +681,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       // Canales del banco de filtros especializado por signo vital
       morphologyFiltered: signalPathActive ? splitOut.morphology : 0,
       respirationFiltered: signalPathActive ? splitOut.respiration : 0,
-      arrhythmiaFiltered: signalPathActive ? splitOut.arrhythmia : 0,
       spo2Channels: signalPathActive ? splitOut.spo2 : undefined,
       placementMode: this.placementMode,
       quality: displayQuality,
@@ -977,8 +694,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       rawBlue: roi.rawBlue,
       accelRespiration: this.accelRespEstimate ?? undefined,
       diagnostics: {
-        ...this.buildFingerDiagnostics(roi, 
-          displayStatus, {
+        ...this.buildFingerDiagnostics(roi, motionArtifact, displayStatus, {
           message:
             `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
             `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
@@ -1001,11 +717,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           periodicity: this.cachedPeriodicity,
           // Movimiento efectivo = max(IMU, micro-movimiento del dedo desde la señal).
           motionScore: Math.max(this.motionScore, this.signalMotionScore),
-          saturationRatio: roi.saturationRatio,
+          saturationRatio: (roi.rawRed > 250 ? 1 : 0),
           underexposureRatio: this.underexposureEma,
           fpsEffective: this.estimatedSampleRate,
-          frameDropRatio: snapPerf.droppedEstimate / Math.max(1, this.frameCount),
-          timestampJitterMs: snapPerf.jitterMs,
+          frameDropRatio: ppgPerf.snapshot().droppedEstimate / Math.max(1, this.frameCount),
+          timestampJitterMs: ppgPerf.snapshot().jitterMs,
         } as SignalQualityMetrics,
       },
     });
@@ -1281,14 +997,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private computeRoiRect(width: number, height: number) {
-    const roiSize =
-      Math.min(width, height) *
-      VITAL_THRESHOLDS.FINGER.ROI_SIZE_FRACTION *
-      this.adaptivePolicy.roiScale;
-    // El ROI nunca puede exceder el lado menor del frame: si lo hiciera, el
-    // clamp de startX con min>max produciría offsets negativos y lecturas
-    // fuera del buffer de píxeles (NaN en tiles).
-    const side = Math.max(1, Math.min(Math.floor(roiSize), Math.min(width, height)));
+    const roiSize = Math.min(width, height) * VITAL_THRESHOLDS.FINGER.ROI_SIZE_FRACTION;
+    const side = Math.floor(roiSize);
     
     const centerX = Math.floor(width * this.trackedCentroid.x);
     const centerY = Math.floor(height * this.trackedCentroid.y);
@@ -1325,6 +1035,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   private buildFingerDiagnostics(
     roi: ROIMetrics,
+    motionArtifact: boolean,
     status: MeasurementStatus,
     extras?: {
       message?: string;
@@ -1372,12 +1083,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (this.frameCount % 10 !== 0) return;
 
     const fiTail = this.frameIntervalBuffer.tail(this.frameIntervalBuffer.length);
-    const medDeltaMs = median(fiTail) || (1000 / DSP_CONSTANTS.DEFAULT_SAMPLE_RATE);
-    const estimatedFps = clamp(
-      1000 / medDeltaMs,
-      DSP_CONSTANTS.SAMPLE_RATE_MIN,
-      DSP_CONSTANTS.SAMPLE_RATE_MAX,
-    );
+    fiTail.sort((a, b) => a - b);
+    const median = fiTail[Math.floor(fiTail.length / 2)] ?? 33;
+    const estimatedFps = clamp(1000 / median, 10, 40);
 
     if (Math.abs(estimatedFps - this.estimatedSampleRate) > 2) {
       this.estimatedSampleRate = estimatedFps;
@@ -1398,7 +1106,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const tiles = this.tileBuffer;
     for (let i = 0; i < tiles.length; i++) {
       const t = tiles[i];
-      t.red = 0; t.green = 0; t.blue = 0; t.sat = 0; t.count = 0;
+      t.red = 0; t.green = 0; t.blue = 0; t.count = 0;
     }
 
     const roiWidth = Math.max(1, endX - startX);
@@ -1416,7 +1124,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         tile.red += data[i];
         tile.green += data[i + 1];
         tile.blue += data[i + 2];
-        if (data[i] > 250) tile.sat++;
         tile.count++;
       }
     }
@@ -1431,8 +1138,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     let sumWeight = 0;
     let sumX = 0;
     let sumY = 0;
-    let totalSampled = 0;
-    let saturatedSamples = 0;
 
     for (let i = 0; i < N; i++) {
       const t = tiles[i];
@@ -1442,8 +1147,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         m.isFinger = false;
         continue;
       }
-      totalSampled += t.count;
-      saturatedSamples += t.sat;
       const red = t.red / t.count;
       const green = t.green / t.count;
       const blue = t.blue / t.count;
@@ -1539,7 +1242,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       // Alpha adaptativo por velocidad instantánea + outlier rejection:
       // movimiento rápido → α alto (sigue); quieto → α bajo (suaviza).
       // Saltos > 3× la media reciente se limitan para ignorar outliers.
-      this.centroidMotionEma = emaBlend(this.centroidMotionEma, displacement, 0.15);
+      this.centroidMotionEma = this.centroidMotionEma * 0.85 + displacement * 0.15;
       const outlierLimit = Math.max(0.005, this.centroidMotionEma * 3);
       const clampedDisp = Math.min(displacement, outlierLimit);
       const alpha = clamp(0.02 + clampedDisp * 3.0, 0.02, 0.25);
@@ -1551,11 +1254,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       );
     } else {
       const alphaDrift = 0.04;
-      this.trackedCentroid.x = emaBlend(this.trackedCentroid.x, 0.5, alphaDrift);
-      this.trackedCentroid.y = emaBlend(this.trackedCentroid.y, 0.5, alphaDrift);
+      this.trackedCentroid.x = this.trackedCentroid.x * (1 - alphaDrift) + 0.5 * alphaDrift;
+      this.trackedCentroid.y = this.trackedCentroid.y * (1 - alphaDrift) + 0.5 * alphaDrift;
     }
-
-    const saturationRatio = totalSampled > 0 ? saturatedSamples / totalSampled : 0;
 
     if (validCount === 0) {
       return {
@@ -1563,7 +1264,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         rawGreen: 0,
         rawBlue: 0,
         coverageRatio: 0,
-        saturationRatio,
         fingerScore: 0,
         fingerTileCount: 0,
         roiX: startX,
@@ -1606,43 +1306,18 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const rawGreen = tw > 0 ? gWs / tw : 0;
     const rawBlue = tw > 0 ? bWs / tw : 0;
 
-    // Procesamiento con BioTremorAbsorber (Sub-Pixel Phase-Locking y Calibración de Temblor)
-    const tileRgbList: Array<{ r: number; g: number; b: number; count: number }> = [];
-    for (let i = 0; i < N; i++) {
-      const tm = metrics[i];
-      const tb = tiles[i];
-      tileRgbList.push({
-        r: tm && tm.valid ? tm.red : 0,
-        g: tm && tm.valid ? tm.green : 0,
-        b: tm && tm.valid ? tm.blue : 0,
-        count: tb ? tb.count : 0,
-      });
-    }
-
-    const absorbed = this.bioTremorAbsorber.processFrame(tileRgbList, {
-      r: rawRed,
-      g: rawGreen,
-      b: rawBlue,
-    });
-
-    const finalRawRed = absorbed.red > 0 ? absorbed.red : rawRed;
-    const finalRawGreen = absorbed.green > 0 ? absorbed.green : rawGreen;
-    const finalRawBlue = absorbed.blue > 0 ? absorbed.blue : rawBlue;
-    const finalCentroidMotion = Math.min(0.25, Math.max(centroidMotion * 0.20, absorbed.tremorScore));
-
     return {
-      rawRed: finalRawRed,
-      rawGreen: finalRawGreen,
-      rawBlue: finalRawBlue,
+      rawRed,
+      rawGreen,
+      rawBlue,
       coverageRatio: fingerCount / validCount,
-      saturationRatio,
       fingerScore: fingerCount > 0 ? fingerScoreSum / fingerCount : 0,
       fingerTileCount: fingerCount,
       roiX: startX,
       roiY: startY,
       roiW,
       roiH,
-      centroidMotion: finalCentroidMotion,
+      centroidMotion,
     };
   }
 
@@ -1651,18 +1326,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.redBaseline = rawRed;
       this.greenBaseline = rawGreen;
       this.blueBaseline = rawBlue;
-      return;
-    }
-
-    if (this.measurementMode === 'gym') {
-      // En modo GYM (cámara frontal rPPG con luz ambiente), la iluminación de fondo
-      // deriva continuamente con leves cambios posturales o fuentes lumínicas.
-      // El tracking DC debe ser dinámico y ágil (alpha ~ 0.06) para que el
-      // algoritmo POS mantenga las señales centradas sin saturar en clampMax (0.06).
-      const gymAlpha = motionArtifact ? 0.22 : 0.06;
-      this.redBaseline = emaBlend(this.redBaseline, rawRed, gymAlpha);
-      this.greenBaseline = emaBlend(this.greenBaseline, rawGreen, gymAlpha);
-      this.blueBaseline = emaBlend(this.blueBaseline, rawBlue, gymAlpha);
       return;
     }
 
@@ -1677,9 +1340,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         ? 0.02
         : 0.04;
     const redBlPrev = this.redBaseline;
-    this.redBaseline = emaBlend(this.redBaseline, rawRed, alpha);
-    this.greenBaseline = emaBlend(this.greenBaseline, rawGreen, alpha);
-    this.blueBaseline = emaBlend(this.blueBaseline, rawBlue, alpha);
+    this.redBaseline = this.redBaseline * (1 - alpha) + rawRed * alpha;
+    this.greenBaseline = this.greenBaseline * (1 - alpha) + rawGreen * alpha;
+    this.blueBaseline = this.blueBaseline * (1 - alpha) + rawBlue * alpha;
     // Si el baseline previo era muy distinto al raw y el nuevo alpha se quedo
     // corto, aproximamos en un solo salto: el DC ya cambio y la convergencia
     // lenta solo prolonga el ringing.
@@ -1687,9 +1350,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const step = Math.abs(rawRed - redBlPrev) / Math.max(1, redBlPrev);
       if (step > 0.03) {
         const fastAlpha = clamp(step * 2, 0.15, 0.6);
-        this.redBaseline = emaBlend(this.redBaseline, rawRed, fastAlpha);
-        this.greenBaseline = emaBlend(this.greenBaseline, rawGreen, fastAlpha);
-        this.blueBaseline = emaBlend(this.blueBaseline, rawBlue, fastAlpha);
+        this.redBaseline = this.redBaseline * (1 - fastAlpha) + rawRed * fastAlpha;
+        this.greenBaseline = this.greenBaseline * (1 - fastAlpha) + rawGreen * fastAlpha;
+        this.blueBaseline = this.blueBaseline * (1 - fastAlpha) + rawBlue * fastAlpha;
       }
     }
   }
@@ -1698,6 +1361,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private extractMorphologySignal(
     rawRed: number,
     rawGreen: number,
+    rawBlue: number,
     placement: FingerPlacementMode,
   ): number {
     const gNorm =
@@ -1737,8 +1401,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.xBuffer.push(X);
     this.yBuffer.push(Y);
 
-    const stdX = this.xBuffer.stdDev();
-    const stdY = this.yBuffer.stdDev();
+    const stdX = this.calculateStdDev(this.xBuffer);
+    const stdY = this.calculateStdDev(this.yBuffer);
     const rawAlpha = stdY > 1e-9 ? stdX / stdY : this.smoothedPosAlpha;
     const reliability = clamp(stdY / Math.max(1, stdX * 0.5 + stdY), 0, 1);
     const blendedAlpha = rawAlpha * reliability + this.smoothedPosAlpha * (1 - reliability);
@@ -1834,22 +1498,38 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
   }
 
+  private calculateStdDev(ring: RingF32): number {
+    const len = ring.length;
+    if (len < 2) return 0;
+    const arr = ring.tail(len);
+    let sum = 0;
+    let sumSq = 0;
+    for (let i = 0; i < len; i++) {
+      const v = arr[i];
+      sum += v;
+      sumSq += v * v;
+    }
+    const mean = sum / len;
+    const variance = (sumSq / len) - (mean * mean);
+    return Math.sqrt(Math.max(0, variance));
+  }
+
   private computeSourceScore(buffer: number[]): number {
     if (buffer.length < 30) return 0;
 
-    const { range } = robustBounds(buffer, 0.1, 0.9);
+    const sorted = [...buffer].sort((a, b) => a - b);
+    const p10 = sorted[Math.floor(sorted.length * 0.1)] ?? 0;
+    const p90 = sorted[Math.floor(sorted.length * 0.9)] ?? 0;
+    const range = p90 - p10;
     if (range < 0.3) return 0;
 
-    const sd = stdDev(buffer);
-    const snr = range / (sd + 0.1);
+    const mean = buffer.reduce((a, b) => a + b, 0) / buffer.length;
+    const variance = buffer.reduce((a, v) => a + (v - mean) ** 2, 0) / buffer.length;
+    const snr = range / (Math.sqrt(variance) + 0.1);
 
     // Check for clipping
-    let clippedCount = 0;
-    const len = buffer.length;
-    for (let i = 0; i < len; i++) {
-      if (Math.abs(buffer[i]) > 70) clippedCount++;
-    }
-    const clipPenalty = (clippedCount / len) * 30;
+    const clipped = buffer.filter(v => Math.abs(v) > 70).length / buffer.length;
+    const clipPenalty = clipped * 30;
 
     return Math.max(0, snr * 15 - clipPenalty);
   }
@@ -1927,11 +1607,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const data = this.periodicityScratch;
     
     // Autocorrelación: lags escalados por sample rate real (36-180 bpm @30fps)
-    const sr = clamp(
-      this.estimatedSampleRate,
-      DSP_CONSTANTS.SAMPLE_RATE_MIN,
-      DSP_CONSTANTS.SAMPLE_RATE_MAX,
-    );
+    const sr = clamp(this.estimatedSampleRate, 10, 60);
     const minLag = Math.max(5, Math.round((sr * 60) / 180));
     const maxLag = Math.min(n - 8, Math.round((sr * 60) / 36));
     let maxCorr = 0;
@@ -1957,71 +1633,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (this.greenDC > 0) return this.greenAC / this.greenDC;
     if (this.redDC > 0) return this.redAC / this.redDC;
     return 0;
-  }
-
-  /**
-   * PERIODICIDAD + MOMENTOS DE VENTANA (throttled) — refresco compartido por
-   * ambos modos (finger y gym). Los momentos (skewness/kurtosis en exceso) se
-   * recalculan cada 8 frames; la periodicidad cada 4.
-   */
-  private refreshSlowWindows(): void {
-    this.periodicitySkip++;
-    if (this.periodicitySkip >= 4 || this.filteredBuffer.length < 90) {
-      this.periodicitySkip = 0;
-      const pInstant = this.calculatePeriodicity();
-      this.periodicityEma =
-        this.periodicityEma <= 0
-          ? pInstant
-          : this.periodicityEma * 0.72 + pInstant * 0.28;
-    }
-    this.cachedPeriodicity = this.periodicityEma;
-
-    this.sqiMetricsCounter++;
-    if (this.sqiMetricsCounter >= 8 && this.filteredBuffer.length >= 60) {
-      this.sqiMetricsCounter = 0;
-      const fLen = this.filteredBuffer.length;
-      const fTail = this.filteredBuffer.tail(fLen);
-      if (fTail.length >= 30) {
-        const moments = computeWindowMoments(fTail);
-        this.cachedSkewness = moments.skewness;
-        this.cachedKurtosis = moments.kurtosis;
-        this.cachedRelativePower = this.cachedPeriodicity;
-      }
-    }
-  }
-
-  /**
-   * SQI CENTRAL — única fuente de verdad para finger y gym (ARCHITECTURE.md).
-   * Recibe las métricas que cada modo puede aportar honestamente (snr y
-   * saturationRatio son modo-específicos; el resto es común) y delega el
-   * scoring a SignalQualityIndex, nunca a una fórmula paralela.
-   */
-  private computeCentralSqi(metrics: {
-    perfusionIndex: number;
-    snr: number | null;
-    motionScore: number;
-    saturationRatio: number;
-  }): { sqi: number; snapPerf: ReturnType<typeof ppgPerf.snapshot> } {
-    const snapPerf = ppgPerf.snapshot();
-    const sqiMetrics: SignalQualityMetrics = {
-      sqi: 0,
-      perfusionIndex: metrics.perfusionIndex,
-      snr: metrics.snr,
-      periodicity: this.cachedPeriodicity,
-      motionScore: metrics.motionScore,
-      saturationRatio: metrics.saturationRatio,
-      underexposureRatio: this.underexposureEma,
-      frameDropRatio: snapPerf.droppedEstimate / Math.max(1, this.frameCount),
-      fpsEffective: this.estimatedSampleRate,
-      timestampJitterMs: snapPerf.jitterMs,
-      skewness: this.cachedSkewness,
-      kurtosis: this.cachedKurtosis,
-      relativePower: this.cachedRelativePower,
-    };
-    const sqi = SignalQualityIndex.calculate(sqiMetrics);
-    this.cachedSqi = sqi;
-    this.signalQuality = sqi;
-    return { sqi, snapPerf };
   }
 
   /** PI proxy desde CV temporal del ROI (antes de que ACDC llene la ventana). */
@@ -2060,9 +1671,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.redDC = 0; this.redAC = 0;
     this.greenDC = 0; this.greenAC = 0;
     this.blueDC = 0; this.blueAC = 0;
-    this.redBaseline = 0;
-    this.greenBaseline = 0;
-    this.blueBaseline = 0;
     this.sourceBuffers.R.reset();
     this.sourceBuffers.G.reset();
     this.sourceBuffers.RG.reset();
@@ -2073,21 +1681,20 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.bandpassFilter.reset();
     this.morphBandpassFilter.reset();
     this.signalSplitter.reset();
-    this.lastKnownBpm = 0;
     resetPulseAgc(this.pulseAgcState);
     this.roiRedPulseRing.reset();
     this.lastRoiRedCv = 0;
     this.signalMotionScore = 0;
     this.lastRawRedForMotion = 0;
     this.trackedCentroid = { x: 0.5, y: 0.5 };
+    this.lastLocalCentroidX = 0.5;
+    this.lastLocalCentroidY = 0.5;
     this.centroidMotionEma = 0;
     for (const b of this.tileGreenBuffers) b.reset();
     this.tilePulsatilityCache.fill(0);
     this.tileMaxPulsatility = 0;
     this.tilePulseThrottle = 0;
     resetActiveStabilizer(this.activeStabilizer);
-    this.gymFaceTracker.reset();
-    this.gymMotionCancellation.reset();
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
     // Resetear contadores y caches para que el WARMUP gate (frameCount < 28)
@@ -2121,7 +1728,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   reset(): void {
     this.resetSignalTrackingBuffers();
-    this.tileConfidence = new Array(this.TILE_COLUMNS * this.TILE_ROWS).fill(0);
+    this.tileConfidence = new Array(25).fill(0);
     this.frameIntervalBuffer.reset();
     this.estimatedSampleRate = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
     this.fingerDetected = false;
@@ -2141,28 +1748,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.lastSourceSwitch = 0;
     this.bandpassFilter.setSampleRate(this.estimatedSampleRate);
     this.morphBandpassFilter.setSampleRate(this.estimatedSampleRate);
-    this.bioTremorAbsorber.reset();
     Object.assign(this.acquisitionState, createAcquisitionState());
-    resetAdaptivePolicy(this.adaptivePolicy);
-    this.zloFrameCount = 0;
-    this.pixelStride = 3;
-    this.grayBuffer = null;
-    this.cachedSkewness = 0;
-    this.cachedKurtosis = 0;
-    this.cachedRelativePower = 0;
-    this.sqiMetricsCounter = 0;
-  }
-
-  /**
-   * RESET DURO DE SESIÓN: además del estado DSP, descarta la caracterización de
-   * cámara. Se invoca al terminar/empezar una medición y al cambiar de cámara,
-   * para que ningún estado (baselines, banda adaptativa, hints del dispositivo)
-   * se arrastre de una sesión a otra.
-   */
-  resetSession(): void {
-    this.reset();
-    this.cameraHints = inferCameraRuntimeHints();
-    this.bandpassFilter.setBand(0.5, 4.5);
   }
 
   /**
@@ -2187,11 +1773,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.signalMotionScore * (1 - Q.MOTION_SIGNAL_EMA_ALPHA) + combinedInst * Q.MOTION_SIGNAL_EMA_ALPHA;
   }
 
-  /**
-   * Público: además del listener DOM, el Web Worker inyecta eventos sintéticos
-   * de movimiento (`{ accelerationIncludingGravity, rotationRate }`) por postMessage.
-   */
-  handleMotionEvent = (event: DeviceMotionEvent) => {
+  private handleMotionEvent = (event: DeviceMotionEvent) => {
     const acc = event.accelerationIncludingGravity;
     if (!acc || acc.x === null || acc.y === null || acc.z === null) return;
 
@@ -2239,7 +1821,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     const rawScore = accelRMS * 0.5 + gyroRMS * 0.3;
     this.motionScore = this.motionScore * 0.85 + rawScore * 0.15;
-    this.gymMotionCancellation.pushMotionSample(accelRMS);
   };
 
   /**

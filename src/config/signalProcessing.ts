@@ -73,11 +73,9 @@ export const PEAK_DETECTION_DEFAULTS = {
    * → no afecta señales débiles; alto → no descarta latidos reales ni PVC.
    */
   peakAmplitudeRejectUpper: 2.6,
-  /** Escala mínima de prominencia de candidatos antes del filtrado relativo */
-  candidateProminenceScale: 0.4,
   minSQI: 10,
-  /** Ventana para emitir pico respecto al frame actual (ms) — cubre ciclo cardíaco completo + latencia MA */
-  peakEmitWindowMs: 1200,
+  /** Ventana para emitir pico respecto al frame actual (ms) — ~½ RR @ 45 BPM */
+  peakEmitWindowMs: 720,
   /** Mínimo de muestras en ventana para correr ensemble */
   minSamplesEnsemble: 72,
   /** Ventana de integración para detección (~180 ms de pulso sistólico típico a 30 Hz) */
@@ -112,25 +110,14 @@ export const PEAK_DETECTION_DEFAULTS = {
 } as const;
 
 /**
- * Constantes DSP centralizadas — fuente primaria para parámetros DSP.
- * Algunos módulos pueden tener constantes locales específicas de su dominio
- * (ej: HeartBeatProcessor tiene MIN_PEAK_INTERVAL_MS derivado de VITAL_THRESHOLDS).
+ * Constantes DSP centralizadas — única fuente de verdad.
+ * Evita valores duplicados ({@link HeartBeatProcessor}, {@link PPGSignalProcessor}, etc.).
  */
 export const DSP_CONSTANTS = {
   /** Tamaño de búfer para señal PPG cruda y filtrada (≈10 s @ 30 fps). */
   BUFFER_SIZE: 300,
   /** Frecuencia de muestreo nominal por defecto (fps). */
   DEFAULT_SAMPLE_RATE: 30,
-  /** Clamps del sample rate efectivo estimado desde timestamps (fps). */
-  SAMPLE_RATE_MIN: 10,
-  SAMPLE_RATE_MAX: 60,
-  /** Banda del canal de pulso (Hz): rango cardíaco estándar (30–220 BPM). */
-  PPG_BAND_HZ: [0.5, 4.5] as const,
-  /**
-   * Banda del canal morfológico (BP, Hz): más ancha para preservar la forma
-   * completa del pulso incluida la escotadura dicrótica.
-   */
-  PPG_MORPH_BAND_HZ: [0.5, 12] as const,
   /** Número máximo de intervalos RR almacenados para análisis de variabilidad. */
   MAX_RR_INTERVALS: 30,
   /** Tamaño de búfer por fuente para ranking competitivo de canales. */
@@ -142,10 +129,7 @@ export const RESPIRATION_DEFAULTS = {
   minRpm: 6,
   maxRpm: 40,
   minStableFrames: 90,
-  /** Muestras mínimas del historial para confiar en la estimación */
   minBuffer: 240,
-  /** Capacidad del ring buffer de historial respiratorio (VitalSignsProcessor) */
-  bufferSamples: 320,
 } as const;
 
 /**
@@ -172,45 +156,4 @@ export const RESP_SMART_FUSION = {
   DISAGREEMENT_CONF_SCALE: 0.30,
   /** Mínimo de muestras en una serie de modalidad para estimar */
   MIN_SERIES_SAMPLES: 24,
-} as const;
-
-/**
- * Parámetros del banco de filtros PPG (PPGSignalSplitter) por canal vital.
- * Fuente única: evita literales dispersos en el splitter.
- */
-export const PPG_SPLITTER_DEFAULTS = {
-  hr: {
-    highCutHz: 4.5,
-    hampelWindow: 7,
-    hampelSigma: 3.0,
-  },
-  spo2: {
-    highCutHz: 3.5,
-    hampelWindow: 5,
-    hampelSigma: 2.5,
-    dcEmaAlpha: 0.015,
-  },
-  morphology: {
-    lowHz: 0.5,
-    highHz: 12.0,
-    detrendWindow: 180,
-    hampelWindow: 7,
-    hampelSigma: 2.8,
-    hpfCutoffHz: 0.5,
-  },
-  respiration: {
-    lowCutHz: 0.55,
-    hpfCutoffHz: 0.08,
-    riivWindowFactor: 2.0,
-    pulseStrengthScale: 10,
-    pulseStrengthMix: 0.4,
-  },
-  arrhythmia: {
-    highCutHz: 3.5,
-    notchHarmonic: 18,
-    hampelWindow: 11,
-    hampelSigma: 3.5,
-    mwiWindowFactor: 0.18,
-    mwiMinFrames: 3,
-  },
 } as const;

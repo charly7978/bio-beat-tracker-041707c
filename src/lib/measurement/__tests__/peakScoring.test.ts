@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  passesRrPlausibility,
   scorePeakCandidate,
   PEAK_SCORE_THRESHOLDS,
 } from '../peakScoring';
@@ -25,5 +26,10 @@ describe('peakScoring', () => {
       perfusionIndex: 0.002,
     });
     expect(s).toBeLessThan(PEAK_SCORE_THRESHOLDS.minScore);
+  });
+
+  it('rechaza RR muy alejado de la mediana previa', () => {
+    expect(passesRrPlausibility(1200, 800)).toBe(false);
+    expect(passesRrPlausibility(850, 800)).toBe(true);
   });
 });

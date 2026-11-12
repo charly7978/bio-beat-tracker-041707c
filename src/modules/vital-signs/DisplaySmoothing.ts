@@ -5,21 +5,16 @@
  * unitario del suavizado independientemente del pipeline completo.
  *
  * - EMA adaptativo con detección de outliers (cambios bruscos → alpha menor)
- *   — el cálculo de alpha vive en `adaptiveEma.ts` (fuente de verdad compartida
- *   con la capa UI en `src/lib/measurement/displaySmoothing.ts`).
  * - Display hold: mantiene el último valor válido cuando el gate baja
  *   temporalmente, evitando parpadeo en la UI.
  */
 
-import {
-  computeAdaptiveAlpha,
-  clampAlpha,
-  emaBlend,
-  PROCESSOR_EMA_PARAMS,
-  PROCESSOR_EMA_BASE,
-} from '../../lib/measurement/adaptiveEma';
-
 export class DisplaySmoothing {
+  // EMA alfas base — más rápidos para que la UI refleje cambios reales sin
+  // latencia excesiva. El suavizado fino se delega al HeartBeatProcessor.
+  private readonly EMA_ALPHA_STABLE = 0.20;
+  private readonly EMA_ALPHA_DYNAMIC = 0.35;
+
   // Estado del display hold
   private holdSpO2 = 0;
   private holdSystolic = 0;
@@ -41,15 +36,20 @@ export class DisplaySmoothing {
     if (current === 0 || isNaN(current) || !isFinite(current)) return newVal;
     if (isNaN(newVal) || !isFinite(newVal)) return current;
 
-    const baseAlpha = type === 'stable' ? PROCESSOR_EMA_BASE.stable : PROCESSOR_EMA_BASE.dynamic;
+    const baseAlpha = type === 'stable' ? this.EMA_ALPHA_STABLE : this.EMA_ALPHA_DYNAMIC;
     const relativeChange = Math.abs(newVal - current) / (Math.abs(current) + 0.01);
 
-    const alpha = clampAlpha(
-      computeAdaptiveAlpha(relativeChange, baseAlpha, PROCESSOR_EMA_PARAMS),
-      0.05,
-      0.5,
-    );
-    return emaBlend(current, newVal, alpha);
+    let adaptiveAlpha = baseAlpha;
+    if (relativeChange > 0.5) {
+      adaptiveAlpha = baseAlpha * 2.0;
+    } else if (relativeChange > 0.3) {
+      adaptiveAlpha = baseAlpha * 1.5;
+    } else if (relativeChange < 0.05) {
+      adaptiveAlpha = baseAlpha * 0.5;
+    }
+
+    adaptiveAlpha = Math.max(0.05, Math.min(0.5, adaptiveAlpha));
+    return current * (1 - adaptiveAlpha) + newVal * adaptiveAlpha;
   }
 
   /**
@@ -65,16 +65,23 @@ export class DisplaySmoothing {
     if (current === 0 || isNaN(current) || !isFinite(current)) return newVal;
     if (isNaN(newVal) || !isFinite(newVal)) return current;
 
-    const baseAlpha = type === 'stable' ? PROCESSOR_EMA_BASE.stable : PROCESSOR_EMA_BASE.dynamic;
+    const baseAlpha = type === 'stable' ? this.EMA_ALPHA_STABLE : this.EMA_ALPHA_DYNAMIC;
     const relativeChange = Math.abs(newVal - current) / (Math.abs(current) + 0.01);
 
+    let adaptiveAlpha = baseAlpha;
+    if (relativeChange > 0.5) {
+      adaptiveAlpha = baseAlpha * 2.0;
+    } else if (relativeChange > 0.3) {
+      adaptiveAlpha = baseAlpha * 1.5;
+    } else if (relativeChange < 0.05) {
+      adaptiveAlpha = baseAlpha * 0.5;
+    }
+
     const w = Math.max(0, Math.min(1, weight));
-    const alpha = clampAlpha(
-      computeAdaptiveAlpha(relativeChange, baseAlpha, PROCESSOR_EMA_PARAMS) * (0.15 + 0.85 * w),
-      0.015,
-      0.5,
-    );
-    return emaBlend(current, newVal, alpha);
+    adaptiveAlpha = adaptiveAlpha * (0.15 + 0.85 * w);
+    adaptiveAlpha = Math.max(0.015, Math.min(0.5, adaptiveAlpha));
+
+    return current * (1 - adaptiveAlpha) + newVal * adaptiveAlpha;
   }
 
   /**

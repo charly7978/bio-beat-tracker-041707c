@@ -1,6 +1,5 @@
 import { ArrhythmiaProcessor } from './arrhythmia-processor';
-import { BloodPressureProcessor, type BPNexusMeta } from './BloodPressureProcessor';
-import type { NexusBpObservation } from '../../lib/vitals/nexusFusionCore';
+import { BloodPressureProcessor } from './BloodPressureProcessor';
 import { SpO2Calculator, type RGBData } from './SpO2Calculator';
 export type { RGBData };
 import { DisplaySmoothing } from './DisplaySmoothing';
@@ -19,13 +18,6 @@ import type { FingerPlacementMode } from '../../types/signal';
 
 const log = createLogger('VitalSignsProcessor');
 
-/**
- * Edad máxima de una observación cross-site (ms) antes de descartarla.
- * El τ se estima sobre una ventana de 8 s y se publica cada 1,5 s; pasado este
- * margen la observación ya no describe la hemodinámica actual del usuario.
- */
-const NEXUS_OBSERVATION_TTL_MS = 2500;
-
 export interface VitalSignsDetailedResult {
   heartRate: VitalMeasurement<number>;
   spo2: VitalMeasurement<number>;
@@ -33,8 +25,6 @@ export interface VitalSignsDetailedResult {
   respiration: VitalMeasurement<number>;
   arrhythmia: VitalMeasurement<{ count: number; status: string; score?: number }>;
   signalQuality: number;
-  /** Nivel de confianza global de la medición (misma política de estabilidad que el gate de frames). */
-  measurementConfidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INVALID';
   isCalibrating: boolean;
   calibrationProgress: number;
 }
@@ -72,12 +62,6 @@ export class VitalSignsProcessor {
   private bloodPressureProcessor: BloodPressureProcessor;
   private lastBPConfidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT' = 'INSUFFICIENT';
   private lastBPFeatureQuality: number = 0;
-  /** Incertidumbre p5–p95 y metadatos NEXUS del último estimate (F0/F3). */
-  private lastBPUncertainty: { sbpP5: number; sbpP95: number; dbpP5: number; dbpP95: number } | null = null;
-  private lastBPNexus: { coherenceLevel: string; coherenceScore: number; sourcesUsed: string[]; tauMs: number | null } | null = null;
-  /** Observación cross-site pendiente de entrar a la fusión de PA (consume-una-vez). */
-  private pendingNexusCrossSite: NexusBpObservation | null = null;
-  private pendingNexusMeta: Omit<BPNexusMeta, 'sourcesUsed'> | null = null;
   private calibrationSamples: number = 0;
   private readonly CALIBRATION_REQUIRED = 25;
   private isCalibrating: boolean = false;
@@ -88,11 +72,7 @@ export class VitalSignsProcessor {
     systolicPressure: 0,
     diastolicPressure: 0,
     arrhythmiaCount: 0,
-    // Estado inicial HONESTO: sin RR válidos aún no se puede afirmar ritmo
-    // normal ni ausencia de arritmias (regla "sin lectura" sobre lectura falsa).
-    // El ArrhythmiaProcessor transiciona CALIBRANDO... → APRENDIENDO RITMO...
-    // → RITMO NORMAL / ARRITMIA DETECTADA sobre evidencia real.
-    arrhythmiaStatus: "CALIBRANDO...",
+    arrhythmiaStatus: "SIN ARRITMIAS|0",
     arrhythmiaScore: 0,
     lastArrhythmiaData: null as { timestamp: number; rmssd: number; rrVariation: number; } | null,
     signalQuality: 0
@@ -102,8 +82,9 @@ export class VitalSignsProcessor {
   private readonly HISTORY_SIZE = VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES;
   private signalHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
   private morphologyHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
+  private placementMode: FingerPlacementMode = 'hybrid';
   /** Buffer más largo para modulación respiratoria (~10 Hz efectivos desde Index). */
-  private readonly RESPIRATION_BUFFER = RESPIRATION_DEFAULTS.bufferSamples;
+  private readonly RESPIRATION_BUFFER = 320;
   private respirationHistory: RingF32 = new RingF32(this.RESPIRATION_BUFFER);
   private readonly VITAL_SIGNAL_ESTIMATE_HZ = 10;
   private frameCount = 0;  // Contador continuo para logging/diagnóstico
@@ -113,17 +94,26 @@ export class VitalSignsProcessor {
 
   // Gating de estabilidad (Consistencia)
   private stableFramesCount: number = 0;
+  private readonly STABILITY_SPO2_FRAMES = 45;  // ~1.5s para SpO2 (actualización rápida)
+  private readonly STABILITY_BP_FRAMES = VITAL_THRESHOLDS.BP.STABILITY_FRAMES_HIGH;
   private lastCoherentSpO2: number = 0;
   /** Frames seguidos con SpO2 fuera de banda de coherencia → adapta cambios reales sostenidos. */
   private spo2IncoherentStreak = 0;
 
+  // Suavizado adaptativo para estabilidad SIN perder respuesta
+  // Alpha más bajo = más suavizado = lecturas más estables
+  private readonly EMA_ALPHA_STABLE = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_PRIMARY_STABLE;
+  private readonly EMA_ALPHA_DYNAMIC = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_PRIMARY_DYNAMIC;
   /** Segundo EMA (doble suavizado) — reduce ruido residual con menos latencia que un único EMA fuerte. */
   private readonly EMA_ALPHA_SECONDARY = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_SECONDARY;
-  // Estado del segundo EMA (segundo pase aplicado a SpO2)
+  // Estados del segundo EMA por signo vital
   private ema2Spo2 = 0;
+  private ema2Sys = 0;
+  private ema2Dia = 0;
 
   // Contador de pulsos válidos
   private validPulseCount: number = 0;
+  private readonly MIN_PULSES_REQUIRED = 2;
   private lastBPM: number = 0;
   /** Últimos intervalos RR (ms) recibidos — alimentan la modalidad RIFV de respiración. */
   private lastRrIntervals: number[] = [];
@@ -153,20 +143,16 @@ export class VitalSignsProcessor {
     this.syncAnthropometric();
   }
 
-  public syncAnthropometric(): void {
+  private syncAnthropometric(): void {
     const cal = CalibrationManager.getInstance();
     const anthrop = cal.getAnthropometric();
     if (anthrop) {
       this.bloodPressureProcessor.setAnthropometric(anthrop);
     }
-    // Cargar modelo personal SpO2 si existe.
-    const spo2Model = cal.getActiveSpo2PersonalModel?.();
-    if (spo2Model) this.spo2Calculator.setPersonalModel(spo2Model);
   }
 
   /** Calentamiento in-sesión (muestras internas), no crea perfiles en `CalibrationManager`. */
   startCalibration(): void {
-    this.syncAnthropometric();
     this.isCalibrating = true;
     this.calibrationSamples = 0;
     this.validPulseCount = 0;
@@ -192,8 +178,6 @@ export class VitalSignsProcessor {
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
-    this.pendingNexusCrossSite = null;
-    this.pendingNexusMeta = null;
     this.spo2Calculator.reset();
     this.displaySmoothing.reset();
   }
@@ -208,43 +192,8 @@ export class VitalSignsProcessor {
   }
 
   setPlacementMode(mode: FingerPlacementMode): void {
+    this.placementMode = mode;
     this.bloodPressureProcessor.setPlacementMode(mode);
-  }
-
-  /**
-   * Puente NEXUS: registra la observación de tránsito cara→dedo para la próxima
-   * estimación de PA. Semántica consume-una-vez y caducidad por tiempo: una
-   * observación vieja jamás se reutiliza como si describiera el presente.
-   * Si el puente no aporta nada, la PA sigue siendo la del motor físico local.
-   */
-  setNexusCrossSiteObservation(
-    observation: NexusBpObservation | null,
-    meta: Omit<BPNexusMeta, 'sourcesUsed'> | null,
-  ): void {
-    if (observation === null || meta === null) {
-      this.pendingNexusCrossSite = null;
-      this.pendingNexusMeta = null;
-      return;
-    }
-    this.pendingNexusCrossSite = observation;
-    this.pendingNexusMeta = meta;
-  }
-
-  /** Entrega la observación pendiente al motor de PA, descartándola si caducó o es incoherente. */
-  private forwardPendingNexusObservation(): void {
-// Regla de honestidad: si la coherencia es INCOMPATIBLE, no se empuja la
-// observación y la PA queda puramente física con su propio motivo.
-    const observation = this.pendingNexusCrossSite;
-    const meta = this.pendingNexusMeta;
-    this.pendingNexusCrossSite = null;
-    this.pendingNexusMeta = null;
-    if (observation === null || meta === null) return;
-    const ageMs = getMonotonicNow() - observation.timestampMs;
-    if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > NEXUS_OBSERVATION_TTL_MS) {
-      log.debug(`observación NEXUS descartada por edad (${Math.round(ageMs)} ms)`);
-      return;
-    }
-    this.bloodPressureProcessor.setNexusCrossSiteObservation(observation, meta);
   }
 
   processSignal(
@@ -259,7 +208,6 @@ export class VitalSignsProcessor {
     splitterChannels?: {
       morphologyFiltered?: number;
       respirationFiltered?: number;
-      arrhythmiaFiltered?: number;
       spo2Channels?: {
         acRed: number;
         dcRed: number;
@@ -269,6 +217,9 @@ export class VitalSignsProcessor {
         dcBlue?: number;
       };
     },
+    faceBvp?: number,
+    faceBpm?: number,
+    faceQuality?: number,
     /** Respiración pre-estimada del acelerómetro (IMU) — 4ª modalidad de la Smart Fusion. */
     accelRespiration?: { rpm: number; quality: number },
   ): VitalSignsResult {
@@ -361,8 +312,15 @@ export class VitalSignsProcessor {
     // Validar pulso real (BP y arritmias; SpO2 usa ratio RGB y no depende de RR)
     this.validateRealPulse(rrData);
 
-    this.calculateVitalSigns(effectiveSqi, currentBPM, 
-rrData);
+    // Fusionar BPM de dedo y rostro usando pesos de calidad
+    let fusedBpm = currentBPM;
+    if (typeof faceBpm === 'number' && faceBpm > 45 && faceBpm < 200 && typeof faceQuality === 'number' && faceQuality > 15) {
+      const fingerWeight = Math.max(5, signalQuality);
+      const faceWeight = Math.max(5, faceQuality);
+      fusedBpm = (currentBPM * fingerWeight + faceBpm * faceWeight) / (fingerWeight + faceWeight);
+    }
+
+    this.calculateVitalSigns(signalValue, effectiveSqi, fusedBpm, rrData);
 
     return this.getFormattedResult();
   }
@@ -503,12 +461,9 @@ rrData);
 
     const spo2Shown = this.displaySmoothing.updateSpO2Hold(
       this.measurements.spo2,
-      spo2UiReady &&
-        this.measurements.spo2 >= VITAL_THRESHOLDS.SPO2.MIN_VALID &&
-        this.measurements.spo2 <= VITAL_THRESHOLDS.SPO2.MAX_VALID,
+      spo2UiReady && this.measurements.spo2 >= 70 && this.measurements.spo2 <= 100,
     );
-    const spo2HasDisplay =
-      spo2Shown >= VITAL_THRESHOLDS.SPO2.MIN_VALID && spo2Shown <= VITAL_THRESHOLDS.SPO2.MAX_VALID;
+    const spo2HasDisplay = spo2Shown >= 70 && spo2Shown <= 100;
 
     const spo2Status: MeasurementStatus = !spo2UiReady && !spo2HasDisplay
       ? "LOW_SIGNAL_QUALITY"
@@ -584,7 +539,7 @@ rrData);
             ? "Beer–Lambert ratio-of-ratios con perfil de referencia vigente"
             : "Estimación ratio-of-ratios cámara+flash (no sustituye oxímetro certificado); calibre con oxímetro para uso clínico",
         signalQuality: { ...commonSQM },
-        diagnostics: { rValue: (() => { const h = this.spo2Calculator.getRValueHistory(); return h.length ? h[h.length - 1] : undefined; })(), tripleRatioFeatures: this.spo2Calculator.getLastTripleRatioFeatures() },
+        diagnostics: { rValue: (() => { const h = this.spo2Calculator.getRValueHistory(); return h.length ? h[h.length - 1] : undefined; })() },
         calibration: spo2Calib
       },
       bloodPressure: {
@@ -610,11 +565,7 @@ rrData);
             ? "PWA morfológica con perfil calibrado"
             : "Estimación PWA desde morfología PPG (sin tensiómetro de referencia); valor orientativo",
         signalQuality: { ...commonSQM },
-        diagnostics: {
-          featureQuality: this.lastBPFeatureQuality,
-          uncertainty: this.lastBPUncertainty ?? undefined,
-          nexus: this.lastBPNexus ?? undefined,
-        },
+        diagnostics: { featureQuality: this.lastBPFeatureQuality },
         calibration: bpCalib
       },
       respiration: {
@@ -652,7 +603,6 @@ rrData);
         diagnostics: { rmssd: this.measurements.lastArrhythmiaData?.rmssd }
       },
       signalQuality: Math.round(sqi),
-      measurementConfidence: this.getMeasurementConfidence(),
       isCalibrating: this.isCalibrating,
       calibrationProgress: this.getCalibrationProgress(),
       lastArrhythmiaData: this.measurements.lastArrhythmiaData
@@ -667,6 +617,7 @@ rrData);
    * para glucosa, hemoglobina y lípidos con modelos basados en literatura
    */
   private calculateVitalSigns(
+    signalValue: number,
     signalQuality: number,
     currentBPM: number,
     rrData?: RRData,
@@ -696,20 +647,10 @@ rrData);
 
     // === SpO2 — Basado en física (Beer-Lambert), no estadística ===
     // SpO2 usa ratios ópticos AC/DC directamente de la cámara.
-    const spo2Result = this.spo2Calculator.calculate(
-      this.rgbData,
-      this.frameCount,
-      30,
-      currentBPM > 0 ? currentBPM : undefined,
-    );
-    const spo2 = spo2Result.value;
+    // Solo necesita datos RGB válidos y confidence no-INVALID.
+    const spo2 = this.spo2Calculator.calculate(this.rgbData, this.frameCount, this.VITAL_SIGNAL_ESTIMATE_HZ);
     const spo2Conf = this.getSpo2Confidence();
-    if (
-      spo2 > 0 &&
-      spo2 >= VITAL_THRESHOLDS.SPO2.MIN_VALID &&
-      spo2 <= VITAL_THRESHOLDS.SPO2.MAX_VALID &&
-      spo2Conf !== 'INVALID'
-    ) {
+    if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && spo2Conf !== 'INVALID') {
       const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 5;
       if (isCoherent) {
         this.spo2IncoherentStreak = 0;
@@ -737,52 +678,51 @@ rrData);
 
     // === BP ===
     if (validRR.length >= 2) {
-      this.forwardPendingNexusObservation();
       const bpEstimate = this.bloodPressureProcessor.estimate(
         this.morphologyHistory.tail(this.HISTORY_SIZE),
         validRR,
-        30,
+        this.VITAL_SIGNAL_ESTIMATE_HZ,
         this.lastBPM > 0 ? this.lastBPM : undefined,
       );
 
       this.lastBPConfidence = bpEstimate.confidence;
       this.lastBPFeatureQuality = bpEstimate.featureQuality;
-      this.lastBPUncertainty = bpEstimate.uncertainty ?? null;
-      this.lastBPNexus = bpEstimate.nexus
-        ? {
-            coherenceLevel: bpEstimate.nexus.coherenceLevel,
-            coherenceScore: bpEstimate.nexus.coherenceScore,
-            sourcesUsed: bpEstimate.nexus.sourcesUsed,
-            tauMs: bpEstimate.nexus.tauMs,
-          }
-        : null;
 
       if (bpEstimate.systolic > 0 && bpEstimate.confidence !== 'INSUFFICIENT') {
-        const finalSys = bpEstimate.systolic;
-        const finalDia = bpEstimate.diastolic;
+        const calib = CalibrationManager.getInstance();
+        const adjusted = calib.applyBloodPressureCalibration(
+          bpEstimate.systolic,
+          bpEstimate.diastolic,
+        );
 
+        const finalSys = adjusted.systolic;
+        const finalDia = adjusted.diastolic;
+
+        const bpCfg = VITAL_THRESHOLDS.BP;
         const bpReady =
           bpEstimate.confidence === 'HIGH' ||
-          bpEstimate.confidence === 'MEDIUM' ||
-          (bpEstimate.confidence === 'LOW' && this.stableFramesCount >= 6) ||
-          this.validPulseCount >= 2;
-
+          (bpEstimate.confidence === 'MEDIUM' &&
+            this.stableFramesCount >= bpCfg.STABILITY_FRAMES_MEDIUM) ||
+          (bpEstimate.confidence === 'LOW' &&
+            this.stableFramesCount >= bpCfg.STABILITY_FRAMES_HIGH);
         if (bpReady) {
           const cw = this.confidenceToWeight(bpEstimate.confidence)
-            * clamp(bpEstimate.featureQuality / 50, 0.2, 1.0);
+            * clamp(bpEstimate.featureQuality / 60, 0.1, 1.0);
 
-          this.measurements.systolicPressure = this.displaySmoothing.smoothWeightedValue(
+          const bpFirstSys = this.displaySmoothing.smoothWeightedValue(
             this.measurements.systolicPressure,
             finalSys,
             cw,
             'stable',
           );
-          this.measurements.diastolicPressure = this.displaySmoothing.smoothWeightedValue(
+          this.measurements.systolicPressure = this.applyEma2('ema2Sys', bpFirstSys);
+          const bpFirstDia = this.displaySmoothing.smoothWeightedValue(
             this.measurements.diastolicPressure,
             finalDia,
             cw,
             'stable',
           );
+          this.measurements.diastolicPressure = this.applyEma2('ema2Dia', bpFirstDia);
 
           this.bpSysWeightedSum += finalSys * cw;
           this.bpDiaWeightedSum += finalDia * cw;
@@ -812,13 +752,33 @@ rrData);
   }
 
   /**
+   * SpO2 - FÓRMULA RATIO-OF-RATIOS
+   * 
+   * Basado en Beer-Lambert / TI SLAA655, calibrado para cámara smartphone:
+   * R = (AC_red/DC_red) / (AC_green/DC_green)
+   * SpO2 = 112 - 28 * R   (coeficientes empíricos para green como proxy IR)
+   * 
+   * Verde se usa como proxy de IR porque ofrece mejor SNR en la yema del dedo
+   * con LED flash blanco que el canal azul.
+   * 
+   * Mejoras implementadas:
+   * - Filtrado de mediana sobre ventana de R para estabilidad
+   * - Gating por PI mínimo (perfusión) antes de calcular
+   * - Validación del rango físico de R (0.2-2.5 para tejido humano)
+   *
+   * NOTA: La implementación concreta se delegó a SpO2Calculator (importado arriba).
+   * Este comentario y el método huérfano calculateSpO2Raw se eliminaron en la
+   * optimización 2026 para evitar duplicación de lógica.
+   */
+
+  /**
    * Segundo pase EMA sobre un valor ya suavizado por {@link DisplaySmoothing}.
    * El primer pase (ponderado por confianza) lo hace displaySmoothing;
    * este segundo pase reduce el residuo ruidoso con alpha fijo, sin añadir
    * latencia apreciable porque el primer pase ya respondió al cambio.
    */
   private applyEma2(
-    key: 'ema2Spo2',
+    key: 'ema2Spo2' | 'ema2Sys' | 'ema2Dia',
     firstPass: number,
   ): number {
     if (firstPass === 0 || isNaN(firstPass)) {
@@ -857,18 +817,16 @@ rrData);
     this.validPulseCount = 0;
     this.arrhythmiaProcessor.reset();
     this.measurements.arrhythmiaCount = 0;
-    this.measurements.arrhythmiaStatus = "CALIBRANDO...";
+    this.measurements.arrhythmiaStatus = "SIN ARRITMIAS|0";
     this.measurements.lastArrhythmiaData = null;
     this.spo2Calculator.reset();
     this.lastPpgPerfusionIndex = 0;
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
-    this.pendingNexusCrossSite = null;
-    this.pendingNexusMeta = null;
-    this.lastBPNexus = null;
-    this.lastBPUncertainty = null;
-    this.displaySmoothing.reset();
+    this.ema2Spo2 = 0;
+    this.ema2Sys = 0;
+    this.ema2Dia = 0;
     return result;
   }
 
@@ -889,7 +847,7 @@ rrData);
       systolicPressure: 0,
       diastolicPressure: 0,
       arrhythmiaCount: 0,
-      arrhythmiaStatus: "CALIBRANDO...",
+      arrhythmiaStatus: "SIN ARRITMIAS|0",
       arrhythmiaScore: 0,
       lastArrhythmiaData: null,
       signalQuality: 0
@@ -904,10 +862,10 @@ rrData);
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
-    this.pendingNexusCrossSite = null;
-    this.pendingNexusMeta = null;
-    this.lastBPNexus = null;
-    this.lastBPUncertainty = null;
     this.ema2Spo2 = 0;
+    this.ema2Sys = 0;
+    this.ema2Dia = 0;
   }
 }
+
+

@@ -5,10 +5,9 @@ import type {
   ToastActionElement,
   ToastProps,
 } from "@/components/ui/toast"
-import { UI_CONFIG } from "@/config/ui"
 
-const TOAST_LIMIT = UI_CONFIG.TOAST_LIMIT
-const TOAST_REMOVE_DELAY = UI_CONFIG.TOAST_REMOVE_DELAY
+const TOAST_LIMIT = 3  // Permitir hasta 3 toasts críticos simultáneos
+const TOAST_REMOVE_DELAY = 2000  // 2 segundos para toasts críticos
 
 type ToasterToast = ToastProps & {
   id: string

@@ -1,21 +1,20 @@
-import { DSP_CONSTANTS } from '../../config/signalProcessing';
-
 /**
  * EXTRACTOR DE CARACTERÍSTICAS PPG AVANZADO
- *
+ * 
  * Refactorizado con:
  * - Detección robusta de fiducial points (onset, systolic peak, dicrotic notch, diastolic peak)
  * - Validación cruzada VPG (1ª derivada) / APG (2ª derivada)
  * - Features de área (integral sistólica/diastólica) + IPA ratio
  * - Pulse width a múltiples niveles (10%, 25%, 50%, 75%)
  * - Detección de ciclos cardíacos completos
- *
+ * 
  * Referencias:
  * - Elgendi 2024 (Diagnostics) - APG ratios para BP
  * - pyPPG (PMC 2024) - 632 features estandarizados
  */
 
-import { calculateHRV, isPhysiologicalRR } from '../../utils/physio';
+import { calculateHRV } from '../../utils/physio';
+import { savitzkyGolaySecondDeriv } from '../signal-processing/shared/dsp';
 
 // ═══════════════════════════════════════════
 // TYPES
@@ -38,13 +37,6 @@ export interface APGFeatures {
   agi: number;  // Aging Index: (b - c - d - e) / a
 }
 
-export interface VPGFeatures {
-  w: number; // Maximum positive velocity (systolic peak velocity)
-  x: number; // Early systolic deceleration inflection
-  y: number; // Diastolic acceleration peak
-  z: number; // Terminal diastolic foot velocity
-}
-
 export interface CycleFeatures {
   // Temporal (in ms)
   sutMs: number;         // Systolic Upstroke Time
@@ -64,21 +56,16 @@ export interface CycleFeatures {
   // Area
   systolicArea: number;
   diastolicArea: number;
-  totalArea: number;    // AUC_total = systolicArea + diastolicArea (pyPPG 2024)
   areaRatio: number;    // systolicArea / diastolicArea (IPA)
   ipaRatio: number;     // Inflection Point Area ratio
   
-  // Morphological & pyPPG Biomarkers
+  // Morphological
   stiffnessIndex: number;
   augmentationIndex: number;
   pwvProxy: number;
-  reflectionIndex: number;      // RI = (diastolicAmplitude / systolicAmplitude) * 100
-  elasticModulusProxy: number;  // Ep = PWV^2 proxy
-  vascularAgingProxy: number;   // Combines AGI, SI, and SUT
   
-  // Derivatives
+  // APG (second derivative)
   apg: APGFeatures;
-  vpg?: VPGFeatures;
   
   // Quality
   quality: number; // 0-1
@@ -105,7 +92,7 @@ export class PPGFeatureExtractor {
    * Detect individual cardiac cycles from PPG signal
    * Uses valley detection validated with first derivative zero-crossings
    */
-  static detectCardiacCycles(buffer: number[], sampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE): FiducialPoints[] {
+  static detectCardiacCycles(buffer: number[], sampleRate: number = 30): FiducialPoints[] {
     if (buffer.length < sampleRate * 2) return [];
 
     // 1. Find valleys (cycle onsets) using first derivative
@@ -121,9 +108,9 @@ export class PPGFeatureExtractor {
       const nextOnset = valleys[i + 1];
       const cycleLength = nextOnset - onset;
 
-      // Validate cycle length against the canonical physiological RR range (270–2200 ms)
+      // Validate cycle length (350ms - 1800ms → ~33-171 BPM) to reject non-human noise
       const cycleLengthMs = (cycleLength / sampleRate) * 1000;
-      if (!isPhysiologicalRR(cycleLengthMs)) continue;
+      if (cycleLengthMs < 350 || cycleLengthMs > 1800) continue;
 
       // 2. Find systolic peak within cycle
       const systolicPeak = this.findSystolicPeak(buffer, onset, nextOnset);
@@ -131,7 +118,7 @@ export class PPGFeatureExtractor {
 
       // 3. Find dicrotic notch and diastolic peak
       const { notch, diastolicPeak } = this.findDicroticFeatures(
-        buffer, systolicPeak, nextOnset
+        buffer, vpg, systolicPeak, nextOnset
       );
 
       cycles.push({
@@ -152,7 +139,7 @@ export class PPGFeatureExtractor {
   static extractCycleFeatures(
     buffer: number[],
     fiducials: FiducialPoints,
-    sampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE
+    sampleRate: number = 30
   ): CycleFeatures | null {
     const { onset, systolicPeak, dicroticNotch, diastolicPeak, nextOnset } = fiducials;
 
@@ -244,23 +231,6 @@ export class PPGFeatureExtractor {
     const cycleSegment = buffer.slice(onset, nextOnset + 1);
     const apg = this.extractAPGFromSegment(cycleSegment);
 
-    // ── VPG features (pyPPG standard) ──
-    const vpg = this.extractVPGFromSegment(cycleSegment, sampleRate);
-
-    // ── Reflection Index (pyPPG standard) ──
-    const reflectionIndex = systolicAmplitude > 0
-      ? Math.max(0, Math.min(100, (diastolicAmplitude / systolicAmplitude) * 100))
-      : 0;
-
-    // ── Elastic Modulus Proxy (Ep) ──
-    // Moens-Korteweg: PWV = sqrt(Eh / 2r rho) -> Ep proportional to PWV^2
-    const elasticModulusProxy = Math.max(0.1, (pwvProxy * pwvProxy) * 0.08);
-
-    // ── Vascular Aging Proxy (VAP) ──
-    // Integrating pyPPG Aging Index (AGI), Stiffness Index (SI), and SUT
-    const sutRatio = cycleDuration > 0 ? sutMs / (cycleDuration * msPerSample) : 0.2;
-    const vascularAgingProxy = (apg.agi * 15) + (stiffnessIndex * 1.8) + (1 - sutRatio) * 20;
-
     // ── Harmonic Distortion (Nature 2025) ──
     // Cuantifica el contenido armónico del pulso: arterias rígidas producen
     // ondas más puntiagudas (armónicos ricos). Se computa como la fracción
@@ -277,10 +247,9 @@ export class PPGFeatureExtractor {
       pw10Ms, pw25Ms, pw50Ms, pw75Ms,
       dicroticNotchTimeMs,
       systolicAmplitude, diastolicAmplitude, dicroticDepth,
-      systolicArea, diastolicArea, totalArea, areaRatio, ipaRatio,
+      systolicArea, diastolicArea, areaRatio, ipaRatio,
       stiffnessIndex, augmentationIndex, pwvProxy,
-      reflectionIndex, elasticModulusProxy, vascularAgingProxy,
-      apg, vpg, quality,
+      apg, quality,
       kValue, vMax,
       harmonicDistortion: hd,
     };
@@ -299,12 +268,11 @@ export class PPGFeatureExtractor {
   }
 
   private static secondDerivative(buffer: number[]): number[] {
-    const d2: number[] = [0];
-    for (let i = 1; i < buffer.length - 1; i++) {
-      d2.push(buffer[i + 1] - 2 * buffer[i] + buffer[i - 1]);
-    }
-    d2.push(0);
-    return d2;
+    // Savitzky-Golay (ajuste cuadrático): suaviza y deriva en un paso → APG limpia
+    // sin amplificar ruido. Semiventana adaptada al largo del ciclo (más con señal
+    // upsampleada), acotada para no aplanar los picos b/c/d/e.
+    const half = Math.max(2, Math.min(6, Math.round(buffer.length / 16)));
+    return savitzkyGolaySecondDeriv(buffer, half);
   }
 
   /**
@@ -354,7 +322,7 @@ export class PPGFeatureExtractor {
   }
 
   private static findDicroticFeatures(
-    buffer: number[], systolicPeak: number, nextOnset: number
+    buffer: number[], vpg: number[], systolicPeak: number, nextOnset: number
   ): { notch: number; diastolicPeak: number } {
     // Search for dicrotic notch: local minimum after systolic peak
     const searchStart = systolicPeak + 2;
@@ -487,64 +455,6 @@ export class PPGFeatureExtractor {
     const agi = Math.abs(a) > 1e-10 ? (b - c - d - e) / a : 0;
 
     return { a, b, c, d, e, bDivA, cDivA, dDivA, eDivA, agi };
-  }
-
-  /**
-   * VPG features from a single cycle segment (pyPPG standard: w, x, y, z fiducials)
-   */
-  private static extractVPGFromSegment(segment: number[], sampleRate: number): VPGFeatures {
-    const defaults: VPGFeatures = { w: 0, x: 0, y: 0, z: 0 };
-    if (segment.length < 6) return defaults;
-
-    const vpg = this.firstDerivative(segment);
-    const scaledVpg = vpg.map(v => v * sampleRate);
-
-    // w: Maximum positive velocity in systole (first 60% of cycle)
-    const searchLimit = Math.floor(scaledVpg.length * 0.6);
-    let w = 0;
-    let wIdx = 0;
-    for (let i = 0; i < searchLimit; i++) {
-      if (scaledVpg[i] > w) {
-        w = scaledVpg[i];
-        wIdx = i;
-      }
-    }
-
-    // x: First local minimum in VPG after w (systolic deceleration point)
-    let x = 0;
-    let xIdx = -1;
-    for (let i = wIdx + 1; i < searchLimit && i < scaledVpg.length - 1; i++) {
-      if (scaledVpg[i] <= scaledVpg[i - 1] && scaledVpg[i] <= scaledVpg[i + 1]) {
-        x = scaledVpg[i];
-        xIdx = i;
-        break;
-      }
-    }
-
-    // y: Diastolic acceleration peak (local maximum after x in remaining cycle)
-    let y = 0;
-    let yIdx = -1;
-    const diaStart = xIdx >= 0 ? xIdx + 1 : wIdx + 2;
-    for (let i = diaStart; i < scaledVpg.length - 1; i++) {
-      if (scaledVpg[i] >= scaledVpg[i - 1] && scaledVpg[i] >= scaledVpg[i + 1]) {
-        if (scaledVpg[i] > y) {
-          y = scaledVpg[i];
-          yIdx = i;
-        }
-      }
-    }
-
-    // z: Terminal diastolic slope (valley before next onset)
-    let z = 0;
-    const zStart = yIdx >= 0 ? yIdx + 1 : diaStart;
-    for (let i = zStart; i < scaledVpg.length - 1; i++) {
-      if (scaledVpg[i] <= scaledVpg[i - 1] && scaledVpg[i] <= scaledVpg[i + 1]) {
-        z = scaledVpg[i];
-        break;
-      }
-    }
-
-    return { w, x, y, z };
   }
 
   /**

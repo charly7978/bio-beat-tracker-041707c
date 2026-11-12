@@ -30,29 +30,4 @@ describe('resolveAcquisitionStatus', () => {
   it('contacto estable con señal ok → VALID', () => {
     expect(resolveAcquisitionStatus(base)).toBe('VALID');
   });
-
-  it('modo GYM: válido con rostro detectado sin antorcha', () => {
-    const gymInput = {
-      ...base,
-      mode: 'gym' as const,
-      torchSupported: false,
-      torchActive: false,
-      fingerDetected: false,
-      faceDetected: true,
-      coverageRatio: 0.22,
-    };
-    expect(resolveAcquisitionStatus(gymInput)).toBe('VALID');
-  });
-
-  it('modo GYM: sin rostro → NO_FINGER', () => {
-    const gymInput = {
-      ...base,
-      mode: 'gym' as const,
-      torchSupported: false,
-      fingerDetected: false,
-      faceDetected: false,
-      contactState: 'NO_CONTACT' as const,
-    };
-    expect(resolveAcquisitionStatus(gymInput)).toBe('NO_FINGER');
-  });
 });

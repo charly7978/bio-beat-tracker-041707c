@@ -1,24 +1,26 @@
 /**
  * PPG SIGNAL SPLITTER — Banco de filtros por canal vital.
  *
- * Divide la señal PPG cruda en 5 canales independientes, cada uno optimizado
- * para los requisitos específicos del signo vital que alimenta.
+ * Divide la señal PPG cruda en 4 canales independientes, cada uno optimizado
+ * para los requisitos DSP del signo vital que alimenta. Cada salida tiene un
+ * consumidor real aguas abajo (no hay canales fantasma).
  *
  * ┌─────────────────────────────────────────────────────────────────────────┐
  * │  Señal PPG cruda (rawRed, rawGreen, rawBlue)                            │
  * │           │                                                              │
  * │  ┌──────────────────────────────────────────────────────────────────┐  │
- * │  │ CANAL 1: LATIDOS (HR) — interno (no se expone en la salida)      │  │
+ * │  │ CANAL 1: ENVOLVENTE CARDÍACA (para RIIV)                         │  │
  * │  │   • Butterworth BP 0.5–4.5 Hz — rango cardíaco estándar         │  │
  * │  │   • Hampel online (ventana 7, σ=3) — spikes de micro-movimiento  │  │
- * │  │   → alimenta el RIIV (envolvente) del Canal 4 respiración        │  │
+ * │  │   → filteredHR: alimenta el RIIV del Canal 4 (la detección de    │  │
+ * │  │     latidos usa el path `enhanced` del PPGSignalProcessor)       │  │
  * │  └──────────────────────────────────────────────────────────────────┘  │
  * │                                                                          │
  * │  ┌──────────────────────────────────────────────────────────────────┐  │
  * │  │ CANAL 2: SpO2 (AC/DC separados)                                  │  │
  * │  │   • AC:  Butterworth BP 0.5–3.5 Hz + Hampel online (ventana 5)   │  │
- * │  │   • DC:  Promedio móvil 200 samples (≈6.7 s a 30 fps)            │  │
- * │  │   → { acRed, dcRed, acGreen, dcGreen } limpios para ratio R/G    │  │
+ * │  │   • DC:  DEMA (doble EMA, α=0.015) con compensación de deriva    │  │
+ * │  │   → { acRed/Green/Blue, dcRed/Green/Blue } para ratio-of-ratios  │  │
  * │  └──────────────────────────────────────────────────────────────────┘  │
  * │                                                                          │
  * │  ┌──────────────────────────────────────────────────────────────────┐  │
@@ -35,15 +37,12 @@
  * │  │   • Dual-path RIIV: modulación de amplitud del pulso cardiaco    │  │
  * │  │   → respiration: modalidad RIIV de la Smart Fusion respiratoria  │  │
  * │  └──────────────────────────────────────────────────────────────────┘  │
- * │                                                                          │
- * │  ┌──────────────────────────────────────────────────────────────────┐  │
- * │  │ CANAL 5: ARRITMIAS / INTERVALOS RR                               │  │
- * │  │   • Butterworth BP 0.5–3.5 Hz (estrecho, sin armónicos altos)   │  │
- * │  │   • Notch adaptativo en 2×f_HR (elimina muesca dicrota)          │  │
- * │  │   • Hampel suave (ventana 11, σ=3.5) — preserva PVC reales      │  │
- * │  │   → arrhythmia: canal limpio para detección de RR intervals      │  │
- * │  └──────────────────────────────────────────────────────────────────┘  │
  * └─────────────────────────────────────────────────────────────────────────┘
+ *
+ * NOTA: La detección de arritmias NO consume un canal del splitter — opera
+ * sobre los intervalos RR del detector Elgendi validado (PeakDetectionEnsemble).
+ * Un canal de arritmias aquí sería un detector paralelo (riesgo de divergencia),
+ * por eso se retiró.
  *
  * PRINCIPIOS DE DISEÑO:
  *   1. No-op seguro: NaN/Inf en cualquier canal retorna 0 (sin propagar error)
@@ -72,15 +71,8 @@ import {
   resetHampelState,
   type HampelOnlineState,
 } from './shared/HampelOnline';
-import {
-  createAdaptiveNotchState,
-  applyAdaptiveNotch,
-  updateNotchFromBpm,
-  resetAdaptiveNotch,
-  type AdaptiveNotchState,
-} from './shared/AdaptiveNotch';
 import { clamp } from '../../utils/math';
-import { DSP_CONSTANTS, PPG_SPLITTER_DEFAULTS as SPLIT } from '../../config/signalProcessing';
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
 
 // ─── Tipos de salida ──────────────────────────────────────────────────────────
 
@@ -100,14 +92,14 @@ export interface SplitterSpO2Channels {
 }
 
 export interface SplitterOutput {
+  /** Canal 1: señal para detección de latidos (Butterworth BP + Hampel) */
+  filteredHR: number;
   /** Canal 2: componentes AC/DC limpios para ratio-of-ratios SpO2 */
   spo2: SplitterSpO2Channels;
   /** Canal 3: señal preservando morfología de pulso (Bessel + detrend) */
   morphology: number;
   /** Canal 4: señal de modulación lenta para estimación de FR */
   respiration: number;
-  /** Canal 5: señal limpia de arritmias (BP estrecho + notch + Hampel suave) */
-  arrhythmia: number;
 }
 
 // ─── Promedio Móvil estacionario (sin Array.shift) ───────────────────────────
@@ -235,20 +227,14 @@ export class PPGSignalSplitter {
   // === Canal 3: Morfología/PA ===
   private readonly morphBessel: BesselFilter;    // Bessel BP 0.5–12 Hz
   private readonly morphDcMa: RunningMean;       // MA 180 samples (detrend)
-  private readonly morphHampel: HampelOnlineState; // Ventana 7, σ=2.8
+  private readonly morphHampel: HampelOnlineState; // Ventana 9, σ=2.8
 
   // === Canal 4: Respiración ===
   // LP Butterworth construido con HPF y LPF separados para la banda respiratoria
   private readonly respLP: BandpassFilter;       // Trick: BP muy bajo (0.08–0.55 Hz)
   private readonly respHPF: SimpleHPF;           // Blocker de deriva ultra-lenta
   // RIIV: modulación de amplitud (envolvente del pulso cardiaco)
-  private readonly riivMa: RunningMean;          // Suavizado de la envolvente |HR| del Canal 1
-
-  // === Canal 5: Arritmias ===
-  private readonly arrBP: BandpassFilter;        // Butterworth BP 0.5–3.5 Hz
-  private readonly arrNotch: AdaptiveNotchState; // Notch adaptativo en 2×f_HR
-  private readonly arrHampel: HampelOnlineState; // Ventana 11, σ=3.5
-  private readonly arrMwi: RunningMean;          // Moving Window Integration 180 ms (~6 frames a 30fps)
+  private readonly riivMa: RunningMean;          // Suavizado de |filteredHR|
 
   private fs: number;
 
@@ -256,37 +242,30 @@ export class PPGSignalSplitter {
     this.fs = sampleRate;
 
     // Canal 1 — HR
-    this.hrBP = new BandpassFilter(sampleRate, SPLIT.hr.highCutHz);
-    this.hrHampel = createHampelState(SPLIT.hr.hampelWindow);
+    this.hrBP = new BandpassFilter(sampleRate, 4.5);
+    this.hrHampel = createHampelState(7);
 
     // Canal 2 — SpO2
-    const spo2HighCut = SPLIT.spo2.highCutHz;
+    const spo2HighCut = 3.5;
     this.spo2BpRed = new BandpassFilter(sampleRate, spo2HighCut);
     this.spo2BpGreen = new BandpassFilter(sampleRate, spo2HighCut);
     this.spo2BpBlue = new BandpassFilter(sampleRate, spo2HighCut);
-    this.spo2DcRed = new DoubleEmaTracker(SPLIT.spo2.dcEmaAlpha);
-    this.spo2DcGreen = new DoubleEmaTracker(SPLIT.spo2.dcEmaAlpha);
-    this.spo2DcBlue = new DoubleEmaTracker(SPLIT.spo2.dcEmaAlpha);
-    this.spo2HampelRed = createHampelState(SPLIT.spo2.hampelWindow);
-    this.spo2HampelGreen = createHampelState(SPLIT.spo2.hampelWindow);
+    this.spo2DcRed = new DoubleEmaTracker(0.015);
+    this.spo2DcGreen = new DoubleEmaTracker(0.015);
+    this.spo2DcBlue = new DoubleEmaTracker(0.015);
+    this.spo2HampelRed = createHampelState(5);
+    this.spo2HampelGreen = createHampelState(5);
 
     // Canal 3 — Morfología/PA (Bessel para fase lineal)
-    this.morphBessel = new BesselFilter(sampleRate, SPLIT.morphology.lowHz, SPLIT.morphology.highHz);
-    this.morphDcMa = new RunningMean(SPLIT.morphology.detrendWindow);
-    this.morphHampel = createHampelState(SPLIT.morphology.hampelWindow);
-    this.morphHPF = new SimpleHPF(SPLIT.morphology.hpfCutoffHz, sampleRate);
+    this.morphBessel = new BesselFilter(sampleRate, 0.5, 12.0);
+    this.morphDcMa = new RunningMean(180);
+    this.morphHampel = createHampelState(7);
+    this.morphHPF = new SimpleHPF(0.5, sampleRate);
 
     // Canal 4 — Respiración (BP muy bajo: 0.08–0.55 Hz)
-    this.respLP = new BandpassFilter(sampleRate, SPLIT.respiration.lowCutHz);
-    this.respHPF = new SimpleHPF(SPLIT.respiration.hpfCutoffHz, sampleRate);
-    this.riivMa = new RunningMean(Math.round(sampleRate * SPLIT.respiration.riivWindowFactor)); // ventana 2 s
-
-    // Canal 5 — Arritmias
-    this.arrBP = new BandpassFilter(sampleRate, SPLIT.arrhythmia.highCutHz);
-    this.arrNotch = createAdaptiveNotchState(sampleRate, SPLIT.arrhythmia.notchHarmonic);
-    this.arrHampel = createHampelState(SPLIT.arrhythmia.hampelWindow);
-    // MWI: ventana ~180 ms a fs=30 Hz → 6 frames
-    this.arrMwi = new RunningMean(Math.max(SPLIT.arrhythmia.mwiMinFrames, Math.round(sampleRate * SPLIT.arrhythmia.mwiWindowFactor)));
+    this.respLP = new BandpassFilter(sampleRate, 0.55);
+    this.respHPF = new SimpleHPF(0.08, sampleRate);
+    this.riivMa = new RunningMean(Math.round(sampleRate * 2)); // ventana 2 s
   }
 
   /**
@@ -296,7 +275,6 @@ export class PPGSignalSplitter {
     rawRed: number,
     rawGreen: number,
     rawBlue: number,
-    currentBpm = 0,
   ): SplitterOutput {
     const r = isFinite(rawRed) ? rawRed : 0;
     const g = isFinite(rawGreen) ? rawGreen : 0;
@@ -305,23 +283,22 @@ export class PPGSignalSplitter {
     const acBlue = safeFilter(() => this.spo2BpBlue.filter(b));
 
     // Canal 1: HR — Butterworth BP + Hampel, filtrado independiente (sin ANC).
-    // Uso interno: alimenta la envolvente RIIV del canal de respiración.
-    const rHampel = applyHampelOnline(this.hrHampel, r, SPLIT.hr.hampelSigma);
-    const hrChannel = safeFilter(() => this.hrBP.filter(rHampel));
+    const rHampel = applyHampelOnline(this.hrHampel, r, 3.0);
+    const filteredHR = safeFilter(() => this.hrBP.filter(rHampel));
 
     // Canal 2: SpO2
     const dcRed = this.spo2DcRed.push(r);
     const dcGreen = this.spo2DcGreen.push(g);
     const dcBlue = this.spo2DcBlue.push(b);
-    const rHampelSpo2 = applyHampelOnline(this.spo2HampelRed, r, SPLIT.spo2.hampelSigma);
-    const gHampelSpo2 = applyHampelOnline(this.spo2HampelGreen, g, SPLIT.spo2.hampelSigma);
+    const rHampelSpo2 = applyHampelOnline(this.spo2HampelRed, r, 2.5);
+    const gHampelSpo2 = applyHampelOnline(this.spo2HampelGreen, g, 2.5);
     const acRed = safeFilter(() => this.spo2BpRed.filter(rHampelSpo2));
     const acGreen = safeFilter(() => this.spo2BpGreen.filter(gHampelSpo2));
 
     // Canal 3: Morfología/PA
     const morphDc = this.morphDcMa.push(r);
     const morphDetrended = r - morphDc;
-    const morphHampeled = applyHampelOnline(this.morphHampel, morphDetrended, SPLIT.morphology.hampelSigma);
+    const morphHampeled = applyHampelOnline(this.morphHampel, morphDetrended, 2.8);
     let morphology = safeFilter(() => this.morphBessel.filter(morphHampeled));
     morphology = this.morphHPF.filter(morphology);
 
@@ -330,20 +307,14 @@ export class PPGSignalSplitter {
       const lpOut = this.respLP.filter(r);
       return this.respHPF.filter(lpOut);
     });
-    const riivInstant = Math.abs(hrChannel);
+    const riivInstant = Math.abs(filteredHR);
     const riivSmoothed = this.riivMa.push(riivInstant);
     const respPathB = riivSmoothed;
-    const pulseStrength = clamp(Math.abs(hrChannel) / SPLIT.respiration.pulseStrengthScale, 0, 1);
-    const respiration = respPathA * (1 - pulseStrength * SPLIT.respiration.pulseStrengthMix) + respPathB * (pulseStrength * SPLIT.respiration.pulseStrengthMix);
-
-    // Canal 5: Arritmias
-    updateNotchFromBpm(this.arrNotch, currentBpm);
-    const arrBpFiltered = safeFilter(() => this.arrBP.filter(r));
-    const arrNotched = applyAdaptiveNotch(this.arrNotch, arrBpFiltered);
-    const arrHampeled = applyHampelOnline(this.arrHampel, arrNotched, SPLIT.arrhythmia.hampelSigma);
-    const arrhythmia = this.arrMwi.push(arrHampeled);
+    const pulseStrength = clamp(Math.abs(filteredHR) / 10, 0, 1);
+    const respiration = respPathA * (1 - pulseStrength * 0.4) + respPathB * (pulseStrength * 0.4);
 
     return {
+      filteredHR,
       spo2: {
         acRed:   clampFinite(acRed),
         dcRed:   clampFinite(dcRed),
@@ -354,7 +325,6 @@ export class PPGSignalSplitter {
       },
       morphology:  clampFinite(morphology),
       respiration: clampFinite(respiration),
-      arrhythmia:  clampFinite(arrhythmia),
     };
   }
 
@@ -367,7 +337,6 @@ export class PPGSignalSplitter {
     this.spo2BpBlue.setSampleRate(fs);
     this.morphBessel.setSampleRate(fs);
     this.respLP.setSampleRate(fs);
-    this.arrBP.setSampleRate(fs);
     this.respHPF.reset();
   }
 
@@ -389,10 +358,6 @@ export class PPGSignalSplitter {
     this.respLP.reset();
     this.respHPF.reset();
     this.riivMa.reset();
-    this.arrBP.reset();
-    resetAdaptiveNotch(this.arrNotch);
-    resetHampelState(this.arrHampel);
-    this.arrMwi.reset();
   }
 }
 

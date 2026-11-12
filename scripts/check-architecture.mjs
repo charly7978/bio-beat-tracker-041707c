@@ -122,7 +122,7 @@ for (const file of files) {
 const extraDetectors = files.filter((f) => {
   const rel = relative(ROOT, f).replace(/\\/g, '/');
   return (
-    /PeakDetector/i.test(rel) &&
+    /PeakDetector/i.test(f) &&
     !rel.includes('signal-processing/detectors/') &&
     !rel.includes('__tests__')
   );

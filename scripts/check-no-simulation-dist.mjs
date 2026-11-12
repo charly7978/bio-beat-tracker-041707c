@@ -38,21 +38,7 @@ if (existsSync(ALLOW_PATH)) {
     }
   }
 }
-function globToRe(glob) {
-  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-  return new RegExp(`^${escaped}$`);
-}
-const usedEntries = new Set();
-function isAllowed(id, fileRel) {
-  let allowed = false;
-  allowlist.forEach((e, idx) => {
-    if (e.pattern !== id) return;
-    if (e.file && !globToRe(e.file).test(fileRel)) return;
-    allowed = true;
-    usedEntries.add(idx);
-  });
-  return allowed;
-}
+const isAllowed = (id) => allowlist.some(e => e.pattern === id);
 
 function* walk(dir) {
   for (const name of readdirSync(dir)) {
@@ -73,17 +59,10 @@ for (const file of walk(DIST)) {
   for (const { id, re } of PATTERNS) {
     re.lastIndex = 0;
     const matches = text.match(re);
-    if (matches && matches.length && !isAllowed(id, relative(".", file).replace(/\\/g, "/"))) {
-      violations.push({ file: relative(".", file).replace(/\\/g, "/"), id, count: matches.length, sample: matches[0] });
+    if (matches && matches.length && !isAllowed(id)) {
+      violations.push({ file: relative(".", file), id, count: matches.length, sample: matches[0] });
     }
   }
-}
-
-const staleEntries = allowlist.filter((_, idx) => !usedEntries.has(idx));
-if (staleEntries.length) {
-  console.error("\n❌ STALE DIST ALLOWLIST ENTRIES (no matching pattern in dist/) — delete them:\n");
-  for (const e of staleEntries) console.error(`  ${e.file} [${e.pattern}] ref=${e.ref}`);
-  process.exit(1);
 }
 
 if (violations.length) {

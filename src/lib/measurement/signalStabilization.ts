@@ -1,5 +1,4 @@
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import { clamp01 } from '@/utils/math';
 
 /**
  * ESTABILIZACIÓN POR CONVERGENCIA (criterio REAL, no por tiempo).
@@ -52,6 +51,9 @@ export function createStabilizationState(): StabilizationState {
   return { bpmTimes: [], bpmVals: [], qualityStreak: 0, stabilized: false, progress: 0 };
 }
 
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
 
 export function updateStabilization(
   state: StabilizationState,

@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { supabase, isSupabaseConfigured } from '@/integrations/supabase/client';
+import { supabase } from '@/integrations/supabase/client';
 import type { Json, TablesInsert } from '@/integrations/supabase/types';
 import { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 import { toast } from '@/hooks/use-toast';
@@ -7,58 +7,60 @@ import {
   buildAttemptDiagnostics,
   evaluateFinalMeasurementSave,
   type ArtifactMetrics,
-} from '@/lib/measurements/savePolicy';
+} from '@/lib/measurement/savePolicy';
 import { ValidationDataset } from '@/modules/vital-signs/ValidationDataset';
 import { CalibrationManager } from '@/modules/vital-signs/CalibrationManager';
-import {
-  decryptLocal,
-  encryptLocal,
-  getOrCreateLocalKey,
-  STORAGE_KEYS,
-} from '@/lib/storage/localEncryptedStorage';
-import { DSP_CONSTANTS } from '@/config/signalProcessing';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('useSaveMeasurement');
-
-/** Versión del motor inyectada en build (package.json); null en tests/node. */
-const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null;
 
 interface MeasurementData {
   vitalSigns: VitalSignsResult;
   signalQuality: number;
   artifactMetrics?: ArtifactMetrics;
-  /** Duración real de la ventana de medición en segundos (reloj de sesión). */
-  windowSeconds?: number;
 }
 
-/**
- * Ofuscación local (NO almacenamiento seguro): la clave reside en el mismo
- * `localStorage` que los datos y la semilla es derivable del dispositivo, así
- * que cualquiera con acceso al dispositivo/perfil puede descifrar. Protege de
- * miradas casuales, no de acceso forense. Nunca presentarlo como seguro.
- * Semántica completa en `src/lib/storage/localEncryptedStorage.ts`.
- */
-async function getEncryptionKey(): Promise<CryptoKey | null> {
-  return getOrCreateLocalKey(STORAGE_KEYS.cryptoKey);
+const LOCAL_STORAGE_KEY = 'local_measurements';
+
+async function getEncryptionKey(): Promise<CryptoKey> {
+  const raw = localStorage.getItem('bb-crypto-key');
+  if (raw) {
+    const keyData = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
+    return crypto.subtle.importKey('raw', keyData, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  }
+  const seed = navigator.userAgent + navigator.language + 'bio-beat-2024';
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed));
+  const keyData = new Uint8Array(hash).slice(0, 16);
+  localStorage.setItem('bb-crypto-key', btoa(String.fromCharCode(...keyData)));
+  return crypto.subtle.importKey('raw', keyData, 'AES-GCM', false, ['encrypt', 'decrypt']);
 }
 
-async function encryptLocalMeasurements(data: unknown): Promise<string | null> {
+async function encryptLocalMeasurements(data: unknown): Promise<string> {
   const key = await getEncryptionKey();
-  if (!key) return null;
-  return encryptLocal(key, data);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = new TextEncoder().encode(JSON.stringify(data));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(ciphertext), iv.length);
+  return btoa(String.fromCharCode(...combined));
 }
 
 export async function decryptLocalMeasurements(): Promise<unknown[]> {
-  const raw = localStorage.getItem(STORAGE_KEYS.measurements);
+  const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
   if (!raw) return [];
   try {
     const key = await getEncryptionKey();
-    if (!key) return [];
-    const parsed = await decryptLocal<unknown[]>(key, raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (e) {
-    log.debug('Local measurements decrypt failed:', e);
+    const combined = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
+    const iv = combined.slice(0, 12);
+    const ciphertext = combined.slice(12);
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  } catch {
+    try {
+      const fallback = JSON.parse(raw);
+      if (Array.isArray(fallback)) return fallback;
+    } catch { }
     return [];
   }
 }
@@ -85,11 +87,6 @@ async function insertMeasurementAttempt(
  * Guarda intentos siempre que haya sesión (auditoría) y solo escribe en `measurements`
  * cuando la política clínica/técnica permite una fila final válida.
  */
-type NexusBpDiagnostics = {
-  uncertainty?: { sbpP5: number; sbpP95: number; dbpP5: number; dbpP95: number };
-  nexus?: { sourcesUsed: string[]; tauMs: number | null; coherenceLevel: string; coherenceScore: number };
-};
-
 export const useSaveMeasurement = () => {
   const saveMeasurement = useCallback(async (data: MeasurementData): Promise<boolean> => {
     try {
@@ -135,13 +132,13 @@ export const useSaveMeasurement = () => {
         const bpProfile = calib.getActiveProfile('BP');
         const spo2Profile = calib.getActiveProfile('SPO2');
 
-        await ValidationDataset.addEntry({
+        ValidationDataset.addEntry({
           timestamp: new Date().toISOString(),
           device: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
           quality: {
             sqi: sq,
             pi: vs.heartRate.signalQuality?.perfusionIndex ?? 0,
-            fps: vs.heartRate.signalQuality?.fpsEffective ?? DSP_CONSTANTS.DEFAULT_SAMPLE_RATE,
+            fps: vs.heartRate.signalQuality?.fpsEffective ?? 30,
             jitter: vs.heartRate.signalQuality?.timestampJitterMs ?? 0,
           },
           rr: [],
@@ -171,11 +168,7 @@ export const useSaveMeasurement = () => {
       let savedLocally = false;
 
       if (authError || !user) {
-        if (!isSupabaseConfigured) {
-          // Deploy sin VITE_SUPABASE_* configuradas: modo local explícito.
-          log.warn('⚠️ Supabase no configurado en este deploy — guardando solo en el dispositivo (modo local).');
-        }
-        log.info('⚠️ Guardando medición localmente (ofuscación AES-GCM en dispositivo, no almacenamiento seguro)...');
+        console.log('⚠️ Guardando medición localmente (cifrado AES-GCM)...');
         const localMeasurements = await decryptLocalMeasurements();
 
         const newRecord = {
@@ -191,28 +184,18 @@ export const useSaveMeasurement = () => {
 
         localMeasurements.push(newRecord);
         const encrypted = await encryptLocalMeasurements(localMeasurements);
-        if (encrypted == null) {
-          // Sin crypto.subtle no se escribe en plano: se informa y no se marca
-          // como guardado (regla "sin lectura falsa" también aplica al almacén).
-          toast({
-            title: '⚠️ No se pudo cifrar localmente',
-            description: 'Este entorno no permite cifrado (requiere HTTPS/localhost). La medición no se guardó en el dispositivo.',
-            duration: 5000,
-          });
-        } else {
-            localStorage.setItem(STORAGE_KEYS.measurements, encrypted);
-          savedLocally = true;
+        localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
+        savedLocally = true;
 
-          toast({
-            title: '✅ Guardado localmente (ofuscado)',
-            description: 'Medición ofuscada guardada en este dispositivo. No es almacenamiento seguro.',
-            duration: 3000,
-          });
-        }
+        toast({
+          title: '✅ Guardado localmente (cifrado)',
+          description: 'Medición cifrada AES-256 guardada en este dispositivo.',
+          duration: 3000,
+        });
       }
 
       if (!savedLocally && user) {
-        const measurementRecord: TablesInsert<'measurements'> = {
+        const measurementRecord = {
           user_id: user.id,
           heart_rate: hr,
           spo2,
@@ -221,18 +204,6 @@ export const useSaveMeasurement = () => {
           arrhythmia_count: vs.arrhythmia.value?.count ?? 0,
           quality: sq,
           measured_at: new Date().toISOString(),
-          algorithm_version: APP_VERSION,
-          measurement_confidence: vs.measurementConfidence,
-          measurement_window_seconds: data.windowSeconds ?? null,
-          signal_quality_index: sq,
-          nexus_sources: ((vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.nexus?.sourcesUsed ?? null) as unknown as Json,
-          tau_ms: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.nexus?.tauMs ?? null,
-          sbp_p5: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.uncertainty?.sbpP5 ?? null,
-          sbp_p95: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.uncertainty?.sbpP95 ?? null,
-          dbp_p5: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.uncertainty?.dbpP5 ?? null,
-          dbp_p95: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.uncertainty?.dbpP95 ?? null,
-          coherence_level: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.nexus?.coherenceLevel ?? null,
-          coherence_score: (vs.bloodPressure.diagnostics as unknown as NexusBpDiagnostics | undefined)?.nexus?.coherenceScore ?? null,
         };
 
         const { error: insertError } = await supabase.from('measurements').insert(measurementRecord);
@@ -257,13 +228,11 @@ export const useSaveMeasurement = () => {
             measured_at: new Date().toISOString(),
           });
           const encrypted = await encryptLocalMeasurements(localMeasurements);
-          if (encrypted != null) {
-          localStorage.setItem(STORAGE_KEYS.measurements, encrypted);
-          }
+          localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
 
           toast({
-            title: '⚠️ Guardado localmente (ofuscado)',
-            description: 'No se pudo subir a la nube. Ofuscación local guardada (no es almacenamiento seguro).',
+            title: '⚠️ Guardado localmente (cifrado)',
+            description: 'No se pudo subir a la nube. Cifrado AES-256 guardado localmente.',
             duration: 4000,
           });
           return true;

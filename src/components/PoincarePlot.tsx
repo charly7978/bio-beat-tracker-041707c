@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { isPhysiologicalRR } from '../utils/physio';
+import { isPhysiologicalRR, RR_MIN_MS, RR_MAX_MS } from '@/utils/physio';
 
 interface PoincarePlotProps {
   rrIntervals: number[];
@@ -33,7 +33,9 @@ export const PoincarePlot: React.FC<PoincarePlotProps> = ({
     ctx.fillStyle = '#020617'; // bg-slate-950
     ctx.fillRect(0, 0, width, height);
 
-    // Filtrar intervalos RR fisiológicos (rango canónico VITAL_THRESHOLDS: 270–2200 ms)
+    // Filtrar intervalos RR fisiológicos — misma fuente que el resto del pipeline
+    // (VITAL_THRESHOLDS vía isPhysiologicalRR). Evita descartar pausas reales de
+    // ectopia (>1,5 s) que sí acepta el detector de arritmias.
     const validRR = rrIntervals.filter(isPhysiologicalRR);
 
     if (validRR.length < 2) {
@@ -61,8 +63,8 @@ export const PoincarePlot: React.FC<PoincarePlotProps> = ({
 
     // Establecer límites de escala con margen
     const padding = 100; // ms
-    const minScale = Math.max(300, minVal - padding);
-    const maxScale = Math.min(1500, maxVal + padding);
+    const minScale = Math.max(RR_MIN_MS, minVal - padding);
+    const maxScale = Math.min(RR_MAX_MS, maxVal + padding);
     const range = maxScale - minScale;
 
     // Funciones de mapeo de ms a píxeles
@@ -207,14 +209,14 @@ export const PoincarePlot: React.FC<PoincarePlotProps> = ({
       ctx.arc(x, y, isIrregular ? 3.5 : 2.5, 0, Math.PI * 2);
       
       if (isIrregular) {
-        ctx.fillStyle = '#f43f5e'; // rose-500
-        ctx.strokeStyle = 'rgba(244, 63, 94, 0.6)';
-        ctx.lineWidth = 1.5;
+        ctx.fillStyle = '#ef4444'; // red-500 para latidos irregulares
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
+        ctx.lineWidth = 1;
         ctx.stroke();
       } else {
         // Degradado de color según el índice temporal para ver la evolución
         const progress = idx / pairs.length;
-        ctx.fillStyle = `rgb(${Math.floor(16 + progress * 80)}, ${Math.floor(185 - progress * 20)}, ${Math.floor(129 + progress * 80)})`; // emerald a cyan
+        ctx.fillStyle = `rgb(${Math.floor(34 + progress * 70)}, ${Math.floor(197 - progress * 40)}, ${Math.floor(94 + progress * 140)})`; // emerald a cyan
       }
       ctx.fill();
     });
@@ -222,16 +224,13 @@ export const PoincarePlot: React.FC<PoincarePlotProps> = ({
   }, [rrIntervals, width, height]);
 
   return (
-    <div className="relative flex flex-col items-center justify-center p-3 rounded-2xl glass-card border border-white/10 shadow-2xl overflow-hidden">
-      <div className="flex items-center gap-1.5 mb-2">
-        <div className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
-        <span className="text-[10px] font-bold text-violet-300 tracking-wider uppercase">
-          Espacio HRV (Gráfico de Poincaré)
-        </span>
+    <div className="relative flex flex-col items-center justify-center p-2 bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-lg shadow-purple-950/10">
+      <div className="text-[10px] font-bold text-purple-400 tracking-wider mb-1 uppercase">
+        Espacio HRV (Gráfico de Poincaré)
       </div>
-      <canvas ref={canvasRef} className="rounded-xl border border-zinc-800/80 shadow-inner" />
-      <div className="text-[9px] text-zinc-400 mt-2 max-w-[220px] text-center leading-relaxed">
-        Diagonal: ritmo sinusal constante. Dispersión perpendicular: modulación autonómica (HRV).
+      <canvas ref={canvasRef} className="rounded-lg" />
+      <div className="text-[8px] text-slate-500 mt-1 max-w-[200px] text-center leading-normal">
+        Los puntos sobre la línea diagonal indican regularidad cardíaca. La dispersión transversal representa HRV rápida.
       </div>
     </div>
   );

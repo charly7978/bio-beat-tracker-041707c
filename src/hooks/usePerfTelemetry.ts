@@ -6,7 +6,18 @@ import { bufferSnapshot, drainBuffer, deleteIds } from '@/lib/perf/indexedDbBuff
 
 type PerfSnapshotInsert = Database['public']['Tables']['perf_snapshots']['Insert'];
 
-const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
+const CONSENT_KEY = 'perf_telemetry_consent';
+const APP_VERSION = '1.0.0';
+
+export function getPerfConsent(): boolean {
+  try { return localStorage.getItem(CONSENT_KEY) === '1'; } catch { return false; }
+}
+
+export function setPerfConsent(value: boolean): void {
+  try { localStorage.setItem(CONSENT_KEY, value ? '1' : '0'); } catch {
+    // Ignore error if localStorage is disabled
+  }
+}
 
 function deviceInfo() {
   const nav = typeof navigator !== 'undefined' ? navigator : null;
@@ -26,11 +37,10 @@ export interface PerfContextProvider {
 }
 
 /**
- * Hook que envía periódicamente snapshots de PerfTracker al backend cuando
- * el llamador lo habilita (`enabled`) y hay sesión autenticada. Si no hay red
- * o sesión, los snapshots se persisten en IndexedDB y se reintentan en el
- * próximo ciclo o al recuperar conectividad. El gate de privacidad es el
- * propio flag `enabled` (en Index se mantiene desactivado).
+ * Hook que envía periódicamente snapshots de PerfTracker a Lovable Cloud
+ * cuando el usuario dio consentimiento explícito y está autenticado.
+ * Si no hay red o sesión, los snapshots se persisten en IndexedDB y se
+ * reintentan en el próximo ciclo o al recuperar conectividad.
  */
 export function usePerfTelemetry(opts: {
   enabled: boolean;
@@ -45,6 +55,9 @@ export function usePerfTelemetry(opts: {
     if (flushingRef.current) return;
     flushingRef.current = true;
     try {
+      const consent = getPerfConsent();
+      if (!consent) return;
+
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         // Sin sesión: bufferizar para reintento posterior

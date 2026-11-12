@@ -15,8 +15,6 @@ export interface AcquisitionStatusInput {
   timestampJitterMs: number;
   torchActive?: boolean;
   torchSupported?: boolean;
-  mode?: 'finger' | 'gym';
-  faceDetected?: boolean;
 }
 
 /**
@@ -25,26 +23,16 @@ export interface AcquisitionStatusInput {
 export function resolveAcquisitionStatus(input: AcquisitionStatusInput): MeasurementStatus {
   const F = VITAL_THRESHOLDS.FINGER;
   const Q = VITAL_THRESHOLDS.QUALITY;
-  const isGym = input.mode === 'gym';
 
-  // Antorcha solo requerida en modo finger (cámara trasera con flash)
-  if (!isGym) {
-    if (input.torchSupported === false) return 'TORCH_UNAVAILABLE';
-    if (input.torchSupported && input.torchActive === false) return 'TORCH_UNAVAILABLE';
-  }
+  if (input.torchSupported === false) return 'TORCH_UNAVAILABLE';
+  if (input.torchSupported && input.torchActive === false) return 'TORCH_UNAVAILABLE';
 
-  const hasPresence = isGym
-    ? Boolean(input.faceDetected || input.fingerDetected)
-    : Boolean(input.fingerDetected);
-
-  if (!hasPresence || input.contactState === 'NO_CONTACT') {
+  if (!input.fingerDetected || input.contactState === 'NO_CONTACT') {
     return 'NO_FINGER';
   }
 
-  if (input.saturationRatio > VITAL_THRESHOLDS.ROUTER.SATURATION_FRAME_RATIO) return 'SATURATED';
-  if ((input.underexposureRatio ?? 0) > VITAL_THRESHOLDS.ROUTER.UNDEREXPOSURE_FRAME_RATIO) {
-    return 'UNDEREXPOSED';
-  }
+  if (input.saturationRatio > 0.75) return 'SATURATED';
+  if ((input.underexposureRatio ?? 0) > 0.82) return 'UNDEREXPOSED';
   if (input.motionScore > Q.MAX_MOTION) return 'MOTION_ARTIFACT';
   if (input.fpsEffective > 0 && input.fpsEffective < 20) return 'LOW_FPS';
   if (input.timestampJitterMs > Q.MAX_JITTER_MS) return 'LOW_FPS';
@@ -53,13 +41,11 @@ export function resolveAcquisitionStatus(input: AcquisitionStatusInput): Measure
     return 'LOW_SIGNAL_QUALITY';
   }
 
-  // En gym mode el rostro ocupa un área menor de la pantalla (15-40%), no el 50-70% del dedo
-  const minCoverage = isGym ? 0.12 : (F.MIN_COVERAGE * 0.7);
-  if (input.coverageRatio < minCoverage) {
+  if (input.coverageRatio < F.MIN_COVERAGE * 0.7) {
     return 'LOW_SIGNAL_QUALITY';
   }
 
-  if (!isGym && input.coverageRatio > 0.55 && input.perfusionIndex < Q.MIN_PI * 0.5) {
+  if (input.coverageRatio > 0.55 && input.perfusionIndex < Q.MIN_PI * 0.5) {
     return 'LOW_SIGNAL_QUALITY';
   }
 

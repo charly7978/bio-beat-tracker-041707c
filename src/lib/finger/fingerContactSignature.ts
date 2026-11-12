@@ -79,48 +79,31 @@ export function computeFingerEnsemble(
   grayPixels: Uint8ClampedArray | null,
   temporalVariance: number,
 ): FingerEnsembleMetrics {
-  const E = VITAL_THRESHOLDS.FINGER.ENSEMBLE;
   const total = snapshot.red + snapshot.green + snapshot.blue;
 
-  const brightnessNorm = Math.min(total / 255, E.BRIGHTNESS_NORM_DIVISOR) / E.BRIGHTNESS_NORM_DIVISOR;
-  const brightScore =
-    brightnessNorm > E.BRIGHTNESS_FULL
-      ? 1.0
-      : brightnessNorm > E.BRIGHTNESS_PARTIAL
-        ? E.BRIGHTNESS_PARTIAL_SCORE
-        : (brightnessNorm / E.BRIGHTNESS_PARTIAL) * E.BRIGHTNESS_LOW_SCALE;
+  const brightnessNorm = Math.min(total / 255, 3) / 3;
+  const brightScore = brightnessNorm > 0.5 ? 1.0 : brightnessNorm > 0.25 ? 0.5 : brightnessNorm / 0.25 * 0.3;
 
-  const covScore =
-    snapshot.coverage > E.COVER_FULL
-      ? 1.0
-      : snapshot.coverage > E.COVER_PARTIAL
-        ? E.COVER_PARTIAL_SCORE
-        : (snapshot.coverage / E.COVER_PARTIAL) * E.COVER_LOW_SCALE;
+  const covScore = snapshot.coverage > 0.7 ? 1.0 : snapshot.coverage > 0.4 ? 0.7 : snapshot.coverage / 0.4 * 0.4;
 
-  let histScore = E.HIST_SCORE_DEFAULT;
+  let histScore = 0.3;
   if (grayPixels) {
     const h = computeHistogramStats(grayPixels);
-    if (h.binsOccupied < E.HIST_BINS_STRONG && h.peakHeight > E.HIST_PEAK_STRONG) {
+    if (h.binsOccupied < 60 && h.peakHeight > 0.12) {
       histScore = 1.0;
-    } else if (h.binsOccupied < E.HIST_BINS_MED && h.peakHeight > E.HIST_PEAK_MED) {
-      histScore = E.HIST_SCORE_MED;
+    } else if (h.binsOccupied < 100 && h.peakHeight > 0.08) {
+      histScore = 0.6;
     }
   }
 
-  const tempScore =
-    temporalVariance < E.TEMP_STABLE_MAX
-      ? 1.0
-      : temporalVariance < E.TEMP_SOFT_MAX
-        ? E.TEMP_SCORE_SOFT
-        : temporalVariance < E.TEMP_NOISY_MAX
-          ? E.TEMP_SCORE_NOISY
-          : E.TEMP_SCORE_UNSTABLE;
+  const tempScore = temporalVariance < 0.015 ? 1.0 : temporalVariance < 0.03 ? 0.6 : temporalVariance < 0.05 ? 0.3 : 0.1;
 
-  const ensemble =
-    E.W_BRIGHTNESS * brightScore +
-    E.W_COVERAGE * covScore +
-    E.W_HISTOGRAM * histScore +
-    E.W_TEMPORAL * tempScore;
+  const wBright = 0.30;
+  const wCover = 0.30;
+  const wHist = 0.20;
+  const wTemp = 0.20;
+
+  const ensemble = wBright * brightScore + wCover * covScore + wHist * histScore + wTemp * tempScore;
 
   return {
     brightnessScore: brightScore,
@@ -152,14 +135,10 @@ export function hasFingerHemoglobinSignature(s: FingerRgbSnapshot): boolean {
   if (rb < F.HEMOGLOBIN_MIN_RB) return false;
   if (redDominance < F.MIN_RED_DOMINANCE) return false;
 
-  if (rg < F.HEMOGLOBIN_AMBIGUOUS_RG && rb < F.HEMOGLOBIN_AMBIGUOUS_RB) return false;
-  if (g > F.HEMOGLOBIN_BRIGHT_G && b > F.HEMOGLOBIN_BRIGHT_B && redDominance < F.HEMOGLOBIN_BRIGHT_MAX_DOMINANCE) {
-    return false;
-  }
-  if (total > F.HEMOGLOBIN_STRONG_TOTAL && rb < F.HEMOGLOBIN_STRONG_MIN_RB) return false;
-  if (total > F.HEMOGLOBIN_MED_TOTAL && rb < F.HEMOGLOBIN_MED_MIN_RB && rg < F.HEMOGLOBIN_MED_MIN_RG) {
-    return false;
-  }
+  if (rg < 1.14 && rb < 1.28) return false;
+  if (g > 95 && b > 80 && redDominance < 30) return false;
+  if (total > 200 && rb < 1.38) return false;
+  if (total > 120 && rb < 1.42 && rg < 1.2) return false;
 
   return (
     s.coverage >= F.MIN_COVERAGE * 0.95 &&

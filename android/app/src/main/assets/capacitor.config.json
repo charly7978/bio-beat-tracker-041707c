@@ -1,0 +1,26 @@
+{
+	"appId": "com.biobeat.tracker",
+	"appName": "Bio-Beat Tracker",
+	"webDir": "dist",
+	"android": {},
+	"plugins": {
+		"Camera": {
+			"saveToGallery": false
+		},
+		"Health": {
+			"enabled": true
+		},
+		"BackgroundTask": {
+			"enabled": true
+		},
+		"Filesystem": {
+			"enabled": true
+		},
+		"Preferences": {
+			"enabled": true
+		},
+		"Network": {
+			"enabled": true
+		}
+	}
+}

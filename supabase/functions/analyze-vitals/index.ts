@@ -17,8 +17,6 @@ interface VitalSignsInput {
   confidence?: string;
 }
 
-// Límites fisiológicos alineados con el canónico de la app (src/config/vitalThresholds.ts):
-// HR 30–220, SpO2 75–100, sistólica 20–280, diastólica 40–130. Mantener en sincronía.
 function validateInput(data: unknown): { valid: boolean; error?: string; parsed?: VitalSignsInput } {
   if (!data || typeof data !== "object") {
     return { valid: false, error: "Missing request body" };
@@ -36,17 +34,17 @@ function validateInput(data: unknown): { valid: boolean; error?: string; parsed?
   const systolic = d.systolic ? Number(d.systolic) : undefined;
   const diastolic = d.diastolic ? Number(d.diastolic) : undefined;
 
-  if (heartRate !== undefined && (heartRate < 30 || heartRate > 220)) {
-    return { valid: false, error: "heartRate must be between 30 and 220" };
+  if (heartRate !== undefined && (heartRate < 20 || heartRate > 300)) {
+    return { valid: false, error: "heartRate must be between 20 and 300" };
   }
-  if (spo2 !== undefined && (spo2 < 75 || spo2 > 100)) {
-    return { valid: false, error: "spo2 must be between 75 and 100" };
+  if (spo2 !== undefined && (spo2 < 50 || spo2 > 100)) {
+    return { valid: false, error: "spo2 must be between 50 and 100" };
   }
-  if (systolic !== undefined && (systolic < 20 || systolic > 280)) {
-    return { valid: false, error: "systolic must be between 20 and 280" };
+  if (systolic !== undefined && (systolic < 50 || systolic > 300)) {
+    return { valid: false, error: "systolic must be between 50 and 300" };
   }
-  if (diastolic !== undefined && (diastolic < 40 || diastolic > 130)) {
-    return { valid: false, error: "diastolic must be between 40 and 130" };
+  if (diastolic !== undefined && (diastolic < 30 || diastolic > 200)) {
+    return { valid: false, error: "diastolic must be between 30 and 200" };
   }
 
   const quality = Number(d.quality) || 0;
@@ -92,14 +90,14 @@ function buildPrompt(v: VitalSignsInput): string {
   return vitalsText;
 }
 
-const SYSTEM_PROMPT = `Eres un asistente de bienestar que comenta estimaciones de pulso obtenidas por fotopletismografía (PPG) con cámara de smartphone. NO eres un profesional médico, NO diagnosticas, NO indicas tratamientos ni ajustes de medicación, y NO emites consejo diagnóstico.
+const SYSTEM_PROMPT = `Eres un asistente médico experto en análisis de signos vitales obtenidos mediante fotopletismografía (PPG) por cámara de smartphone. Tu rol es analizar los datos proporcionados y ofrecer recomendaciones de salud personalizadas.
 
 REGLAS IMPORTANTES:
-1. Siempre indica que estos valores son ESTIMACIONES experimentales obtenidas por PPG de cámara (bienestar general), NO mediciones clínicas certificadas. Distingue el pulso (medición de temporización de latidos) de SpO2/PA cuando aparezcan: son estimaciones exploratorias, nunca equivalentes a oxímetro o tensiómetro.
-2. Ante cualquier valor anómalo, recomienda consultar un profesional médico y usar dispositivos clínicos validados.
+1. Siempre indica que estos valores son ESTIMACIONES obtenidas por PPG de cámara, NO mediciones clínicas certificadas.
+2. Ante cualquier valor anómalo, recomienda consultar un profesional médico.
 3. Sé empático, claro y conciso.
 4. Estructura tu respuesta en secciones claras.
-5. Incluye un resumen general del estado de bienestar observado (nunca un diagnóstico).
+5. Incluye un resumen general del estado de salud.
 6. Responde SIEMPRE en español.
 7. No uses terminología excesivamente técnica.
 8. Si la calidad de señal es baja (<50%), advierte que los datos pueden no ser confiables.

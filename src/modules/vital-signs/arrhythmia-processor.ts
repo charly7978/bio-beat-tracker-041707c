@@ -1,14 +1,6 @@
 import { clamp } from '../../utils/math';
-import { median } from '../../utils/stats';
 import { createLogger } from '../../utils/logger';
-import {
-  getMonotonicNow,
-  computeRrHrv,
-  computePoincare,
-  computeBaevskyStressIndex,
-  type PoincareMetrics,
-  type BaevskyStressMetrics,
-} from '../../utils/physio';
+import { getMonotonicNow, computeRrHrv } from '../../utils/physio';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 
 const log = createLogger('ArrhythmiaProcessor');
@@ -33,10 +25,6 @@ export interface ArrhythmiaMetrics {
   abruptDiffCount: number;
   /** Latidos prematuros (PVC/PAC) en la ventana — pausa compensatoria. */
   prematureBeatCount: number;
-  /** Geometría de Poincaré (SD1, SD2, Balance Autonómico SD1/SD2, Área Elipse). */
-  poincare?: PoincareMetrics;
-  /** Índice de Tensión / Estrés Psicofisiológico de Baevsky (SI). */
-  baevskyStress?: BaevskyStressMetrics;
 }
 
 export type ArrhythmiaConfidence = 'none' | 'mild' | 'moderate' | 'severe';
@@ -278,10 +266,6 @@ export class ArrhythmiaProcessor {
     // --- 9. Latidos prematuros (PVC/PAC): acoplamiento corto + pausa compensatoria ---
     const prematureBeatCount = this.countPrematureBeats(valid, median);
 
-    // --- 10. Balance Autonómico (Poincaré) y Tensión/Estrés (Baevsky) ---
-    const poincare = computePoincare(valid);
-    const baevskyStress = computeBaevskyStressIndex(valid);
-
     this.metrics = {
       rmssd, cv, pnn50, pnn31, pnn325, tpr,
       shannonEntropy: shannon,
@@ -290,8 +274,6 @@ export class ArrhythmiaProcessor {
       outlierCount,
       abruptDiffCount,
       prematureBeatCount,
-      poincare,
-      baevskyStress,
     };
 
     // ── Evidencia cruda por ventana: irregularidad global (FA) por score
@@ -496,9 +478,10 @@ export class ArrhythmiaProcessor {
       r => r >= this.MIN_VALID_RR_MS && r <= this.MAX_VALID_RR_MS,
     );
     if (valid.length < 4) return;
-    const medRr = median(valid);
-    if (medRr <= 0) return;
-    for (const r of valid) this.warmupSpread.push(Math.abs(r - medRr));
+    const sorted = [...valid].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
+    if (median <= 0) return;
+    for (const r of valid) this.warmupSpread.push(Math.abs(r - median));
     if (this.warmupSpread.length > 400) {
       this.warmupSpread = this.warmupSpread.slice(-400);
     }
@@ -553,22 +536,21 @@ export class ArrhythmiaProcessor {
    *      AF has some consecutive beats with similar timing).
    */
   private rejectNoisePattern(intervals: number[], median: number): boolean {
-    const NR = this.A.NOISE_REJECTION;
     if (intervals.length < 4) return false;
 
-    if (intervals.every(r => r < NR.ALL_SHORT_MS)) {
-      log.debug(`Noise reject (a): all <${NR.ALL_SHORT_MS}ms`);
+    if (intervals.every(r => r < 450)) {
+      log.debug('Noise reject (a): all <450ms');
       return true;
     }
 
-    if (median < NR.MEDIAN_SHORT_MS) {
+    if (median < 450) {
       let sum = 0;
       for (const r of intervals) sum += r;
       const mean = sum / intervals.length;
       let sqSum = 0;
       for (const r of intervals) sqSum += (r - mean) ** 2;
       const cv = Math.sqrt(sqSum / intervals.length) / mean;
-      if (cv > NR.CV_EXTREME) {
+      if (cv > 0.30) {
         log.debug(`Noise reject (b): median=${median} cv=${cv.toFixed(3)}`);
         return true;
       }
@@ -576,10 +558,10 @@ export class ArrhythmiaProcessor {
 
     let large = 0;
     for (let i = 1; i < intervals.length; i++) {
-      if (Math.abs(intervals[i] - intervals[i - 1]) > NR.LARGE_DIFF_MS) large++;
+      if (Math.abs(intervals[i] - intervals[i - 1]) > 50) large++;
     }
-    if (median < NR.MEDIAN_SATURATION_MS && large / (intervals.length - 1) > NR.LARGE_FRACTION) {
-      log.debug(`Noise reject (c): median=${median} ${large}/${intervals.length - 1} diffs >${NR.LARGE_DIFF_MS}ms`);
+    if (median < 500 && large / (intervals.length - 1) > 0.90) {
+      log.debug(`Noise reject (c): median=${median} ${large}/${intervals.length - 1} diffs >50ms`);
       return true;
     }
 
@@ -615,14 +597,6 @@ export class ArrhythmiaProcessor {
       shannonEntropy: 0, sampleEntropy: 0,
       rrVariation: 0, outlierCount: 0, abruptDiffCount: 0,
       prematureBeatCount: 0,
-      poincare: { sd1: 0, sd2: 0, sd1Sd2Ratio: 0, ellipseArea: 0 },
-      baevskyStress: {
-        stressIndex: 0,
-        modeSec: 0,
-        modeAmplitudePct: 0,
-        variationRangeSec: 0,
-        stressLevel: 'NORMAL',
-      },
     };
   }
 }

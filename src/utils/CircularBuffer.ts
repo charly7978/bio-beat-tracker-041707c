@@ -31,61 +31,24 @@ export class CircularBuffer {
     }
   }
 
+  /**
+   * Devuelve los puntos en orden cronológico.
+   * Asigna un Array nuevo solo si es necesario (cuando hay wrap-around).
+   */
+  getPoints(): readonly PPGDataPoint[] {
+    if (this.size === 0) return [];
+    if (this.head === 0) {
+      return this.buffer.slice(0, this.size) as PPGDataPoint[];
+    }
+    const out: PPGDataPoint[] = new Array(this.size);
+    for (let i = 0; i < this.size; i++) {
+      out[i] = this.buffer[(this.head + i) % this.capacity] as PPGDataPoint;
+    }
+    return out;
+  }
+
   getPointsCount(): number {
     return this.size;
-  }
-
-  /**
-   * Obtiene los valores mínimo y máximo de los últimos `count` puntos
-   * directamente desde el ring buffer, con O(count) y CERO asignaciones de memoria.
-   */
-  getRecentExtrema(count: number): { min: number; max: number } {
-    if (this.size === 0) return { min: -50, max: 50 };
-    const n = Math.min(this.size, count);
-    const startOffset = this.size - n;
-    let mn = Infinity;
-    let mx = -Infinity;
-    for (let i = 0; i < n; i++) {
-      const idx = (this.head + startOffset + i) % this.capacity;
-      const pt = this.buffer[idx];
-      if (pt) {
-        if (pt.value < mn) mn = pt.value;
-        if (pt.value > mx) mx = pt.value;
-      }
-    }
-    if (!Number.isFinite(mn) || !Number.isFinite(mx)) return { min: -50, max: 50 };
-    return { min: mn, max: mx };
-  }
-
-  /**
-   * Itera sobre los puntos dentro de una ventana de tiempo en orden cronológico
-   * de forma directa sobre el ring buffer, con complejidad O(k) donde k es la cantidad
-   * de puntos visibles y CERO asignación de arrays u objetos temporales.
-   */
-  forEachChronologicalInWindow(
-    now: number,
-    windowMs: number,
-    cb: (pt: PPGDataPoint, age: number) => void
-  ): void {
-    if (this.size === 0) return;
-    let countInWindow = 0;
-    for (let i = this.size - 1; i >= 0; i--) {
-      const idx = (this.head + i) % this.capacity;
-      const pt = this.buffer[idx];
-      if (!pt) break;
-      const age = now - pt.time;
-      if (age > windowMs) break;
-      countInWindow++;
-    }
-    if (countInWindow === 0) return;
-    const startIdx = this.size - countInWindow;
-    for (let i = 0; i < countInWindow; i++) {
-      const idx = (this.head + startIdx + i) % this.capacity;
-      const pt = this.buffer[idx];
-      if (pt) {
-        cb(pt, now - pt.time);
-      }
-    }
   }
 
   /**

@@ -3,16 +3,14 @@
  */
 import { clamp } from './math';
 
-export type NumericSequence = number[] | Float32Array | Float64Array;
-
-export function median(values: NumericSequence): number {
+export function median(values: number[] | Float32Array): number {
   if (values.length === 0) return 0;
   const sorted = Array.from(values).sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
-export function percentile(values: NumericSequence, p: number): number {
+export function percentile(values: number[] | Float32Array, p: number): number {
   if (values.length === 0) return 0;
   const sorted = Array.from(values).sort((a, b) => a - b);
   const idx = clamp(Math.floor((sorted.length - 1) * (p / 100)), 0, sorted.length - 1);
@@ -20,7 +18,7 @@ export function percentile(values: NumericSequence, p: number): number {
 }
 
 export function robustBounds(
-  values: NumericSequence,
+  values: number[] | Float32Array,
   lowQ = 0.1,
   highQ = 0.9,
 ): { low: number; high: number; range: number } {
@@ -33,33 +31,15 @@ export function robustBounds(
   return { low, high, range: Math.max(0, high - low) };
 }
 
-export function robustDynamicRange(values: NumericSequence, lowQ = 0.1, highQ = 0.9): number {
+export function robustDynamicRange(values: number[] | Float32Array, lowQ = 0.1, highQ = 0.9): number {
   const { range } = robustBounds(values, lowQ, highQ);
   return Math.max(0.008, range);
 }
 
 /**
- * Desviación estándar canónica (muestral/poblacional consistente).
- */
-export function stdDev(values: NumericSequence): number {
-  const n = values.length;
-  if (n < 2) return 0;
-  let sum = 0;
-  let sumSq = 0;
-  for (let i = 0; i < n; i++) {
-    const v = values[i]!;
-    sum += v;
-    sumSq += v * v;
-  }
-  const mean = sum / n;
-  const variance = (sumSq / n) - (mean * mean);
-  return Math.sqrt(Math.max(0, variance));
-}
-
-/**
  * Skewness (asimetría de Fisher-Pearson) de una ventana de señal.
  */
-export function skewness(values: NumericSequence): number {
+export function skewness(values: number[] | Float32Array): number {
   const n = values.length;
   if (n < 3) return 0;
   let mean = 0;
@@ -68,10 +48,9 @@ export function skewness(values: NumericSequence): number {
   let m2 = 0;
   let m3 = 0;
   for (let i = 0; i < n; i++) {
-    const d = values[i]!;
-    const diff = d - mean;
-    m2 += diff * diff;
-    m3 += diff * diff * diff;
+    const d = values[i]! - mean;
+    m2 += d * d;
+    m3 += d * d * d;
   }
   m2 /= n;
   m3 /= n;
@@ -79,5 +58,3 @@ export function skewness(values: NumericSequence): number {
   if (sd < 1e-9) return 0;
   return m3 / (sd * sd * sd);
 }
-
-

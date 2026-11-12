@@ -68,6 +68,7 @@ export function applyPulseAgc(
     contactStable ? 0.45 : 0,
   );
   const motionGate = clamp(1 - motionScore * 1.1, 0.35, 1);
+  const _rangeGate = clamp(rr / cfg.minRobustRange, 0, 1);
 
   const desired =
     rr >= cfg.minRobustRange * 0.35

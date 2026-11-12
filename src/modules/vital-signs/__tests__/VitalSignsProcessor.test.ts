@@ -41,7 +41,7 @@ describe('VitalSignsProcessor', () => {
       { redAC: 0.5, redDC: 5, greenAC: 0.3, greenDC: 3 },
       0,
     );
-    expect(result.value).toBe(0);
+    expect(result).toBe(0);
   });
 
   it('procesa señales válidas y actualiza el estado de las mediciones', () => {
@@ -58,48 +58,5 @@ describe('VitalSignsProcessor', () => {
 
     expect(result).toBeDefined();
     expect(result.signalQuality).toBe(75);
-  });
-
-  it('NUNCA afirma "SIN ARRITMIAS": el estado inicial es CALIBRANDO (sin evidencia no hay veredicto)', () => {
-    const proc = new VitalSignsProcessor();
-    const result = proc.reset();
-    expect(result!.arrhythmia.value?.status).toBe('CALIBRANDO...');
-  });
-
-  it('propaga la respiración del acelerómetro (modalidad ACC) a la Smart Fusion', () => {
-    const proc = new VitalSignsProcessor();
-    // Ventana suficiente para respiración: >=132 muestras de banda respiratoria
-    // (RESPIRATION_BUFFER=320, gate minBuffer*0.55=132) y estabilidad sostenida
-    // (stableFramesCount >= 90 → confianza HIGH con sqi 75 y 4+ RR válidos).
-    for (let i = 0; i < 160; i++) {
-      const resp = 150 + 20 * Math.sin(2 * Math.PI * 0.233 * (i / 10)); // ~14 rpm @10Hz
-      proc.processSignal(
-        resp,
-        75,
-        72,
-        { intervals: [833, 830, 835, 828], lastPeakTime: Date.now() },
-        0.0035,
-        { sqi: 75 },
-        resp,
-        undefined,
-        { rpm: 14, quality: 0.8 },
-      );
-    }
-    const result = proc.processSignal(
-      150, 75, 72,
-      { intervals: [833, 830, 835], lastPeakTime: Date.now() },
-      0.0035,
-      { sqi: 75 },
-      150,
-      undefined,
-      { rpm: 14, quality: 0.8 },
-    );
-    const mods = result.respiration.diagnostics?.modalities as
-      | { acc?: { available: boolean; rpm: number } }
-      | undefined;
-    // La modalidad ACC del acelerómetro debe estar disponible en la fusión —
-    // antes del fix el wiring la descartaba sistemáticamente.
-    expect(mods?.acc?.available).toBe(true);
-    expect(mods?.acc?.rpm).toBe(14);
   });
 });

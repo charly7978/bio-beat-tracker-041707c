@@ -12,7 +12,6 @@
 import type { PeakDetectionResult } from '@/types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '@/config/signalProcessing';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import { median } from '@/utils/stats';
 import { rrMedianMs, scorePeakCandidate } from './peakScoring';
 
 export interface PeakEmitDecision {
@@ -104,19 +103,10 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
       ens.peakScores?.[i] ??
       scorePeakCandidate({ elConf, ensConf: ens.confidence, sqi, perfusionIndex });
 
-    // Si es el primer pico del stream (lastEmittedPeakMs === 0), sincroniza con el más reciente.
-    // Una vez iniciado (lastEmittedPeakMs > 0), avanza en orden cronológico estricto (t < bestT)
-    // para no saltearse ningún latido intermedio.
-    if (lastEmittedPeakMs === 0) {
-      if (bestT === 0 || t > bestT || (t === bestT && weightedScore > bestScore)) {
-        bestT = t;
-        bestScore = weightedScore;
-      }
-    } else {
-      if (bestT === 0 || t < bestT || (t === bestT && weightedScore > bestScore)) {
-        bestT = t;
-        bestScore = weightedScore;
-      }
+    // Emite el pico genuino más reciente fuera del refractario.
+    if (bestT === 0 || t > bestT || (t === bestT && weightedScore > bestScore)) {
+      bestT = t;
+      bestScore = weightedScore;
     }
   }
 
@@ -136,12 +126,14 @@ export function bpmFromEmittedRr(rrMs: number[]): number {
       d <= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS,
   );
   if (!tail.length) return 0;
-  const med = median(tail);
+  const sorted = [...tail].sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)] ?? sorted[0]!;
   const trimmed =
     tail.length >= 3
       ? tail.filter((d) => Math.abs(d - med) / med <= 0.22)
       : tail;
   const use = trimmed.length >= 2 ? trimmed : tail;
-  const finalMed = median(use);
+  const sortedUse = [...use].sort((a, b) => a - b);
+  const finalMed = sortedUse[Math.floor(sortedUse.length / 2)] ?? sortedUse[0]!;
   return 60000 / finalMed;
 }

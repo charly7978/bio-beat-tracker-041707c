@@ -1,12 +1,7 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { VitalSignsProcessor, VitalSignsResult, RGBData } from '../modules/vital-signs/VitalSignsProcessor';
-import type { BPNexusMeta } from '../modules/vital-signs/BloodPressureProcessor';
-import type { NexusBpObservation } from '../lib/vitals/nexusFusionCore';
 import { createDefaultVitalSignsResult } from '../lib/vitals/defaultVitalSignsResult';
 import type { SignalQualityMetrics } from '../types/measurements';
-
-/** Metadatos de coherencia que acompañan a una observación cross-site. */
-export type NexusObservationMeta = Omit<BPNexusMeta, 'sourcesUsed'>;
 
 /**
  * HOOK DE SIGNOS VITALES - OPTIMIZADO
@@ -50,24 +45,12 @@ export const useVitalSignsProcessor = () => {
   const setPlacementMode = useCallback((mode: import('../types/signal').FingerPlacementMode) => {
     processorRef.current?.setPlacementMode(mode);
   }, []);
-
-  /**
-   * Puente NEXUS: publica la observación de tránsito cara→dedo (τ) para que la
-   * próxima estimación de PA la use como evidencia independiente. `null` limpia
-   * el pendiente (p. ej. al detener la captura proximal).
-   */
-  const setNexusCrossSiteObservation = useCallback(
-    (observation: NexusBpObservation | null, meta: NexusObservationMeta | null) => {
-      processorRef.current?.setNexusCrossSiteObservation(observation, meta);
-    },
-    [],
-  );
   
   const processSignal = useCallback((
     value: number, 
     quality: number,
     bpm: number,
-    rrData?: { intervals: number[], lastPeakTime: number | null; timestampNow?: number },
+    rrData?: { intervals: number[], lastPeakTime: number | null, timestampNow?: number },
     /** PI (AC/DC) del PPGSignalProcessor — alinea SpO2/“clínico” con la perfusión real del dedo */
     perfusionIndexFromPpg?: number,
     sqmBundle?: Partial<SignalQualityMetrics>,
@@ -75,7 +58,6 @@ export const useVitalSignsProcessor = () => {
     splitterChannels?: {
       morphologyFiltered?: number;
       respirationFiltered?: number;
-      arrhythmiaFiltered?: number;
       spo2Channels?: {
         acRed: number;
         dcRed: number;
@@ -85,8 +67,6 @@ export const useVitalSignsProcessor = () => {
         dcBlue?: number;
       };
     },
-    /** Respiración del acelerómetro (IMU) — 4ª modalidad de la Smart Fusion (Karlen 2013). */
-    accelRespiration?: { rpm: number; quality: number },
   ): VitalSignsResult => {
     if (!processorRef.current) return createDefaultVitalSignsResult();
 
@@ -99,7 +79,6 @@ export const useVitalSignsProcessor = () => {
       sqmBundle,
       morphologyValue,
       splitterChannels,
-      accelRespiration,
     );
     
     // Guardar la última ventana realmente válida para cierre/exportación en ref para evitar re-renderizados constantes
@@ -137,15 +116,12 @@ export const useVitalSignsProcessor = () => {
   return {
     processSignal,
     setPlacementMode,
-    setNexusCrossSiteObservation,
     setRGBData,
     reset,
     fullReset,
     startCalibration,
     forceCalibrationCompletion,
     lastValidResults,
-    setLastValidResults,
-    syncAnthropometric: useCallback(() => processorRef.current?.syncAnthropometric(), []),
     getCalibrationProgress: useCallback(() => processorRef.current?.getCalibrationProgress() ?? 0, []),
   };
 };

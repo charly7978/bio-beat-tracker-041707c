@@ -1,15 +1,9 @@
 import { createLogger } from '../../utils/logger';
 import { clamp } from '../../utils/math';
-import { median } from '../../utils/stats';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
-import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { CalibrationManager } from './CalibrationManager';
-import { computeTripleRatioFeatures, type TripleRatioFeatures } from '@/lib/vitals/spo2TripleRatio';
-import { tmdsToRatios, type TmdsDifferential } from '@/lib/vitals/spo2Tmds';
-import { computeTgdDifferential, tgdToRatios, type TgdExposureSettings, type TgdLevel, type TgdDifferential } from '@/lib/vitals/spo2TgdDifferential';
-import { predictSpo2, type Spo2PersonalModel, type Spo2Prediction } from '@/lib/vitals/spo2PersonalRegressor';
-import { autocorrAtLag } from '../signal-processing/shared/dsp';
 import { fastICA } from '../../utils/ica';
+import { bandLimitedDominantFreq, goertzelMagnitude } from '../signal-processing/shared/dsp';
 
 const log = createLogger('SpO2Calculator');
 
@@ -20,13 +14,6 @@ export interface RGBData {
   greenDC: number;
   blueAC?: number;
   blueDC?: number;
-}
-
-export interface SpO2Result {
-  value: number;
-  p5: number;
-  p95: number;
-  source: 'camera' | 'personal_regressor' | 'none';
 }
 
 /**
@@ -53,15 +40,23 @@ function cameraLinearizeAC(ac: number, dc: number): number {
 }
 
 /**
+ * Calcula la autocorrelación de una señal a un lag específico.
+ */
+function computeAutocorrelation(sig: number[], lag: number): number {
+  const N = sig.length;
+  if (N <= lag) return 0;
+  let sum = 0;
+  for (let i = 0; i < N - lag; i++) {
+    sum += sig[i] * sig[i + lag];
+  }
+  return sum / (N - lag);
+}
+
+/**
  * Calculadora de SpO2 con ratio-of-ratios (Beer-Lambert) corregido por gamma y BSS.
- * Mejorado con consistencia multi-par, scoring por pureza ICA y incertidumbre.
  */
 export class SpO2Calculator {
   private rValueHistory: number[] = [];
-  private lastResult: SpO2Result | null = null;
-  getLastResult(): SpO2Result | null { return this.lastResult; }
-  private lastTripleRatioFeatures: TripleRatioFeatures | null = null;
-  private personalModel: Spo2PersonalModel | null = null;
   private readonly R_HISTORY_SAMPLES = VITAL_THRESHOLDS.SPO2.R_HISTORY_SAMPLES;
 
   // Historiales deslizantes para BSS (ICA) y SNR
@@ -70,12 +65,18 @@ export class SpO2Calculator {
   private blueAcHistory: number[] = [];
   private readonly ICA_WINDOW_SIZE = 64;
 
-  /** Calcula SpO2 a partir de los canales RGB. Retorna 0 si no hay señal válida. */
-  calculate(raw: RGBData, frameCount: number, sampleRate = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE, currentHr?: number): SpO2Result {
+  /**
+   * Calcula SpO2 a partir de los canales RGB. Retorna 0 si no hay señal válida.
+   * @param fs Frecuencia de muestreo efectiva (Hz) del historial AC — necesaria para
+   *   anclar la búsqueda del componente pulsátil a la banda cardíaca real (HR-locked).
+   *   Antes asumía 30 fps; las muestras llegan a ~10 Hz (frame/3), por lo que el rango
+   *   de lag de autocorrelación apuntaba a frecuencias erróneas.
+   */
+  calculate(raw: RGBData, frameCount: number, fs: number = 30): number {
     const spoCfg = VITAL_THRESHOLDS.SPO2;
     let { redAC, redDC, greenAC, greenDC, blueAC, blueDC } = raw;
 
-    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC) return { value: 0, p5: 0, p95: 0, source: 'none' };
+    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC) return 0;
 
     // ── Corrección inversa del tone mapping sigmoidal ──
     const rawRedDC = redDC;
@@ -104,7 +105,7 @@ export class SpO2Calculator {
     }
 
     // Requerimos al menos 10 muestras para estimar amplitudes AC estables por RMS
-    if (this.redAcHistory.length < 10) return { value: 0, p5: 0, p95: 0, source: 'none' };
+    if (this.redAcHistory.length < 10) return 0;
 
     // Calcular amplitudes AC efectivas mediante RMS de la ventana de componentes AC
     let sumSqRed = 0;
@@ -120,33 +121,41 @@ export class SpO2Calculator {
     const rmsGreen = Math.sqrt(sumSqGreen / M);
     const rmsBlue = Math.sqrt(sumSqBlue / M);
 
-    const piRed = (rmsRed / redDC) * 100;
-    const piGreen = (rmsGreen / greenDC) * 100;
-    const piBlue = typeof blueDC === 'number' && blueDC > 0 ? (rmsBlue / blueDC) * 100 : 0;
+    // ── AC pulsátil en BANDA ESTRECHA anclada a la FC (Goertzel) ──
+    // El estado del arte de oximetría por cámara aísla la componente AC en la
+    // frecuencia cardíaca real (filtro de un solo bin), descartando el ruido fuera
+    // de banda que contamina el RMS de banda ancha → razón AC/DC mucho más limpia.
+    // La FC se estima del canal verde (el más pulsátil); si no hay periodicidad
+    // fiable se cae a RMS. Reutiliza fs efectiva real (no asume 30 fps).
+    const fMaxHz = Math.min(3.5, fs / 2 - 0.05);
+    const cardiac = M >= 16 ? bandLimitedDominantFreq(this.greenAcHistory, fs, 0.7, fMaxHz) : { freqHz: 0, quality: 0 };
+    const narrowOk = cardiac.freqHz > 0 && cardiac.quality > 0.12;
+    const gR = narrowOk ? goertzelMagnitude(this.redAcHistory, cardiac.freqHz, fs) : 0;
+    const gG = narrowOk ? goertzelMagnitude(this.greenAcHistory, cardiac.freqHz, fs) : 0;
+    const gB = narrowOk && typeof blueDC === 'number' && blueDC > 0
+      ? goertzelMagnitude(this.blueAcHistory, cardiac.freqHz, fs) : 0;
+
+    // Amplitud AC efectiva por canal: banda estrecha si es fiable, RMS como respaldo.
+    const acRed = gR > 0 ? gR : rmsRed;
+    const acGreen = gG > 0 ? gG : rmsGreen;
+    const acBlue = gB > 0 ? gB : rmsBlue;
+
+    const piRed = (acRed / redDC) * 100;
+    const piGreen = (acGreen / greenDC) * 100;
+    const piBlue = typeof blueDC === 'number' && blueDC > 0 ? (acBlue / blueDC) * 100 : 0;
 
     if (frameCount % 10 === 0) {
-      log.info(`[SpO2 Debug] ACr_rms:${rmsRed.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg_rms:${rmsGreen.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}% | ACb_rms:${rmsBlue.toFixed(3)} DCb:${typeof blueDC === 'number' ? blueDC.toFixed(0) : 'N/A'} PIb:${piBlue.toFixed(3)}%`);
+      log.info(`[SpO2 Debug] fHR:${cardiac.freqHz.toFixed(2)}Hz q:${cardiac.quality.toFixed(2)} ACr:${acRed.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${acGreen.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}% | ACb:${acBlue.toFixed(3)} DCb:${typeof blueDC === 'number' ? blueDC.toFixed(0) : 'N/A'} PIb:${piBlue.toFixed(3)}%`);
     }
 
-    if (piRed < spoCfg.MIN_PI_PERCENT) return { value: 0, p5: 0, p95: 0, source: 'none' };
+    if (piRed < spoCfg.MIN_PI_PERCENT) return 0;
 
-    // Valores R-value base usando las amplitudes RMS de cada canal
-    const ratioRed = rmsRed / redDC;
-    const ratioGreen = rmsGreen / greenDC;
-    const ratioBlue = typeof blueDC === 'number' && blueDC > 0 ? rmsBlue / blueDC : 0;
+    // Valores R-value base usando la amplitud AC pulsátil (banda estrecha) de cada canal
+    const ratioRed = acRed / redDC;
+    const ratioGreen = acGreen / greenDC;
+    const ratioBlue = typeof blueDC === 'number' && blueDC > 0 ? acBlue / blueDC : 0;
 
-    // F4: features de ratio triple (almacenadas para el regresor personal y TMDS)
-    if (typeof blueDC === 'number' && blueDC > 0) {
-      this.lastTripleRatioFeatures = computeTripleRatioFeatures({
-        redAC: rmsRed, redDC,
-        greenAC: rmsGreen, greenDC,
-        blueAC: rmsBlue, blueDC,
-      });
-    } else {
-      this.lastTripleRatioFeatures = null;
-    }
-
-    if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return { value: 0, p5: 0, p95: 0, source: 'none' };
+    if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return 0;
 
     const R_rg = ratioRed / ratioGreen;
     const R_bg = ratioGreen > 0 ? ratioBlue / ratioGreen : 0;
@@ -159,7 +168,6 @@ export class SpO2Calculator {
     let snrRed = 0;
     let snrGreen = 0;
     let snrBlue = 0;
-    let icaComponentPurity = 0; // 0-1, higher is better
 
     // Si tenemos suficientes muestras, corremos FastICA y estimamos SNR
     if (this.redAcHistory.length >= this.ICA_WINDOW_SIZE) {
@@ -167,21 +175,15 @@ export class SpO2Calculator {
       if (icaResult) {
         const { A, S } = icaResult;
 
-        // Buscamos el pitch period de la frecuencia cardíaca mediante autocorrelación en el canal verde (el más pulsátil)
-        // Ventana de plausibilidad HR (VITAL_THRESHOLDS.HR.PLAUSIBLE_*)
-        const HR = VITAL_THRESHOLDS.HR;
-        const safeFs = sampleRate > 0 ? sampleRate : DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
-        const minLag = Math.max(2, Math.floor((safeFs * 60) / HR.PLAUSIBLE_MAX));
-        const maxLag = Math.min(this.greenAcHistory.length - 2, Math.ceil((safeFs * 60) / HR.PLAUSIBLE_MIN));
-
-        let detectedLag =
-          typeof currentHr === 'number' && currentHr >= HR.PLAUSIBLE_MIN && currentHr <= HR.PLAUSIBLE_MAX
-            ? Math.round((safeFs * 60) / currentHr)
-            : Math.round((safeFs * 60) / HR.DEFAULT_ESTIMATE);
-
+        // Buscamos el pitch period de la frecuencia cardíaca mediante autocorrelación
+        // en el canal verde (el más pulsátil). El rango de lag se deriva de la fs real
+        // para cubrir la banda cardíaca fisiológica (~40–200 BPM), no un supuesto de 30 fps.
+        const minLag = Math.max(2, Math.round(fs * 0.3));   // ≈200 BPM
+        const maxLag = Math.min(this.greenAcHistory.length - 2, Math.round(fs * 1.5)); // ≈40 BPM
+        let detectedLag = Math.max(minLag, Math.round(fs * 0.8)); // fallback ≈75 BPM
         let maxAutoCorr = -1;
         for (let lag = minLag; lag <= maxLag; lag++) {
-          const acVal = autocorrAtLag(this.greenAcHistory, lag);
+          const acVal = computeAutocorrelation(this.greenAcHistory, lag);
           if (acVal > maxAutoCorr) {
             maxAutoCorr = acVal;
             detectedLag = lag;
@@ -193,8 +195,8 @@ export class SpO2Calculator {
         let bestScore = -1;
         for (let i = 0; i < 3; i++) {
           const src = S[i];
-          const r0 = autocorrAtLag(src, 0);
-          const rLag = autocorrAtLag(src, detectedLag);
+          const r0 = computeAutocorrelation(src, 0);
+          const rLag = computeAutocorrelation(src, detectedLag);
           const periodicity = r0 > 1e-10 ? Math.max(0, rLag / r0) : 0;
 
           // Correlación absoluta con canal verde de referencia
@@ -214,13 +216,6 @@ export class SpO2Calculator {
             bestComp = i;
           }
         }
-
-        // Componente puro si tiene alta periodicidad y correlación con verde
-        const bestSrc = S[bestComp];
-        const bestR0 = autocorrAtLag(bestSrc, 0);
-        const bestRLag = autocorrAtLag(bestSrc, detectedLag);
-        const bestPeriodicity = bestR0 > 1e-10 ? Math.max(0, bestRLag / bestR0) : 0;
-        icaComponentPurity = clamp(bestPeriodicity * 0.8 + Math.min(1, bestScore / 0.5) * 0.2, 0, 1);
 
         // Obtener coeficientes de mezcla del componente de pulso
         const aR = A[0][bestComp];
@@ -246,16 +241,16 @@ export class SpO2Calculator {
         }
 
         // Calcular SNR para cada canal usando el lag cardíaco detectado
-        const r0Red = autocorrAtLag(this.redAcHistory, 0);
-        const rLagRed = autocorrAtLag(this.redAcHistory, detectedLag);
+        const r0Red = computeAutocorrelation(this.redAcHistory, 0);
+        const rLagRed = computeAutocorrelation(this.redAcHistory, detectedLag);
         snrRed = r0Red > 1e-10 ? Math.max(0, rLagRed / (r0Red - Math.abs(rLagRed) + 1e-6)) : 0;
 
-        const r0Green = autocorrAtLag(this.greenAcHistory, 0);
-        const rLagGreen = autocorrAtLag(this.greenAcHistory, detectedLag);
+        const r0Green = computeAutocorrelation(this.greenAcHistory, 0);
+        const rLagGreen = computeAutocorrelation(this.greenAcHistory, detectedLag);
         snrGreen = r0Green > 1e-10 ? Math.max(0, rLagGreen / (r0Green - Math.abs(rLagGreen) + 1e-6)) : 0;
 
-        const r0Blue = autocorrAtLag(this.blueAcHistory, 0);
-        const rLagBlue = autocorrAtLag(this.blueAcHistory, detectedLag);
+        const r0Blue = computeAutocorrelation(this.blueAcHistory, 0);
+        const rLagBlue = computeAutocorrelation(this.blueAcHistory, detectedLag);
         snrBlue = r0Blue > 1e-10 ? Math.max(0, rLagBlue / (r0Blue - Math.abs(rLagBlue) + 1e-6)) : 0;
       }
     }
@@ -294,42 +289,9 @@ export class SpO2Calculator {
       currentR = R_rg; // Fallback final de seguridad
     }
 
-    // Consistencia multi-par: si los pares divergen mucho, bajar confianza / rechazar
-    const pairValues = [usedR_rg, usedR_bg, usedR_rb].filter(v => isFinite(v) && v > 0);
-    if (pairValues.length >= 2) {
-      const pairMed = median(pairValues);
-      if (pairMed > 1e-6) {
-        let maxRelDev = 0;
-        for (let i = 0; i < pairValues.length; i++) {
-          const dev = Math.abs(pairValues[i] - pairMed) / pairMed;
-          if (dev > maxRelDev) maxRelDev = dev;
-        }
-        // Divergencia alta -> reducir peso del componente menos confiable; si extrema -> rechazar
-        if (maxRelDev > 0.25) {
-          // Penalizar fuertemente: favorecer par más estable si existe
-          if (frameCount % 15 === 0) log.warn(`[SpO2] Divergencia multi-par alta: maxRelDev=${maxRelDev.toFixed(3)}`);
-          // Si divergencia muy alta, ser conservador
-          if (maxRelDev > 0.35) {
-            return { value: 0, p5: 0, p95: 0, source: 'none' };
-          }
-          // Moderada: sesgar hacia RG si disponible
-          currentR = usedR_rg * 0.7 + pairMed * 0.3;
-        }
-      }
-    }
-
-    // Penalización por pureza ICA si disponible
-    if (icaComponentPurity < 0.4 && this.redAcHistory.length >= this.ICA_WINDOW_SIZE) {
-      // Mezclar con histórico más conservador
-      if (this.rValueHistory.length > 0) {
-        const prevMed = median(this.rValueHistory);
-        currentR = currentR * 0.6 + prevMed * 0.4;
-      }
-    }
-
     if (currentR < spoCfg.R_VALUE_MIN || currentR > spoCfg.R_VALUE_MAX) {
       if (frameCount % 15 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
-      return { value: 0, p5: 0, p95: 0, source: 'none' };
+      return 0;
     }
 
     this.rValueHistory.push(currentR);
@@ -337,98 +299,47 @@ export class SpO2Calculator {
       this.rValueHistory.shift();
     }
 
-    if (this.rValueHistory.length < 3) return { value: 0, p5: 0, p95: 0, source: 'none' };
+    if (this.rValueHistory.length < 3) return 0;
 
-    const medianR = median(this.rValueHistory);
+    const sortedR = [...this.rValueHistory].sort((a, b) => a - b);
+    const medianR = sortedR[Math.floor(sortedR.length / 2)] ?? 0;
 
     // Modelo adaptativo: el término lineal y cuadrático se ajusta por la calidad de señal (PI promedio)
     const avgPI = (piRed + piGreen + piBlue) / 3;
     const piFactor = clamp(avgPI / 0.5, 0.7, 1.3);
 
     // ── Modelo Cuadrático de SpO2 Mejorado (Task 4) ──
-    // SIN clamp inferior fisiológico forzado: si el modelo dice 68%, devuelve 68
-    // y el gating de publicación (VitalSignsProcessor: [70,100]) decide mostrar
-    // o '--'. Un Math.max(MIN_VALID) enmascararía una desaturación real — la
-    // regla del proyecto es "sin lectura" sobre lectura falseada.
-    // El CAP superior sí es físico: la saturación no puede superar 100%.
-    const A = spoCfg.R_MODEL_A;
-    const B = spoCfg.R_MODEL_B;
-    const C = spoCfg.R_MODEL_C;
+    const A = spoCfg.R_MODEL_A ?? -3.5;
+    const B = spoCfg.R_MODEL_B ?? -7.5;
+    const C = spoCfg.R_MODEL_C ?? 104;
 
     const adjB = B / piFactor;
     const adjA = A / piFactor;
 
     let spo2 = Math.min(
       spoCfg.DISPLAY_CAP,
-      C + adjB * medianR + adjA * medianR * medianR,
+      Math.max(
+        spoCfg.MIN_VALID,
+        C + adjB * medianR + adjA * medianR * medianR,
+      ),
     );
 
     const calib = CalibrationManager.getInstance();
     const activeSpo2Profile = calib.getActiveProfile('SPO2');
     if (spo2 > 0 && activeSpo2Profile) {
       const spo2Offset = activeSpo2Profile.coefficients.spo2Offset ?? 0;
-      // Offset de calibración SIN piso: el gaging de publicación filtra fuera de
-      // banda ([70,100]); el offset solo corrige el sesgo del perfil de referencia.
-      spo2 = Math.min(spoCfg.DISPLAY_CAP, spo2 + spo2Offset);
-    }
-
-    // Personal regressor (F4): si hay modelo vigente y features triple-ratio, usarlo.
-    let resultSpo2 = Number.isFinite(spo2) ? spo2 : 0;
-    let p5 = Math.max(0, resultSpo2 - 3);
-    let p95 = Math.min(100, resultSpo2 + 3);
-    let source: SpO2Result['source'] = resultSpo2 > 0 ? 'camera' : 'none';
-
-    if (resultSpo2 > 0 && this.personalModel && this.lastTripleRatioFeatures?.valid) {
-      const f = this.lastTripleRatioFeatures!;
-      const features = [f.ratioRed, f.ratioGreen, f.ratioBlue, f.rg, f.rb, f.bg];
-      const pred = predictSpo2(this.personalModel!, features);
-      if (pred) {
-        resultSpo2 = pred.spo2;
-        p5 = pred.p5;
-        p95 = pred.p95;
-        source = 'personal_regressor';
-      }
+      spo2 = clamp(spo2 + spo2Offset, spoCfg.MIN_VALID, spoCfg.DISPLAY_CAP);
     }
 
     if (frameCount % 30 === 0) {
-      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${resultSpo2.toFixed(1)}% (n=${this.rValueHistory.length})`);
+      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}% (n=${this.rValueHistory.length})`);
     }
 
-    if (resultSpo2 <= 0) {
-      this.lastResult = { value: 0, p5: 0, p95: 0, source: 'none' };
-      return { value: 0, p5: 0, p95: 0, source: 'none' };
-    }
-    const out = { value: resultSpo2, p5, p95, source };
-    this.lastResult = out;
-    return out;
-  }
-
-  setPersonalModel(model: Spo2PersonalModel | null): void {
-    this.personalModel = model;
-  }
-
-  getPersonalSpo2Estimate(features: number[]): Spo2Prediction | null {
-    if (!this.personalModel) return null;
-    return predictSpo2(this.personalModel, features);
-  }
-
-  computeTmdsRatios(diff: TmdsDifferential, ac: { red: number; green: number; blue: number }): { red: number; green: number; blue: number } | null {
-    return tmdsToRatios(diff, ac);
-  }
-
-  getLastTripleRatioFeatures(): TripleRatioFeatures | null {
-    return this.lastTripleRatioFeatures;
+    return Number.isFinite(spo2) ? spo2 : 0;
   }
 
   getRValueHistory(): number[] {
     return this.rValueHistory;
-  }
-
-  computeTgdDifferential(on: TgdLevel, off: TgdLevel, settings: TgdExposureSettings): TgdDifferential {
-    return computeTgdDifferential(on, off, settings);
-  }
-  computeTgdRatios(diff: TgdDifferential, ac: { red: number; green: number; blue: number }): { red: number; green: number; blue: number } | null {
-    return tgdToRatios(diff, ac);
   }
 
   reset(): void {
@@ -436,6 +347,5 @@ export class SpO2Calculator {
     this.redAcHistory = [];
     this.greenAcHistory = [];
     this.blueAcHistory = [];
-    this.lastResult = null;
   }
 }
