@@ -84,6 +84,17 @@ describe('evaluateFinalMeasurementSave', () => {
     expect(r.reasons).toContain('SPO2_NOT_VALID');
   });
 
+  it('no guarda como final una presión arterial que requiere calibración', () => {
+    const vs = makeVs('VALID', 60);
+    vs.bloodPressure = { ...vs.bloodPressure, status: 'REQUIRES_CALIBRATION' };
+
+    const r = evaluateFinalMeasurementSave(vs, 60);
+
+    expect(r.canSaveFinal).toBe(false);
+    expect(r.outcome).toBe('rejected_incomplete');
+    expect(r.reasons).toContain('BP_NOT_VALID');
+  });
+
   it('acepta HR en el límite inferior fisiológico (30 BPM)', () => {
     const vs = makeVs('VALID', 60);
     vs.heartRate = { ...vs.heartRate, value: 30 };

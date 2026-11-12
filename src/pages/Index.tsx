@@ -6,11 +6,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { useSignalProcessor } from "@/hooks/useSignalProcessor";
 import { useHeartBeatProcessor } from "@/hooks/useHeartBeatProcessor";
 import { useVitalSignsProcessor } from "@/hooks/useVitalSignsProcessor";
-import { useSaveMeasurement } from "@/hooks/useSaveMeasurement";
+import { clearLocalMeasurements, decryptLocalMeasurements, useSaveMeasurement } from "@/hooks/useSaveMeasurement";
 import { useHealthAnalysis } from "@/hooks/useHealthAnalysis";
 import { useFrameLoop } from "@/hooks/useFrameLoop";
 import { useSignalRouter } from "@/hooks/useSignalRouter";
 import { useMeasurementSession } from "@/hooks/useMeasurementSession";
+import { healthBridge } from "@/lib/capacitor/healthBridge";
+import { toast } from "@/hooks/use-toast";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
 import { PoincarePlot } from "@/components/PoincarePlot";
 import { WebrtcCallWidget } from "@/components/WebrtcCallWidget";
@@ -167,6 +169,9 @@ const Index = () => {
     getBackpressureConfig,
     setHeartBeatRuntimeHints,
   });
+  const setRouterIsMonitoringRef = router.setIsMonitoringRef;
+  const setRouterVitalSigns = router.setVitalSigns;
+  const setSessionResultsVisible = session.setLocalShowResults;
 
   // Conectar handleSignalRealtime al pipeline
   useEffect(() => {
@@ -176,8 +181,8 @@ const Index = () => {
 
   // Sincronizar isMonitoringRef
   useEffect(() => {
-    router.setIsMonitoringRef(session.isMonitoring);
-  }, [session.isMonitoring, router]);
+    setRouterIsMonitoringRef(session.isMonitoring);
+  }, [session.isMonitoring, setRouterIsMonitoringRef]);
 
   // Al estabilizarse el contacto, bloquear la exposición de la cámara a la
   // escena real del dedo iluminado. Frena la deriva del auto-exposure (causa del
@@ -204,10 +209,10 @@ const Index = () => {
   // Sincronizar resultados post-medición
   useEffect(() => {
     if (lastValidResults && !session.isMonitoring) {
-      router.setVitalSigns(lastValidResults);
-      session.setLocalShowResults(true);
+      setRouterVitalSigns(lastValidResults);
+      setSessionResultsVisible(true);
     }
-  }, [lastValidResults, session.isMonitoring]);
+  }, [lastValidResults, session.isMonitoring, setRouterVitalSigns, setSessionResultsVisible]);
 
   // UI states
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
@@ -247,45 +252,64 @@ const Index = () => {
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
 
   const fetchHistory = useCallback(async () => {
+    let formattedLocal: HistoricalMeasurement[] = [];
     try {
-      const { decryptLocalMeasurements } = await import('@/hooks/useSaveMeasurement');
       const localData = await decryptLocalMeasurements();
       const typedLocal = localData as HistoricalMeasurement[];
-      const formattedLocal = typedLocal.map((m: HistoricalMeasurement) => ({
+      formattedLocal = typedLocal.map((m: HistoricalMeasurement) => ({
         ...m,
         isCloud: false,
       }));
+    } catch (err) {
+      log.error('Error fetching local history:', err);
+      toast({
+        title: 'Historial local no disponible',
+        description: 'No se pudo acceder al historial local. Los datos se conservaron y se mostrará el historial en la nube si está disponible.',
+        duration: 6000,
+      });
+    }
 
+    let cloudData: HistoricalMeasurement[] = [];
+    let cloudFetchFailed = false;
+    try {
       const { data: { user } } = await supabase.auth.getUser();
-      let cloudData: HistoricalMeasurement[] = [];
       if (user) {
         const { data, error } = await supabase
           .from("measurements")
           .select("*")
           .eq("user_id", user.id)
           .order("measured_at", { ascending: false });
-        if (!error && data) {
-          cloudData = data.map((m: HistoricalMeasurement) => ({
-            ...m,
-            isCloud: true,
-          }));
-        }
+        if (error) throw error;
+        if (data) cloudData = data.map((m: HistoricalMeasurement) => ({
+          ...m,
+          isCloud: true,
+        }));
       }
-
-      const combined = [...formattedLocal, ...cloudData].sort(
-        (a, b) => new Date(b.measured_at).getTime() - new Date(a.measured_at).getTime()
-      );
-      setHistory(combined);
     } catch (err) {
-      log.error("Error fetching history:", err);
+      cloudFetchFailed = true;
+      log.error('Error fetching cloud history:', err);
     }
+
+    if (cloudFetchFailed && formattedLocal.length === 0) return;
+
+    const combined = [...formattedLocal, ...cloudData].sort(
+      (a, b) => new Date(b.measured_at).getTime() - new Date(a.measured_at).getTime()
+    );
+    setHistory(combined);
   }, []);
 
-  const handleClearHistory = useCallback(() => {
-    if (window.confirm("¿Estás seguro de que quieres borrar el historial local de este dispositivo?")) {
-      localStorage.removeItem("local_measurements");
-      localStorage.removeItem("bb-crypto-key");
-      fetchHistory();
+  const handleClearHistory = useCallback(async () => {
+    if (!window.confirm("¿Estás seguro de que quieres borrar el historial local de este dispositivo?")) return;
+    try {
+      await clearLocalMeasurements();
+      await fetchHistory();
+    } catch (err) {
+      log.error('Error clearing local history:', err);
+      toast({
+        title: 'No se pudo borrar el historial local',
+        description: 'El almacenamiento local no se modificó.',
+        duration: 6000,
+      });
     }
   }, [fetchHistory]);
 
@@ -401,11 +425,12 @@ const Index = () => {
 
   // Check Health Connect availability
   useEffect(() => {
-    import('@/lib/capacitor/healthBridge').then(({ healthBridge }) => {
-      healthBridge.checkAvailability().then(avail => {
-        setHealthAvail(avail ? 'yes' : 'no');
-      }).catch(() => setHealthAvail('no'));
-    }).catch(() => setHealthAvail('no'));
+    healthBridge.checkAvailability().then(avail => {
+      setHealthAvail(avail ? 'yes' : 'no');
+    }).catch(error => {
+      log.warn('Health Connect availability check failed', error);
+      setHealthAvail('no');
+    });
   }, []);
 
   // Check if encryption key exists (means crypto was initialized)
@@ -419,13 +444,21 @@ const Index = () => {
   // Run risk analysis on current vitals
   useEffect(() => {
     const vs = lastValidResults;
-    if (vs && (vs.heartRate.value || vs.spo2.value)) {
-      import('@/lib/ml/riskAnalyzer').then(({ healthRiskAnalyzer }) => {
-        const risk = healthRiskAnalyzer.analyze(vs);
-        setRiskResult(risk.timeline);
-      }).catch(() => {});
+    if (!vs || (!vs.heartRate.value && !vs.spo2.value)) {
+      setRiskResult(null);
+      return;
     }
-  }, [lastValidResults?.heartRate.value, lastValidResults?.spo2.value]);
+    let cancelled = false;
+    import('@/lib/ml/riskAnalyzer').then(({ healthRiskAnalyzer }) => {
+      const risk = healthRiskAnalyzer.analyze(vs);
+      if (!cancelled) setRiskResult(risk.timeline);
+    }).catch(error => {
+      if (!cancelled) log.warn('Risk analysis failed', error);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [lastValidResults]);
 
   // Cargar datos antropométricos desde CalibrationManager al montar
   useEffect(() => {
@@ -598,17 +631,17 @@ const Index = () => {
       return;
     }
     if (currentStride > prev) {
-      import('@/hooks/use-toast').then(({ toast }) => toast({
+      toast({
         title: "⚡ Modo ahorro activado",
         description: `Rendimiento bajo detectado (stride ${currentStride}).`,
         duration: 3000,
-      }));
+      });
     } else {
-      import('@/hooks/use-toast').then(({ toast }) => toast({
+      toast({
         title: "✓ Rendimiento restaurado",
         description: `Muestreo completo (stride ${currentStride}).`,
         duration: 2500,
-      }));
+      });
     }
   }, [currentStride, session.isMonitoring, getBackpressureConfig]);
 
@@ -646,7 +679,7 @@ const Index = () => {
 
       if (currentProgress >= 100) {
         clearInterval(interval);
-        triggerCalibrationCompleteHaptic().catch(() => undefined);
+        void triggerCalibrationCompleteHaptic();
       }
     }, 500);
 
@@ -672,11 +705,11 @@ const Index = () => {
         overconstrained: "Usando configuración por defecto.",
         abort: "Intenta nuevamente.",
       };
-      import('@/hooks/use-toast').then(({ toast }) => toast({
+      toast({
         title: titles[errType] || "Cámara trasera no disponible",
         description: descriptions[errType] || "Verifica los permisos de cámara e intenta nuevamente.",
         duration: 6000,
-      }));
+      });
     };
     window.addEventListener('camera-error', handler);
     return () => window.removeEventListener('camera-error', handler);
@@ -684,7 +717,9 @@ const Index = () => {
 
   const handleToggleMonitoring = () => {
     if (session.isMonitoring) {
-      session.finalizeMeasurement();
+      void session.finalizeMeasurement().catch(err => {
+        log.error('Error finalizing measurement:', err);
+      });
     } else {
       session.startMonitoring();
     }

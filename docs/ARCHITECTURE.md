@@ -1,6 +1,6 @@
 # Arquitectura — Bio Beat Tracker (PPG por cámara)
 
-Documentación alineada al código en `main`. **No es validación clínica SaMD**; describe el pipeline técnico real, sus límites y trazabilidad.
+Documentación del pipeline técnico actual. **No es validación clínica SaMD**; los estados `VALID` son estados internos del software y no demuestran exactitud clínica.
 
 ## Resumen
 
@@ -14,6 +14,7 @@ CameraView (MediaStream, torch, capabilities/settings)
     ▼
 useSignalProcessor → PPGSignalProcessor
     │ ROI adaptativo, dedo (color + dinámica), AC/DC, bandpass, SQI frame
+    │ procesamiento DSP en `src/workers/ppgSignal.worker.ts`
     ▼
 ProcessedSignal
     ├─► useHeartBeatProcessor → HeartBeatProcessor
@@ -98,6 +99,10 @@ Reglas típicas:
 
 Se conservan intentos y mediciones con metadatos de calidad; **no** se deben persistir lecturas inválidas como resultados clínicos finales sin `status`/`reason`.
 
+## Historial local
+
+El respaldo de mediciones se cifra con AES-GCM, pero la clave y el texto cifrado están en `localStorage`; esto no protege contra scripts ejecutados en el mismo origen ni contra el acceso al perfil del navegador. Las lecturas, escrituras y la limpieza se coordinan con un Web Lock exclusivo por origen. Si `navigator.locks` no está disponible, las operaciones locales fallan explícitamente sin modificar los datos. Si el descifrado falla, los datos locales se conservan y la carga del historial de Supabase continúa.
+
 ## Tests y CI
 
 ```bash
@@ -111,8 +116,9 @@ Tests relevantes: `Detectors.test.ts`, `PPGSignalProcessor.test.ts`, `fingerRoiP
 ## Limitaciones explícitas
 
 - Estimaciones **orientativas** sin calibración de usuario (especialmente SpO2 y PA).
+- Los pesos BP versionados se generan desde `training/train_bp_mlp.py`, cuyo conjunto es sintético; no hay evidencia de validación clínica en este repositorio.
 - Variabilidad entre dispositivos (sensor RG-Bayer, torch, FPS).
-- Procesamiento en main thread (sin Web Worker aún).
+- El DSP PPG corre en Web Worker; React y el enrutamiento/vitales se ejecutan en el hilo principal.
 - No sustituye un pulsioxímetro ni un tensiómetro certificado.
 
 ## Referencias internas

@@ -2,7 +2,7 @@
 
 **Fecha de auditoría:** 2026-05-09
 **Alcance:** cámara → procesamiento → BPM → SpO₂ → Presión Arterial → Arritmias → UI
-**Resultado:** ✅ **Sin simulaciones, sin valores artificiales, sin generadores aleatorios.**
+**Resultado:** el guardrail bloquea patrones de simulación en el código productivo bajo `src/`. Los scripts de `training/` sí generan datos sintéticos para experimentación y no constituyen una fuente de validación clínica.
 
 ## Búsquedas ejecutadas
 
@@ -44,8 +44,9 @@
 ### 7. Presión arterial (`BloodPressureProcessor.ts`)
 - Modelo de regresión PWA sobre 74 features morfológicos reales (APG b/a, d/a, AIx, SI, dicrotic notch).
 - Si features insuficientes → `{systolic:0, diastolic:0, confidence:'INSUFFICIENT'}` → UI muestra `--/--`.
-- Sin base fija 120/80 — verificado por comentario explícito en el código.
-- Sin calibración manual ni offsets sintéticos (calibration wizard eliminado).
+- El MLP cargado desde `src/lib/vitals/mlpWeights.ts` se genera con `training/train_bp_mlp.py`, que usa etiquetas derivadas de fórmulas sintéticas, no mediciones de referencia.
+- Por tanto, ni límites fisiológicos, ni una calibración individual, ni las pruebas unitarias prueban exactitud clínica. El repositorio no incluye un protocolo/dataset de validación clínica.
+- El guardado final exige estado `VALID`; `REQUIRES_CALIBRATION` no se guarda como medición final.
 
 ### 8. Arritmias (`arrhythmia-processor.ts`)
 - Detectadas exclusivamente desde RR-intervals reales obtenidos de los picos del HeartBeatProcessor.
@@ -68,4 +69,4 @@
 
 ## Conclusión
 
-El pipeline cumple estrictamente la regla **`Medical Philosophy`** del proyecto: *"Prioritize 'no reading' over false reading"*. Todas las métricas se derivan exclusivamente de píxeles reales capturados con flash; cuando la señal es insuficiente, la app muestra `--` y conserva `confidence='INSUFFICIENT'` en lugar de inventar valores.
+El pipeline cumple estrictamente la regla **`Medical Philosophy`** del proyecto: *"Prioritize 'no reading' over false reading"*. Las señales de entrada al procesamiento rPPG se derivan de píxeles reales capturados con flash; cuando la señal es insuficiente, la app muestra `--` y conserva `confidence='INSUFFICIENT'` en lugar de inventar valores. La estimación BP usa features reales, pero depende de pesos de un MLP entrenado con etiquetas sintéticas y no tiene validación clínica independiente, por lo que no debe presentarse como una lectura clínica validada.

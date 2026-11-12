@@ -3,6 +3,8 @@
 **Fecha:** 2026-05-09
 **Objetivo:** repositorio sin archivos huérfanos, código duplicado ni APIs obsoletas.
 
+> Registro histórico de esa fecha, no inventario vigente ni garantía del estado actual. Para los controles actuales, ejecutar `npm run check:all`.
+
 ## Archivos eliminados
 
 | Archivo | Motivo |

@@ -21,6 +21,15 @@ interface MeasurementData {
 }
 
 const LOCAL_STORAGE_KEY = 'local_measurements';
+const LOCAL_HISTORY_LOCK_NAME = 'bio-beat-local-history';
+
+async function withLocalHistoryLock<T>(operation: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
+  if (!locks) {
+    throw new Error('Cross-tab local history coordination is unavailable.');
+  }
+  return locks.request(LOCAL_HISTORY_LOCK_NAME, operation);
+}
 
 async function getEncryptionKey(): Promise<CryptoKey> {
   const raw = localStorage.getItem('bb-crypto-key');
@@ -28,11 +37,14 @@ async function getEncryptionKey(): Promise<CryptoKey> {
     const keyData = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
     return crypto.subtle.importKey('raw', keyData, 'AES-GCM', false, ['encrypt', 'decrypt']);
   }
-  const seed = navigator.userAgent + navigator.language + 'bio-beat-2024';
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed));
-  const keyData = new Uint8Array(hash).slice(0, 16);
+  const key = await crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: 256 },
+    true,
+    ['encrypt', 'decrypt'],
+  );
+  const keyData = new Uint8Array(await crypto.subtle.exportKey('raw', key));
   localStorage.setItem('bb-crypto-key', btoa(String.fromCharCode(...keyData)));
-  return crypto.subtle.importKey('raw', keyData, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  return key;
 }
 
 async function encryptLocalMeasurements(data: unknown): Promise<string> {
@@ -46,23 +58,52 @@ async function encryptLocalMeasurements(data: unknown): Promise<string> {
   return btoa(String.fromCharCode(...combined));
 }
 
-export async function decryptLocalMeasurements(): Promise<unknown[]> {
+function parseLegacyMeasurements(raw: string): unknown[] | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (error) {
+    if (error instanceof SyntaxError) return null;
+    throw error;
+  }
+}
+
+async function decryptLocalMeasurementsUnlocked(): Promise<unknown[]> {
   const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
   if (!raw) return [];
+  const encodedKey = localStorage.getItem('bb-crypto-key');
+  if (!encodedKey) {
+    const legacy = parseLegacyMeasurements(raw);
+    if (legacy) return legacy;
+    throw new Error('Unable to decrypt local measurements; stored data was left unchanged.');
+  }
+
   try {
-    const key = await getEncryptionKey();
+    const keyData = Uint8Array.from(atob(encodedKey), c => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey('raw', keyData, 'AES-GCM', false, ['encrypt', 'decrypt']);
     const combined = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
     const iv = combined.slice(0, 12);
     const ciphertext = combined.slice(12);
     const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
-    return JSON.parse(new TextDecoder().decode(decrypted));
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(decrypted));
+    if (!Array.isArray(parsed)) throw new Error('Encrypted measurement data is not an array.');
+    return parsed;
   } catch {
-    try {
-      const fallback = JSON.parse(raw);
-      if (Array.isArray(fallback)) return fallback;
-    } catch { }
-    return [];
+    const legacy = parseLegacyMeasurements(raw);
+    if (legacy) return legacy;
+    throw new Error('Unable to decrypt local measurements; stored data was left unchanged.');
   }
+}
+
+export async function decryptLocalMeasurements(): Promise<unknown[]> {
+  return withLocalHistoryLock(decryptLocalMeasurementsUnlocked);
+}
+
+export async function clearLocalMeasurements(): Promise<void> {
+  await withLocalHistoryLock(async () => {
+    localStorage.removeItem(LOCAL_STORAGE_KEY);
+    localStorage.removeItem('bb-crypto-key');
+  });
 }
 
 async function insertMeasurementAttempt(
@@ -169,22 +210,21 @@ export const useSaveMeasurement = () => {
 
       if (authError || !user) {
         console.log('⚠️ Guardando medición localmente (cifrado AES-GCM)...');
-        const localMeasurements = await decryptLocalMeasurements();
-
-        const newRecord = {
-          id: `local_${Date.now()}`,
-          heart_rate: hr,
-          spo2,
-          systolic: sys,
-          diastolic: dia,
-          arrhythmia_count: vs.arrhythmia.value?.count ?? 0,
-          quality: sq,
-          measured_at: new Date().toISOString(),
-        };
-
-        localMeasurements.push(newRecord);
-        const encrypted = await encryptLocalMeasurements(localMeasurements);
-        localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
+        await withLocalHistoryLock(async () => {
+          const localMeasurements = await decryptLocalMeasurementsUnlocked();
+          localMeasurements.push({
+            id: `local_${Date.now()}`,
+            heart_rate: hr,
+            spo2,
+            systolic: sys,
+            diastolic: dia,
+            arrhythmia_count: vs.arrhythmia.value?.count ?? 0,
+            quality: sq,
+            measured_at: new Date().toISOString(),
+          });
+          const encrypted = await encryptLocalMeasurements(localMeasurements);
+          localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
+        });
         savedLocally = true;
 
         toast({
@@ -216,19 +256,21 @@ export const useSaveMeasurement = () => {
           });
 
           // Fallback a localStorage cifrado si falla la escritura en la nube
-          const localMeasurements = await decryptLocalMeasurements();
-          localMeasurements.push({
-            id: `local_${Date.now()}`,
-            heart_rate: hr,
-            spo2,
-            systolic: sys,
-            diastolic: dia,
-            arrhythmia_count: vs.arrhythmia.value?.count ?? 0,
-            quality: sq,
-            measured_at: new Date().toISOString(),
+          await withLocalHistoryLock(async () => {
+            const localMeasurements = await decryptLocalMeasurementsUnlocked();
+            localMeasurements.push({
+              id: `local_${Date.now()}`,
+              heart_rate: hr,
+              spo2,
+              systolic: sys,
+              diastolic: dia,
+              arrhythmia_count: vs.arrhythmia.value?.count ?? 0,
+              quality: sq,
+              measured_at: new Date().toISOString(),
+            });
+            const encrypted = await encryptLocalMeasurements(localMeasurements);
+            localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
           });
-          const encrypted = await encryptLocalMeasurements(localMeasurements);
-          localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
 
           toast({
             title: '⚠️ Guardado localmente (cifrado)',
@@ -251,6 +293,11 @@ export const useSaveMeasurement = () => {
       return true;
     } catch (error) {
       log.error('Error inesperado al guardar medición:', error);
+      toast({
+        title: 'No se pudo guardar la medición',
+        description: 'La medición no se guardó en el historial. Revisa la conexión o el almacenamiento local.',
+        duration: 6000,
+      });
       return false;
     }
   }, []);

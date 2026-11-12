@@ -1,6 +1,6 @@
-# PPG/APG ONNX Model Training
+# Scripts de entrenamiento PPG/APG
 
-Scripts para entrenar los 3 modelos ONNX que usa el motor de señales vitales.
+Estos scripts son experimentales. Algunos generan señales y etiquetas sintéticas; sus resultados no constituyen validación clínica ni deben describirse como modelos clínicamente validados.
 
 ## Requisitos
 
@@ -8,36 +8,23 @@ Scripts para entrenar los 3 modelos ONNX que usa el motor de señales vitales.
 pip install -r requirements.txt
 ```
 
-## Modelos
+## Scripts y salidas
 
-| Script | Archivo ONNX | Entrada | Salida |
-|--------|-------------|---------|--------|
-| `train_peak_scorer.py` | `peak_scorer_v1.onnx` | signal[1,256] + features[4] | score[1], confidence[1] |
-| `train_sqi_refiner.py` | `sqi_refiner_v1.onnx` | signal_embed[1,128] + metadata[4] | refined_sqi[1], reliability[1] |
-| `train_denoiser.py` | `denoiser_v1.onnx` | noisy_signal[1,512] | denoised_signal[1,512] |
+| Script | Datos/salida |
+|---|---|
+| `generate_synthetic_ppg.py` | Generador de señales PPG sintéticas usado por los entrenamientos experimentales. |
+| `train_bp_mlp.py` | Entrena con entradas y etiquetas generadas por fórmulas sintéticas y escribe `src/lib/vitals/mlpWeights.ts`, que sí se importa en runtime. |
+| `train_peak_scorer.py` | Entrenamiento experimental; exporta `public/models/peak_scorer_v1.onnx`. |
+| `train_sqi_refiner.py` | Entrenamiento experimental; exporta `public/models/sqi_refiner_v1.onnx`. |
+| `train_denoiser.py` | Entrenamiento experimental; exporta `public/models/denoiser_v1.onnx`. |
 
-## Uso
+Ejecutá desde este directorio, por ejemplo:
 
 ```bash
+python train_bp_mlp.py
 python train_peak_scorer.py
 python train_sqi_refiner.py
 python train_denoiser.py
 ```
 
-Los `.onnx` se exportan a `public/models/`. El runtime los carga desde `/models/`.
-
-## Arquitecturas
-
-- **Peak Scorer**: CNN 1D (3 capas conv) + MLP. Clasifica ventanas de señal como pico válido o no.
-- **SQI Refiner**: CNN 1D ligero + MLP. Refina el SQI heurístico combinando embedding de señal + metadata.
-- **Denoiser**: Autoencoder 1D convolucional (3 encode / 3 decode). Limpia ruido de movimiento y eléctrico.
-
-## Activación en runtime
-
-En `src/config/features.ts`:
-
-```ts
-export const FEATURES = { useNN: false };  // → true para activar
-```
-
-Cuando `useNN = false` (default), los módulos ONNX retornan `null` y el pipeline cae al código heurístico existente.
+Los exportadores ONNX no tienen integración de carga en runtime en el código fuente actual. El único modelo de esta carpeta conectado al pipeline es el MLP BP; sus pruebas verifican plausibilidad/rangos, no exactitud contra un tensiómetro de referencia. Consultá `docs/dependency-audit.md` y `docs/ARCHITECTURE.md` antes de interpretar una salida como dato clínico.

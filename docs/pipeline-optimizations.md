@@ -1,5 +1,7 @@
 # Pipeline Optimizations — Closing notes
 
+> Nota histórica: este registro precede la integración del Web Worker y de `RingF32`. No usar sus secciones "diferido" como descripción del estado actual; consultar `docs/ARCHITECTURE.md` y el código vigente.
+
 Estado al cerrar la fase de optimización pedida sobre la telemetría ya habilitada.
 
 ## ✅ Implementado en esta fase (cuidadoso, contenido)

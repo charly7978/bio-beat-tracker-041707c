@@ -38,10 +38,6 @@ export function WebrtcCallWidget() {
           setLocalSdp(JSON.stringify(pc.localDescription));
         }
       };
-      pc.ondatachannel = (e) => {
-        e.channel.onmessage = (msg) => console.log('[Telemed] Data:', msg.data);
-      };
-
       pc.createDataChannel('vitals');
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -59,10 +55,6 @@ export function WebrtcCallWidget() {
 
       pc.onconnectionstatechange = () => setState(pc.connectionState);
       pc.oniceconnectionstatechange = () => setState(pc.connectionState);
-      pc.ondatachannel = (e) => {
-        e.channel.onmessage = (msg) => console.log('[Telemed] Data:', msg.data);
-      };
-
       const desc = JSON.parse(remoteInput) as RTCSessionDescriptionInit;
       await pc.setRemoteDescription(desc);
       const answer = await pc.createAnswer();
@@ -74,11 +66,15 @@ export function WebrtcCallWidget() {
     }
   }, [remoteInput]);
 
-  const copySdp = useCallback(() => {
-    navigator.clipboard.writeText(localSdp).then(() => {
+  const copySdp = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(localSdp);
+      setError('');
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch(() => {});
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError('No se pudo copiar la descripción de conexión.');
+    }
   }, [localSdp]);
 
   const isIdle = state === 'new' || state === 'closed';

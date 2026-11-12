@@ -115,8 +115,7 @@ export function evaluateFinalMeasurementSave(
 
   const bpVal = vitalSigns.bloodPressure.value;
   const bpOk =
-    (vitalSigns.bloodPressure.status === 'VALID' ||
-      vitalSigns.bloodPressure.status === 'REQUIRES_CALIBRATION') &&
+    vitalSigns.bloodPressure.status === 'VALID' &&
     bpVal != null &&
     bpVal.systolic > 0 &&
     bpVal.diastolic > 0;

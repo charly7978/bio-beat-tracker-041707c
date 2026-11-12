@@ -199,11 +199,14 @@ export function useMeasurementSession({
 
 
 
+  const finalizingRef = useRef(false);
+
   // === INICIO DE MONITOREO ===
   const startMonitoring = useCallback(() => {
     if (isMonitoring) return;
+    finalizingRef.current = false;
 
-    triggerSessionStartHaptic().catch(() => undefined);
+    void triggerSessionStartHaptic();
 
     enterFullScreen();
     setLocalShowResults(false);
@@ -254,81 +257,93 @@ export function useMeasurementSession({
 
   // === FINALIZAR MEDICIÓN ===
   const finalizeMeasurement = useCallback(async () => {
-    if (!isMonitoring) return;
+    if (!isMonitoring || finalizingRef.current) return;
+    finalizingRef.current = true;
 
-    playCompletionSound();
-    triggerSessionEndHaptic().catch(() => undefined);
+    try {
+      playCompletionSound();
+      void triggerSessionEndHaptic();
 
-    stopFrameLoop();
-    if (measurementTimerRef.current) {
-      clearInterval(measurementTimerRef.current);
-      measurementTimerRef.current = null;
-    }
+      stopFrameLoop();
+      if (measurementTimerRef.current) {
+        clearInterval(measurementTimerRef.current);
+        measurementTimerRef.current = null;
+      }
 
-    stopProcessing();
+      stopProcessing();
 
-    if (vitalSignsRef.current.isCalibrating) {
-      forceCalibrationCompletion();
-    }
+      if (vitalSignsRef.current.isCalibrating) {
+        forceCalibrationCompletion();
+      }
 
-    const savedResults = resetVitalSigns();
+      const savedResults = resetVitalSigns();
 
-    const dataToSave = savedResults ?? vitalSignsRef.current;
-    const sqForSave = Math.round(
-      dataToSave.signalQuality ?? lastSignal?.quality ?? 0,
-    );
-    const hasMeasurable =
-      (dataToSave.heartRate.value != null && dataToSave.heartRate.value > 0) ||
-      (dataToSave.spo2.value != null &&
-        dataToSave.spo2.value >= VITAL_THRESHOLDS.SPO2.MIN_VALID) ||
-      (dataToSave.bloodPressure.value?.systolic ?? 0) > 0;
+      const dataToSave = savedResults ?? vitalSignsRef.current;
+      const sqForSave = Math.round(
+        dataToSave.signalQuality ?? lastSignal?.quality ?? 0,
+      );
+      const hasMeasurable =
+        (dataToSave.heartRate.value != null && dataToSave.heartRate.value > 0) ||
+        (dataToSave.spo2.value != null &&
+          dataToSave.spo2.value >= VITAL_THRESHOLDS.SPO2.MIN_VALID) ||
+        (dataToSave.bloodPressure.value?.systolic ?? 0) > 0;
 
-    const totalCheckFrames = artifactCheckFramesRef.current;
-    const artifactMetrics = totalCheckFrames > 0
-      ? {
-          motionArtifactRatio: motionArtifactFramesRef.current / totalCheckFrames,
-          saturationRatio: saturationFramesRef.current / totalCheckFrames,
-          underexposureRatio: underexposedFramesRef.current / totalCheckFrames,
-          totalFrames: totalCheckFrames,
+      const totalCheckFrames = artifactCheckFramesRef.current;
+      const artifactMetrics = totalCheckFrames > 0
+        ? {
+            motionArtifactRatio: motionArtifactFramesRef.current / totalCheckFrames,
+            saturationRatio: saturationFramesRef.current / totalCheckFrames,
+            underexposureRatio: underexposedFramesRef.current / totalCheckFrames,
+            totalFrames: totalCheckFrames,
+          }
+        : undefined;
+
+      if (hasMeasurable) {
+        const wasSaved = await saveMeasurement({
+          vitalSigns: dataToSave,
+          signalQuality: sqForSave,
+          artifactMetrics,
+        });
+        if (wasSaved) {
+          healthBridge.checkAvailability().then(avail => {
+            if (avail) healthBridge.saveVitals(dataToSave);
+          }).catch(error => {
+            logWarn('useMeasurementSession', 'Health data sync failed', error);
+          });
+        } else {
+          logWarn('useMeasurementSession', 'Measurement finalized without being persisted');
         }
-      : undefined;
+      }
 
-    if (hasMeasurable) {
-      await saveMeasurement({
-        vitalSigns: dataToSave,
-        signalQuality: sqForSave,
-        artifactMetrics,
+      setIsCameraOn(false);
+
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        setCameraStream(null);
+      }
+
+      setIsMonitoring(false);
+      isMonitoringRef.current = false;
+      releaseWakeLock();
+
+      if (savedResults) {
+        setVitalSigns(savedResults);
+      }
+      setLocalShowResults(true);
+
+      const total = totalBeatsRef.current;
+      const arrBeats = arrhythmiaBeatsRef.current;
+      setLocalMeasurementSummary({
+        totalBeats: total,
+        arrhythmiaBeats: arrBeats,
+        normalPercent: total > 0 ? Math.round(((total - arrBeats) / total) * 100) : 100,
       });
-      healthBridge.checkAvailability().then(avail => {
-        if (avail) healthBridge.saveVitals(dataToSave);
-      }).catch(() => {});
+
+      setElapsedTime(0);
+    } catch (error) {
+      finalizingRef.current = false;
+      throw error;
     }
-
-    setIsCameraOn(false);
-
-    if (cameraStream) {
-      cameraStream.getTracks().forEach(track => track.stop());
-      setCameraStream(null);
-    }
-
-    setIsMonitoring(false);
-    isMonitoringRef.current = false;
-    releaseWakeLock();
-
-    if (savedResults) {
-      setVitalSigns(savedResults);
-    }
-    setLocalShowResults(true);
-
-    const total = totalBeatsRef.current;
-    const arrBeats = arrhythmiaBeatsRef.current;
-    setLocalMeasurementSummary({
-      totalBeats: total,
-      arrhythmiaBeats: arrBeats,
-      normalPercent: total > 0 ? Math.round(((total - arrBeats) / total) * 100) : 100,
-    });
-
-    setElapsedTime(0);
   }, [isMonitoring, cameraStream, stopFrameLoop, stopProcessing, forceCalibrationCompletion, resetVitalSigns, saveMeasurement, vitalSignsRef, lastSignal, releaseWakeLock, isMonitoringRef, totalBeatsRef, arrhythmiaBeatsRef, motionArtifactFramesRef, saturationFramesRef, underexposedFramesRef, artifactCheckFramesRef, setVitalSigns]);
 
   // === RESET COMPLETO ===
@@ -369,7 +384,9 @@ export function useMeasurementSession({
   // Auto-finalizar a los 90 segundos
   useEffect(() => {
     if (isMonitoring && elapsedTime >= 90) {
-      finalizeMeasurement();
+      void finalizeMeasurement().catch(error => {
+        logWarn('useMeasurementSession', 'Measurement finalization failed', error);
+      });
     }
   }, [elapsedTime, isMonitoring, finalizeMeasurement]);
 
