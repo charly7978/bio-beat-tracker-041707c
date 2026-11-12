@@ -7,7 +7,7 @@ import {
   buildAttemptDiagnostics,
   evaluateFinalMeasurementSave,
   type ArtifactMetrics,
-} from '@/lib/measurement/savePolicy';
+} from '@/lib/measurements/savePolicy';
 import { ValidationDataset } from '@/modules/vital-signs/ValidationDataset';
 import { CalibrationManager } from '@/modules/vital-signs/CalibrationManager';
 import { createLogger } from '@/utils/logger';

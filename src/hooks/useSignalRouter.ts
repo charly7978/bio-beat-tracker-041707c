@@ -69,6 +69,7 @@ interface VitalSignsProcessorAPI {
     splitterChannels?: {
       morphologyFiltered?: number;
       respirationFiltered?: number;
+      arrhythmiaFiltered?: number;
       spo2Channels?: {
         acRed: number;
         dcRed: number;
@@ -709,6 +710,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       const splitterChannels = {
         morphologyFiltered: lastSignal.morphologyFiltered,
         respirationFiltered: lastSignal.respirationFiltered,
+        arrhythmiaFiltered: lastSignal.arrhythmiaFiltered,
         spo2Channels: lastSignal.spo2Channels,
       };
 

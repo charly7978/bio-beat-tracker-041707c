@@ -14,7 +14,6 @@
  */
 
 import { calculateHRV } from '../../utils/physio';
-import { savitzkyGolaySecondDeriv } from '../signal-processing/shared/dsp';
 
 // ═══════════════════════════════════════════
 // TYPES
@@ -268,11 +267,12 @@ export class PPGFeatureExtractor {
   }
 
   private static secondDerivative(buffer: number[]): number[] {
-    // Savitzky-Golay (ajuste cuadrático): suaviza y deriva en un paso → APG limpia
-    // sin amplificar ruido. Semiventana adaptada al largo del ciclo (más con señal
-    // upsampleada), acotada para no aplanar los picos b/c/d/e.
-    const half = Math.max(2, Math.min(6, Math.round(buffer.length / 16)));
-    return savitzkyGolaySecondDeriv(buffer, half);
+    const d2: number[] = [0];
+    for (let i = 1; i < buffer.length - 1; i++) {
+      d2.push(buffer[i + 1] - 2 * buffer[i] + buffer[i - 1]);
+    }
+    d2.push(0);
+    return d2;
   }
 
   /**

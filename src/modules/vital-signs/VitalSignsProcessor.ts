@@ -208,6 +208,7 @@ export class VitalSignsProcessor {
     splitterChannels?: {
       morphologyFiltered?: number;
       respirationFiltered?: number;
+      arrhythmiaFiltered?: number;
       spo2Channels?: {
         acRed: number;
         dcRed: number;
@@ -648,7 +649,7 @@ export class VitalSignsProcessor {
     // === SpO2 — Basado en física (Beer-Lambert), no estadística ===
     // SpO2 usa ratios ópticos AC/DC directamente de la cámara.
     // Solo necesita datos RGB válidos y confidence no-INVALID.
-    const spo2 = this.spo2Calculator.calculate(this.rgbData, this.frameCount, this.VITAL_SIGNAL_ESTIMATE_HZ);
+    const spo2 = this.spo2Calculator.calculate(this.rgbData, this.frameCount);
     const spo2Conf = this.getSpo2Confidence();
     if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && spo2Conf !== 'INVALID') {
       const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 5;
@@ -681,7 +682,7 @@ export class VitalSignsProcessor {
       const bpEstimate = this.bloodPressureProcessor.estimate(
         this.morphologyHistory.tail(this.HISTORY_SIZE),
         validRR,
-        this.VITAL_SIGNAL_ESTIMATE_HZ,
+        30,
         this.lastBPM > 0 ? this.lastBPM : undefined,
       );
 

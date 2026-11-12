@@ -3,7 +3,6 @@ import { clamp } from '../../utils/math';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { CalibrationManager } from './CalibrationManager';
 import { fastICA } from '../../utils/ica';
-import { bandLimitedDominantFreq, goertzelMagnitude } from '../signal-processing/shared/dsp';
 
 const log = createLogger('SpO2Calculator');
 
@@ -65,14 +64,8 @@ export class SpO2Calculator {
   private blueAcHistory: number[] = [];
   private readonly ICA_WINDOW_SIZE = 64;
 
-  /**
-   * Calcula SpO2 a partir de los canales RGB. Retorna 0 si no hay señal válida.
-   * @param fs Frecuencia de muestreo efectiva (Hz) del historial AC — necesaria para
-   *   anclar la búsqueda del componente pulsátil a la banda cardíaca real (HR-locked).
-   *   Antes asumía 30 fps; las muestras llegan a ~10 Hz (frame/3), por lo que el rango
-   *   de lag de autocorrelación apuntaba a frecuencias erróneas.
-   */
-  calculate(raw: RGBData, frameCount: number, fs: number = 30): number {
+  /** Calcula SpO2 a partir de los canales RGB. Retorna 0 si no hay señal válida. */
+  calculate(raw: RGBData, frameCount: number): number {
     const spoCfg = VITAL_THRESHOLDS.SPO2;
     let { redAC, redDC, greenAC, greenDC, blueAC, blueDC } = raw;
 
@@ -121,39 +114,20 @@ export class SpO2Calculator {
     const rmsGreen = Math.sqrt(sumSqGreen / M);
     const rmsBlue = Math.sqrt(sumSqBlue / M);
 
-    // ── AC pulsátil en BANDA ESTRECHA anclada a la FC (Goertzel) ──
-    // El estado del arte de oximetría por cámara aísla la componente AC en la
-    // frecuencia cardíaca real (filtro de un solo bin), descartando el ruido fuera
-    // de banda que contamina el RMS de banda ancha → razón AC/DC mucho más limpia.
-    // La FC se estima del canal verde (el más pulsátil); si no hay periodicidad
-    // fiable se cae a RMS. Reutiliza fs efectiva real (no asume 30 fps).
-    const fMaxHz = Math.min(3.5, fs / 2 - 0.05);
-    const cardiac = M >= 16 ? bandLimitedDominantFreq(this.greenAcHistory, fs, 0.7, fMaxHz) : { freqHz: 0, quality: 0 };
-    const narrowOk = cardiac.freqHz > 0 && cardiac.quality > 0.12;
-    const gR = narrowOk ? goertzelMagnitude(this.redAcHistory, cardiac.freqHz, fs) : 0;
-    const gG = narrowOk ? goertzelMagnitude(this.greenAcHistory, cardiac.freqHz, fs) : 0;
-    const gB = narrowOk && typeof blueDC === 'number' && blueDC > 0
-      ? goertzelMagnitude(this.blueAcHistory, cardiac.freqHz, fs) : 0;
-
-    // Amplitud AC efectiva por canal: banda estrecha si es fiable, RMS como respaldo.
-    const acRed = gR > 0 ? gR : rmsRed;
-    const acGreen = gG > 0 ? gG : rmsGreen;
-    const acBlue = gB > 0 ? gB : rmsBlue;
-
-    const piRed = (acRed / redDC) * 100;
-    const piGreen = (acGreen / greenDC) * 100;
-    const piBlue = typeof blueDC === 'number' && blueDC > 0 ? (acBlue / blueDC) * 100 : 0;
+    const piRed = (rmsRed / redDC) * 100;
+    const piGreen = (rmsGreen / greenDC) * 100;
+    const piBlue = typeof blueDC === 'number' && blueDC > 0 ? (rmsBlue / blueDC) * 100 : 0;
 
     if (frameCount % 10 === 0) {
-      log.info(`[SpO2 Debug] fHR:${cardiac.freqHz.toFixed(2)}Hz q:${cardiac.quality.toFixed(2)} ACr:${acRed.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${acGreen.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}% | ACb:${acBlue.toFixed(3)} DCb:${typeof blueDC === 'number' ? blueDC.toFixed(0) : 'N/A'} PIb:${piBlue.toFixed(3)}%`);
+      log.info(`[SpO2 Debug] ACr_rms:${rmsRed.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg_rms:${rmsGreen.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}% | ACb_rms:${rmsBlue.toFixed(3)} DCb:${typeof blueDC === 'number' ? blueDC.toFixed(0) : 'N/A'} PIb:${piBlue.toFixed(3)}%`);
     }
 
     if (piRed < spoCfg.MIN_PI_PERCENT) return 0;
 
-    // Valores R-value base usando la amplitud AC pulsátil (banda estrecha) de cada canal
-    const ratioRed = acRed / redDC;
-    const ratioGreen = acGreen / greenDC;
-    const ratioBlue = typeof blueDC === 'number' && blueDC > 0 ? acBlue / blueDC : 0;
+    // Valores R-value base usando las amplitudes RMS de cada canal
+    const ratioRed = rmsRed / redDC;
+    const ratioGreen = rmsGreen / greenDC;
+    const ratioBlue = typeof blueDC === 'number' && blueDC > 0 ? rmsBlue / blueDC : 0;
 
     if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return 0;
 
@@ -175,14 +149,10 @@ export class SpO2Calculator {
       if (icaResult) {
         const { A, S } = icaResult;
 
-        // Buscamos el pitch period de la frecuencia cardíaca mediante autocorrelación
-        // en el canal verde (el más pulsátil). El rango de lag se deriva de la fs real
-        // para cubrir la banda cardíaca fisiológica (~40–200 BPM), no un supuesto de 30 fps.
-        const minLag = Math.max(2, Math.round(fs * 0.3));   // ≈200 BPM
-        const maxLag = Math.min(this.greenAcHistory.length - 2, Math.round(fs * 1.5)); // ≈40 BPM
-        let detectedLag = Math.max(minLag, Math.round(fs * 0.8)); // fallback ≈75 BPM
+        // Buscamos el pitch period de la frecuencia cardíaca mediante autocorrelación en el canal verde (el más pulsátil)
+        let detectedLag = 20; // fallback ≈ 90 BPM a 30fps
         let maxAutoCorr = -1;
-        for (let lag = minLag; lag <= maxLag; lag++) {
+        for (let lag = 10; lag <= 40; lag++) {
           const acVal = computeAutocorrelation(this.greenAcHistory, lag);
           if (acVal > maxAutoCorr) {
             maxAutoCorr = acVal;

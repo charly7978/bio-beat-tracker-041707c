@@ -12,6 +12,8 @@ export interface ProcessedSignal {
   morphologyFiltered?: number;
   /** Canal 4 del banco de filtros: señal de modulación lenta para estimación de FR */
   respirationFiltered?: number;
+  /** Canal 5 del banco de filtros: señal limpia para detección de intervalos RR / arritmias */
+  arrhythmiaFiltered?: number;
   /** Canal 2 del banco de filtros: componentes AC y DC separados por canal para ratio SpO2 */
   spo2Channels?: {
     acRed: number;

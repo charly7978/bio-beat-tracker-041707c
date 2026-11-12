@@ -283,14 +283,11 @@ export function estimatePhysiologicalBp(
   const sbpWindkessel = mapPhys + (2 / 3) * ppPhys;
   const dbpWindkessel = mapPhys - (1 / 3) * ppPhys;
 
-  // 3. FUSIÓN ADAPTATIVA: Ponderación basada en la calidad del ciclo detectado.
-  // El MLP está entrenado con datos FISIOLÓGICOS SINTÉTICOS (training/), no con pares
-  // PPG↔BP reales medidos, por lo que NO debe dominar: aporta forma/regresión sobre la
-  // morfología, pero el respaldo es el modelo físico hemodinámico (Windkessel/PWA), que
-  // es el fundamentado. Por eso el peso del MLP se acota a [0.15, 0.5] (antes 0.85, que
-  // dejaba que la red sintética dominara justo cuando la señal era más limpia).
+  // 3. FUSIÓN ADAPTATIVA: Ponderación basada en la calidad del ciclo detectado
   const fq = assessFeatureQualityLocal(f);
-  const wMlp = clamp((fq - 40) / 60, 0.15, 0.5);
+  // Con calidad de pulso alta (fq >= 72), confiamos más en la precisión del MLP.
+  // Con calidad baja o ruido (fq < 48), nos aferramos al modelo físico hemodinámico Windkessel.
+  const wMlp = clamp((fq - 40) / 40, 0.25, 0.85);
 
   let sbp = sbpMlp * wMlp + sbpWindkessel * (1.0 - wMlp);
   let dbp = dbpMlp * wMlp + dbpWindkessel * (1.0 - wMlp);

@@ -32,14 +32,15 @@ export class HealthRiskAnalyzer {
   analyze(
     vitals: VitalSignsResult,
     profile?: Partial<RiskWeights>,
+    age?: number,
   ): HealthRiskScore {
-    const hr = vitals.heartRate.value ?? this.REFERENCE_HR;
-    const spo2 = vitals.spo2.value ?? this.REFERENCE_SPO2;
-    const sys = vitals.bloodPressure.value?.systolic ?? this.REFERENCE_BP_SYS;
-    const dia = vitals.bloodPressure.value?.diastolic ?? this.REFERENCE_BP_DIA;
+    const hr = vitals.heartRate.value ?? 72;
+    const spo2 = vitals.spo2.value ?? 98;
+    const sys = vitals.bloodPressure.value?.systolic ?? 120;
+    const dia = vitals.bloodPressure.value?.diastolic ?? 80;
     const arrhythmiaScore = vitals.arrhythmia.value?.score ?? 0;
 
-    const cv = this.scoreCardiovascular(hr, sys, dia, profile);
+    const cv = this.scoreCardiovascular(hr, sys, dia, profile, age);
     const resp = this.scoreRespiratory(spo2);
     const arr = this.scoreArrhythmia(arrhythmiaScore);
     const htn = this.scoreHypertension(sys, dia);
@@ -72,12 +73,12 @@ export class HealthRiskAnalyzer {
 
   private scoreCardiovascular(
     hr: number, sys: number, dia: number,
-    profile?: Partial<RiskWeights>,
+    profile?: Partial<RiskWeights>, _age?: number,
   ): number {
     let score = 0;
-    score += Math.min(1, Math.abs(hr - this.REFERENCE_HR) / 120) * 0.3;
-    score += Math.min(1, Math.abs(sys - this.REFERENCE_BP_SYS) / 160) * 0.3;
-    score += Math.min(1, Math.abs(dia - this.REFERENCE_BP_DIA) / 80) * 0.2;
+    score += Math.min(1, Math.abs(hr - 72) / 120) * 0.3;
+    score += Math.min(1, Math.abs(sys - 120) / 160) * 0.3;
+    score += Math.min(1, Math.abs(dia - 80) / 80) * 0.2;
     if (profile?.age) score += Math.min(1, (profile.age - 40) / 60) * 0.1;
     if (profile?.smoking) score += 0.1;
     if (profile?.diabetes) score += 0.1;
@@ -98,13 +99,13 @@ export class HealthRiskAnalyzer {
   }
 
   private scoreHypertension(sys: number, dia: number): number {
-    const sysScore = Math.min(1, Math.max(0, (sys - this.REFERENCE_BP_SYS) / 160));
-    const diaScore = Math.min(1, Math.max(0, (dia - this.REFERENCE_BP_DIA) / 80));
+    const sysScore = Math.min(1, Math.max(0, (sys - 120) / 160));
+    const diaScore = Math.min(1, Math.max(0, (dia - 80) / 80));
     return sysScore * 0.6 + diaScore * 0.4;
   }
 
   private scoreHypoxia(spo2: number, hr: number): number {
-    const spo2Risk = Math.min(1, Math.max(0, (this.REFERENCE_SPO2 - spo2) / 15));
+    const spo2Risk = Math.min(1, Math.max(0, (98 - spo2) / 15));
     const hrRisk = hr > 100 ? Math.min(1, (hr - 100) / 80) : 0;
     return spo2Risk * 0.7 + hrRisk * 0.3;
   }

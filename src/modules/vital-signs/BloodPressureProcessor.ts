@@ -2,7 +2,6 @@ import { PPGFeatureExtractor, CycleFeatures } from './PPGFeatureExtractor';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { isPhysiologicalRR } from '../../utils/physio';
 import { median } from '../../utils/stats';
-import { resampleCubicUniform } from '../signal-processing/shared/dsp';
 import type { FingerPlacementMode } from '../../types/signal';
 import {
   estimatePhysiologicalBp,
@@ -24,8 +23,6 @@ export interface BPEstimate {
 
 const BUFFER_MAX = 24;
 const EMIT_EVERY_N_FRAMES = 6;
-/** Frecuencia morfológica objetivo para PWA (pyPPG 2024): resuelve fiduciales finos. */
-const MORPH_TARGET_FS = 250;
 const STALE_FRAMES_MAX = 30;
 const EMA_ALPHA = 0.20;
 const VARIANCE_WINDOW = 5;
@@ -80,22 +77,12 @@ export class BloodPressureProcessor {
       return this.staleOrInsufficient(insufficient);
     }
 
-    // Upsample por spline cúbico a frecuencia morfológica (pyPPG 2024): a la fs
-    // efectiva de vitales (~10 Hz) un ciclo son ~8 muestras y la muesca dícrota /
-    // SUT / PW50 caen entre muestras. Interpolar a MORPH_TARGET_FS resuelve los
-    // fiduciales sin inventar señal (preserva curvatura para la 2ª derivada/APG).
-    const inFs = sampleRate > 0 ? sampleRate : 30;
-    const morphFs = inFs < MORPH_TARGET_FS ? MORPH_TARGET_FS : inFs;
-    const morphBuffer = inFs < MORPH_TARGET_FS
-      ? resampleCubicUniform(signalBuffer, inFs, MORPH_TARGET_FS)
-      : signalBuffer;
-
-    const cycles = PPGFeatureExtractor.detectCardiacCycles(morphBuffer, morphFs);
+    const cycles = PPGFeatureExtractor.detectCardiacCycles(signalBuffer, sampleRate);
     if (cycles.length < this.MIN_CYCLES) return this.staleOrInsufficient(insufficient);
 
     const validCycles: CycleFeatures[] = [];
     for (const cycle of cycles) {
-      const features = PPGFeatureExtractor.extractCycleFeatures(morphBuffer, cycle, morphFs);
+      const features = PPGFeatureExtractor.extractCycleFeatures(signalBuffer, cycle, sampleRate);
       if (features && features.quality > this.minCycleQuality()) {
         validCycles.push(features);
       }

@@ -1,5 +1,4 @@
 import React, { useEffect, useRef } from 'react';
-import { isPhysiologicalRR, RR_MIN_MS, RR_MAX_MS } from '@/utils/physio';
 
 interface PoincarePlotProps {
   rrIntervals: number[];
@@ -33,10 +32,8 @@ export const PoincarePlot: React.FC<PoincarePlotProps> = ({
     ctx.fillStyle = '#020617'; // bg-slate-950
     ctx.fillRect(0, 0, width, height);
 
-    // Filtrar intervalos RR fisiológicos — misma fuente que el resto del pipeline
-    // (VITAL_THRESHOLDS vía isPhysiologicalRR). Evita descartar pausas reales de
-    // ectopia (>1,5 s) que sí acepta el detector de arritmias.
-    const validRR = rrIntervals.filter(isPhysiologicalRR);
+    // Filtrar intervalos RR fisiológicos (ej. 300ms a 1500ms)
+    const validRR = rrIntervals.filter((rr) => rr >= 300 && rr <= 1500);
 
     if (validRR.length < 2) {
       // Dibujar estado de datos insuficientes
@@ -63,8 +60,8 @@ export const PoincarePlot: React.FC<PoincarePlotProps> = ({
 
     // Establecer límites de escala con margen
     const padding = 100; // ms
-    const minScale = Math.max(RR_MIN_MS, minVal - padding);
-    const maxScale = Math.min(RR_MAX_MS, maxVal + padding);
+    const minScale = Math.max(300, minVal - padding);
+    const maxScale = Math.min(1500, maxVal + padding);
     const range = maxScale - minScale;
 
     // Funciones de mapeo de ms a píxeles

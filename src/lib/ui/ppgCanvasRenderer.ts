@@ -7,7 +7,6 @@ import {
   levelColor,
 } from './ppgMonitorClinical';
 import { drawWaveRibbon3D } from './ppg3dProjection';
-import { isLocalMax, isLocalMin, isDicroticNotch, DIC_QUALITY_MIN } from './waveFiducials';
 
 export const FONT_MONO = '"SF Mono", Consolas, "Roboto Mono", monospace';
 
@@ -1078,13 +1077,16 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // ─── FIDUCIAL MARKERS: INSTRUMENTATION GRADE (Annotated) ───────────
   if (state.traceRevealed) {
     ctx.font = `bold 8px ${FONT_MONO}`;
-    const vals = coords.map((c) => c.val);
     for (let i = 2; i < coords.length - 2; i++) {
-      const v = vals[i];
+      const v = coords[i].val;
       const isArr = coords[i].isArr;
+      const prev2 = coords[i - 2].val;
+      const prev = coords[i - 1].val;
+      const next = coords[i + 1].val;
+      const next2 = coords[i + 2].val;
 
       // Systolic Peak (Max Local)
-      if (isLocalMax(i, vals, midValue)) {
+      if (v > prev && v > next && v > prev2 && v > next2 && v > midValue) {
         ctx.beginPath();
         ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.SYS_PEAK_RADIUS, 0, Math.PI * 2);
         ctx.fillStyle = isArr ? COLORS.PEAK_ARR : '#ffffff';
@@ -1115,7 +1117,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       }
 
       // Diastolic Valley (Min Local)
-      if (isLocalMin(i, vals, midValue)) {
+      if (v < prev && v < next && v < prev2 && v < next2 && v < midValue) {
         ctx.beginPath();
         ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.DIA_VALLEY_RADIUS, 0, Math.PI * 2);
         ctx.strokeStyle = '#94a3b8';
@@ -1132,13 +1134,15 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       }
 
       // Dicrotic Notch Detection
-      if (isDicroticNotch(i, vals, midValue)) {
+      const d1_curr = v - prev;
+      const d1_next = next - v;
+      if (d1_curr < 0 && d1_next > d1_curr && d1_next < 0 && v > midValue) {
          ctx.beginPath();
          ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.DIC_NOTCH_RADIUS, 0, Math.PI * 2);
          ctx.fillStyle = 'rgba(103, 232, 249, 0.6)';
          ctx.fill();
 
-         if (state.props.quality >= DIC_QUALITY_MIN) {
+         if (state.props.quality > 70) {
            ctx.font = `7px ${FONT_MONO}`;
            ctx.fillStyle = 'rgba(103, 232, 249, 0.8)';
            ctx.fillText('DIC', coords[i].x, coords[i].y - 8);

@@ -58,6 +58,7 @@ export const useVitalSignsProcessor = () => {
     splitterChannels?: {
       morphologyFiltered?: number;
       respirationFiltered?: number;
+      arrhythmiaFiltered?: number;
       spo2Channels?: {
         acRed: number;
         dcRed: number;

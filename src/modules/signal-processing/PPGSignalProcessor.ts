@@ -95,6 +95,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private bandpassFilter: BandpassFilter;
   private morphBandpassFilter: BandpassFilter;
   private readonly signalSplitter = new PPGSignalSplitter(30);
+  /** BPM estimado para el notch adaptativo del canal 5 (arritmias) */
+  private lastKnownBpm = 0;
   private placementMode: FingerPlacementMode = 'hybrid';
   private placementStreak = { mode: 'hybrid' as FingerPlacementMode, count: 0 };
   private readonly pulseAgcState = createPulseAgcState();
@@ -536,6 +538,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       roi.rawRed,
       roi.rawGreen,
       roi.rawBlue,
+      this.lastKnownBpm,
     );
 
     const endSqi = ppgPerf.start('sqi');
@@ -681,6 +684,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       // Canales del banco de filtros especializado por signo vital
       morphologyFiltered: signalPathActive ? splitOut.morphology : 0,
       respirationFiltered: signalPathActive ? splitOut.respiration : 0,
+      arrhythmiaFiltered: signalPathActive ? splitOut.arrhythmia : 0,
       spo2Channels: signalPathActive ? splitOut.spo2 : undefined,
       placementMode: this.placementMode,
       quality: displayQuality,
@@ -1681,6 +1685,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.bandpassFilter.reset();
     this.morphBandpassFilter.reset();
     this.signalSplitter.reset();
+    this.lastKnownBpm = 0;
     resetPulseAgc(this.pulseAgcState);
     this.roiRedPulseRing.reset();
     this.lastRoiRedCv = 0;
