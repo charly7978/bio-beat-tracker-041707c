@@ -179,7 +179,7 @@ export const CARDIAC_WAVE_CONFIG = {
    * - Si se sube: Desplaza la onda hacia abajo, comprimiendo el área útil de dibujo.
    * - Si se baja: Permite que la onda se desplace más arriba en pantalla.
    */
-  WAVE_PAD_TOP: 20,
+  WAVE_PAD_TOP: 14,
 
   /**
    * Margen inferior de la onda en el gráfico.
@@ -187,7 +187,7 @@ export const CARDIAC_WAVE_CONFIG = {
    * - Si se sube: Comprime la onda hacia arriba, alejándola del tacograma.
    * - Si se baja: Permite que los valles de la onda bajen más cerca de la sección del tacograma.
    */
-  WAVE_PAD_BOTTOM: 44,
+  WAVE_PAD_BOTTOM: 41,
 
   // === Tiempos de Reacción y Velocidades Dinámicas ===
   /**
