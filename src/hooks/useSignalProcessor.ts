@@ -114,21 +114,24 @@ export const useSignalProcessor = () => {
         if (type === 'initialized') {
           initializationState.current = 'READY';
         } else if (type === 'signalReady') {
-          try {
-            if (initializationState.current !== 'READY') return;
-            const { signal, rgbStats, backpressureState } = data;
+          if (initializationState.current !== 'READY') return;
+          const { signal, rgbStats, backpressureState } = data;
 
-            // Actualizar las caches de telemetría
+          // Actualizar las caches de telemetría.
           if (rgbStats) rgbStatsRef.current = rgbStats;
           if (backpressureState) {
             backpressureStateRef.current = backpressureState;
-            setCurrentStride((prev) => (prev !== backpressureState.pixelStride ? backpressureState.pixelStride : prev));
+            setCurrentStride((prev) =>
+              prev !== backpressureState.pixelStride ? backpressureState.pixelStride : prev
+            );
           }
 
           // 1) Hot path: callback síncrono (DSP, ringbuffers, refs en Index).
           const cb = realtimeCbRef.current;
           if (cb) {
-            try { cb(signal); } catch {
+            try {
+              cb(signal);
+            } catch {
               log.warn('Realtime callback threw — signal may be stale');
             }
           }
@@ -145,13 +148,13 @@ export const useSignalProcessor = () => {
             };
             lastUiPushRef.current = nowMs;
             setLastSignal(signal);
-            } else if (nowMs - lastUiPushRef.current >= UI_SNAPSHOT_INTERVAL_MS) {
-              lastUiPushRef.current = nowMs;
-              setLastSignal(signal);
-            }
-          } finally {
-            releaseFrameAndFlushLatest();
+          } else if (nowMs - lastUiPushRef.current >= UI_SNAPSHOT_INTERVAL_MS) {
+            lastUiPushRef.current = nowMs;
+            setLastSignal(signal);
           }
+        } else if (type === 'frameProcessed') {
+          // ACK separado del payload: libera exactamente una imagen por captura.
+          releaseFrameAndFlushLatest();
         } else if (type === 'backpressureConfigChanged') {
           if (data) {
             backpressureStateRef.current.config = data;
@@ -159,7 +162,6 @@ export const useSignalProcessor = () => {
         } else if (type === 'error') {
           const err = data as ProcessingError;
           console.error(`PPGSignalProcessor Web Worker error: ${err.code} ${err.message}`);
-          releaseFrameAndFlushLatest();
         } else if (type === 'stopped') {
           pendingFrameRef.current = null;
           frameInFlightRef.current = false;
