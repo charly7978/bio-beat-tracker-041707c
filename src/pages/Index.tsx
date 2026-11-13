@@ -393,7 +393,7 @@ const Index = () => {
             {/* Instrucción de uso rápida */}
             <div className="bg-zinc-950/80 border border-zinc-900 rounded-xl p-3.5 text-zinc-400 text-xs leading-relaxed max-w-xs">
               <p>
-                Coloca la yema de tu dedo índice cubriendo suavemente la <span className="text-white font-medium">cámara trasera y el flash</span> para iniciar la lectura.
+                Apoya el teléfono y la mano en una superficie cómoda. Cubre suavemente la <span className="text-white font-medium">cámara trasera y el flash</span> con la yema, sin apretar. Cuando aparezca señal, conserva ese apoyo: no necesitas hacer coincidir el dedo con una diana.
               </p>
             </div>
 
@@ -542,3 +542,4 @@ const Index = () => {
 };
 
 export default Index;
+

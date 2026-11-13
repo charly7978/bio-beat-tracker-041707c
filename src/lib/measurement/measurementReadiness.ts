@@ -33,6 +33,23 @@ export interface MeasurementReadiness {
   pipelineLive: boolean;
 }
 
+export interface MorphologyFrameInput {
+  vitalsDspReady: boolean;
+  hasUsableContact: boolean;
+  contactState: ContactState;
+  motionArtifact: boolean;
+  value: number | undefined;
+  timestampMs: number | undefined;
+}
+
+/** Una onda válida cruza cero; eso no significa que se haya perdido el dedo. */
+export function canCollectMorphologyFrame(input: MorphologyFrameInput): input is MorphologyFrameInput & { value: number; timestampMs: number } {
+  return input.vitalsDspReady && input.hasUsableContact &&
+    input.contactState === 'STABLE_CONTACT' && !input.motionArtifact &&
+    typeof input.value === 'number' && Number.isFinite(input.value) &&
+    typeof input.timestampMs === 'number' && Number.isFinite(input.timestampMs) && input.timestampMs > 0;
+}
+
 export function evaluateMeasurementReadiness(
   input: MeasurementReadinessInput,
 ): MeasurementReadiness {
@@ -88,3 +105,4 @@ export function evaluateMeasurementReadiness(
     pipelineLive,
   };
 }
+

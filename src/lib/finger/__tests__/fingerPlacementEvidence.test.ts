@@ -183,14 +183,16 @@ describe('fingerPlacementEvidence — evidencia física de colocación', () => {
     expect(fixed.failing).toHaveLength(0);
   });
 
-  it('traslado lateral: avisa de centrado sin perder el veredicto de presión', () => {
+  it('contacto lateral con pulso útil no obliga a perseguir el centro', () => {
     const evidence = feed(45, {
       centroidX: 0.05,
       centroidY: 0.05,
     });
 
     expect(evidence.placement).not.toBe('CENTERED');
-    expect(evidence.failing.join(' ')).toMatch(/centra la yema/i);
+    expect(evidence.failing.join(' ')).not.toMatch(/centra la yema/i);
+    expect(evidence.readiness).toBe('READY');
+    expect(evidence.guidance.action).toBe('HOLD');
   });
 
   it('sellar con el flash saturando ya no se lee como presión baja', () => {
@@ -242,6 +244,35 @@ describe('fingerPlacementEvidence — veredicto READY de la ventana', () => {
     resetPlacementEvidence();
   });
 
+  it.each([[0.08, 0.15], [0.25, 0.7], [0.8, 0.5], [0.92, 0.85]])(
+    'acepta una zona útil fuera del centro (%s, %s) con contacto y pulso suficientes', (centroidX, centroidY) => {
+      const evidence = feed(45, { centroidX, centroidY });
+      expect(evidence.readiness).toBe('READY');
+      expect(evidence.guidance.action).toBe('HOLD');
+      expect(evidence.failing).toHaveLength(0);
+    },
+  );
+
+  it('pequeñas variaciones de posición no provocan órdenes de recentrado', () => {
+    feed(45, { centroidX: 0.8 });
+    for (let i = 0; i < 90; i++) {
+      const evidence = computePlacementEvidence({
+        ...GOOD,
+        centroidX: 0.8 + 0.035 * Math.sin(i / 6),
+        centroidY: 0.5 + 0.025 * Math.cos(i / 6),
+        motionScore: 0.08,
+      });
+      expect(evidence.readiness).toBe('READY');
+      expect(evidence.guidance.action).toBe('HOLD');
+    }
+  });
+
+  it('fuera de centro con pulso insuficiente no obtiene READY', () => {
+    const evidence = feed(45, { centroidX: 0.9, perfusionIndex: 0.0004, roiRedCv: 0.01 });
+    expect(evidence.readiness).not.toBe('READY');
+    expect(evidence.guidance.action).not.toBe('HOLD');
+  });
+
   it('dedo sellado, centrado, con pulso y quieto → READY', () => {
     const evidence = feed(45);
     expect(evidence.readiness).toBe('READY');
@@ -269,7 +300,7 @@ describe('fingerPlacementEvidence — veredicto READY de la ventana', () => {
     expect(evidence.offset.x).toBeLessThan(-0.2);
     expect(evidence.offset.y).toBeCloseTo(0, 2);
     expect(evidence.alignment).toBeLessThan(0.7);
-    expect(evidence.readiness).toBe('ALIGNING');
+    expect(evidence.readiness).toBe('READY');
   });
 
   it('presión no óptima impide READY', () => {
