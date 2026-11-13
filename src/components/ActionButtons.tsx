@@ -1,3 +1,6 @@
+import React from 'react';
+import { Play, Square, RotateCcw } from 'lucide-react';
+
 interface ActionButtonsProps {
   isMonitoring: boolean;
   onStartMeasurement: () => void;
@@ -6,28 +9,42 @@ interface ActionButtonsProps {
 
 export function ActionButtons({ isMonitoring, onStartMeasurement, onReset }: ActionButtonsProps) {
   return (
-    <div 
-      className="fixed bottom-0 left-0 right-0 grid grid-cols-2 z-10 bg-zinc-950/95 backdrop-blur-sm border-t border-zinc-900/50"
+    <div
+      className="fixed bottom-0 left-0 right-0 grid grid-cols-2 z-10 bg-black/80 backdrop-blur-lg border-t border-white/5"
       style={{
-        height: 'calc(48px + env(safe-area-inset-bottom, 0px))',
-        paddingBottom: 'env(safe-area-inset-bottom, 0px)'
+        height: 'calc(52px + env(safe-area-inset-bottom, 0px))',
+        paddingBottom: 'env(safe-area-inset-bottom, 0px)',
       }}
     >
       <button
+        type="button"
         onClick={onStartMeasurement}
-        className={`font-semibold text-sm transition-colors ${
+        className={`group flex items-center justify-center gap-2 font-bold text-xs tracking-widest uppercase transition-all duration-200 border-r border-white/5 active:scale-[0.98] ${
           isMonitoring
-            ? 'bg-red-500/20 hover:bg-red-500/30 active:bg-red-500/40 text-red-300 border-r border-zinc-900/40'
-            : 'bg-emerald-600/20 hover:bg-emerald-600/30 active:bg-emerald-600/40 text-emerald-300 border-r border-zinc-900/40'
+            ? 'bg-red-500/15 hover:bg-red-500/25 text-red-400'
+            : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400'
         }`}
       >
-        {isMonitoring ? 'DETENER' : 'INICIAR'}
+        {isMonitoring ? (
+          <>
+            <Square className="w-3.5 h-3.5 fill-current animate-pulse text-red-400" />
+            <span>DETENER</span>
+          </>
+        ) : (
+          <>
+            <Play className="w-3.5 h-3.5 fill-current text-emerald-400" />
+            <span>INICIAR</span>
+          </>
+        )}
       </button>
+
       <button
+        type="button"
         onClick={onReset}
-        className="bg-slate-700/20 hover:bg-slate-700/30 active:bg-slate-700/40 text-slate-300 font-semibold text-sm transition-colors"
+        className="flex items-center justify-center gap-2 font-semibold text-xs tracking-wider uppercase text-zinc-400 hover:text-white bg-white/[0.02] hover:bg-white/[0.06] active:scale-[0.98] transition-all duration-200"
       >
-        RESET
+        <RotateCcw className="w-3.5 h-3.5 text-zinc-400 group-hover:text-white" />
+        <span>REINICIAR</span>
       </button>
     </div>
   );

@@ -1,10 +1,4 @@
-/**
- * Ppg3DToggle — Conmuta la capa de profundidad 3D del monitor cardíaco.
- *
- * 3D = grilla en perspectiva (profundidad) + onda como cinta extruida.
- * 2D = monitor clásico. La detección y la onda honesta son idénticas en ambos modos;
- * sólo cambia la presentación (ver `src/lib/ui/ppg3dProjection.ts`).
- */
+import React from 'react';
 import { Box } from 'lucide-react';
 import { usePpg3dSettings } from '@/store/ppg3dSettings';
 
@@ -17,18 +11,18 @@ export function Ppg3DToggle() {
       type="button"
       onClick={toggle}
       aria-pressed={enabled}
-      title={enabled ? 'Vista 3D activa · toca para 2D' : 'Vista 2D · toca para 3D'}
-      className={`absolute right-2 z-20 flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-bold transition-colors ${
+      title={enabled ? 'Modo 3D activo · Toca para alternar a 2D' : 'Modo 2D activo · Toca para alternar a 3D'}
+      className={`absolute right-3 z-20 flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold tracking-wider backdrop-blur-md border transition-all shadow-md active:scale-95 ${
         enabled
-          ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-300'
-          : 'border-slate-600/50 bg-slate-800/70 text-slate-300'
+          ? 'border-cyan-500/50 bg-cyan-950/60 text-cyan-300 shadow-cyan-950/30'
+          : 'border-white/10 bg-black/60 text-zinc-400 hover:text-white'
       }`}
       style={{
-        bottom: 'calc(56px + env(safe-area-inset-bottom, 0px))'
+        bottom: 'calc(60px + env(safe-area-inset-bottom, 0px))',
       }}
     >
-      <Box className="h-3 w-3" />
-      {enabled ? '3D' : '2D'}
+      <Box className="h-3.5 w-3.5" />
+      <span>{enabled ? '3D' : '2D'}</span>
     </button>
   );
 }
