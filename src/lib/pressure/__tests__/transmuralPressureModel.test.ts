@@ -8,15 +8,18 @@ import {
 } from '../transmuralPressureModel';
 
 interface FrameOptions {
-  coverage?: number;
+  sealRatio?: number;
+  perfusedFraction?: number;
   perfusionIndex?: number;
   dcLevel?: number;
   roiRedCv?: number;
   motionScore?: number;
 }
 
+/** Estado de referencia: lente sellada, pulso pleno, dedo quieto. */
 const HEALTHY: Required<FrameOptions> = {
-  coverage: 0.9,
+  sealRatio: 0.62,
+  perfusedFraction: 0.7,
   perfusionIndex: 0.004,
   dcLevel: 150,
   roiRedCv: 0.05,
@@ -32,7 +35,8 @@ function feed(
   let reading: TransmuralReading | null = null;
   for (let i = 0; i < frames; i++) {
     reading = observeTransmuralPressure(state, {
-      coverageRatio: frame.coverage,
+      sealRatio: frame.sealRatio,
+      perfusedFraction: frame.perfusedFraction,
       motionScore: frame.motionScore,
       perfusionIndex: frame.perfusionIndex,
       dcLevel: frame.dcLevel,
@@ -58,7 +62,8 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
 
     resetTransmuralState(state);
     const light = feed(state, 40, {
-      coverage: 0.3,
+      sealRatio: 0.16,
+      perfusedFraction: 0.2,
       perfusionIndex: 0.0008,
       dcLevel: 60,
       roiRedCv: 0.02,
@@ -69,9 +74,10 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
     resetTransmuralState(state);
     feed(state, 45);
     const heavy = feed(state, 20, {
-      coverage: 0.92,
+      sealRatio: 0.9,
+      perfusedFraction: 0.7,
       perfusionIndex: 0.0005,
-      dcLevel: 210,
+      dcLevel: 215,
       roiRedCv: 0.006,
     });
     expect(heavy.state).toBe('HEAVY');
@@ -80,12 +86,13 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
     expect(ideal.fraction).toBeLessThan(heavy.fraction);
   });
 
-  it('detecta isquemia por presión (blanching) con DC alto y AC colapsada', () => {
+  it('detecta isquemia por presión (blanqueo) con sellado alto, DC alto y AC colapsada', () => {
     feed(state, 45);
     const reading = feed(state, 20, {
-      coverage: 0.92,
+      sealRatio: 0.9,
+      perfusedFraction: 0.7,
       perfusionIndex: 0.0005,
-      dcLevel: 210,
+      dcLevel: 215,
       roiRedCv: 0.006,
     });
 
@@ -94,12 +101,14 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
     expect(reading.perfusionRatio).toBeLessThan(0.2);
     expect(reading.forceProxy).toBeGreaterThan(0.5);
     expect(reading.reason).toBe('OVER');
+    expect(reading.guidance.action).toBe('RELEASE');
   });
 
   it('no confunde baja perfusión con presión excesiva: DC bajo → LIGHT', () => {
     feed(state, 45);
     const reading = feed(state, 25, {
-      coverage: 0.9,
+      sealRatio: 0.62,
+      perfusedFraction: 0.6,
       perfusionIndex: 0.001,
       dcLevel: 110,
       roiRedCv: 0.05,
@@ -108,52 +117,118 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
     expect(reading.state).toBe('LIGHT');
     expect(reading.blanching).toBeLessThan(0.5);
     expect(reading.reason).toBe('UNDER');
+    expect(reading.guidance.action).toBe('PRESS_MORE');
   });
 
-  it('no afirma presión sin un PI de referencia (NONE, no inventa)', () => {
-    const reading = feed(state, 50, {
-      coverage: 0.9,
-      perfusionIndex: 0.0005,
-      dcLevel: 200,
-      roiRedCv: 0.004,
+  it('ya no depende de la máscara AC/DC: un dedo saturado que cubre la lente lee sellado alto', () => {
+    // El bug real: con el flash encendido el rojo satura y la máscara
+    // fisiológica colapsa, así que "cobertura" parecía baja con el dedo
+    // perfectamente apoyado. Ahora el sellado es por tejido e independiente.
+    const reading = feed(state, 40, {
+      sealRatio: 0.75,
+      perfusedFraction: 0.5,
+      perfusionIndex: 0.0035,
+      dcLevel: 240,
+      roiRedCv: 0.045,
+      motionScore: 0.05,
+    });
+
+    expect(reading.seal).toBeGreaterThan(0.6);
+    expect(reading.state).not.toBe('LIGHT');
+    expect(reading.guidance.action).not.toBe('PRESS_MORE');
+  });
+
+  it('sellado bajo manda LIGHT aunque el pulso sea fuerte (dedo apoyado fuera de la lente)', () => {
+    const reading = feed(state, 40, {
+      sealRatio: 0.14,
+      perfusedFraction: 0.1,
+      perfusionIndex: 0.004,
+      dcLevel: 120,
+      roiRedCv: 0.05,
+    });
+
+    expect(reading.state).toBe('LIGHT');
+    expect(reading.axis).toBe('UNDER');
+    expect(reading.guidance.action).toBe('PRESS_MORE');
+    expect(reading.guidance.headline).toMatch(/PRESIONA/i);
+  });
+
+  it('sin contacto no afirma presión: NONE y guía de reposicionar', () => {
+    const reading = feed(state, 30, {
+      sealRatio: 0.03,
+      perfusedFraction: 0,
+      perfusionIndex: 0,
+      dcLevel: 0,
+      roiRedCv: 0,
     });
 
     expect(reading.state).toBe('NONE');
     expect(reading.hasReference).toBe(false);
-    expect(reading.reason).toBe('NO_REFERENCE');
+    expect(reading.reason).toBe('NO_CONTACT');
     expect(reading.fraction).toBe(0.5);
+    expect(reading.guidance.action).toBe('REPOSITION');
   });
 
-  it('marca cobertura insuficiente como acoplamiento pobre (LIGHT)', () => {
-    const reading = feed(state, 40, {
-      coverage: 0.3,
-      perfusionIndex: 0.0008,
-      dcLevel: 60,
-      roiRedCv: 0.02,
+  it('el DC de referencia se ancla al sellar, no al mínimo del episodio', () => {
+    // Pre-contacto oscuro (DC 8) seguido de sellado a DC 150: la fuerza debe
+    // medirse contra 150, no contra 8. Con el mínimo global, cualquier dedo
+    // parecía "presión alta" apenas apoyado.
+    feed(state, 10, {
+      sealRatio: 0.02,
+      perfusedFraction: 0,
+      perfusionIndex: 0,
+      dcLevel: 8,
+      roiRedCv: 0.002,
+    });
+    const sealed = feed(state, 40, {
+      sealRatio: 0.62,
+      perfusedFraction: 0.7,
+      perfusionIndex: 0.004,
+      dcLevel: 150,
+      roiRedCv: 0.05,
     });
 
-    expect(reading.state).toBe('LIGHT');
-    expect(reading.coupling).toBeLessThan(0.6);
-    expect(reading.reason).toBe('UNDER');
+    expect(sealed.state).toBe('IDEAL');
+    expect(sealed.forceProxy).toBeLessThan(0.4);
+    expect(sealed.guidance.action).toBe('HOLD');
+  });
+
+  it('exige sellado suficiente para atribuir blanqueo (dedo frío no es isquemia)', () => {
+    // Sellado parcial + AC baja + perfusión de tejido casi nula: no es colapso
+    // por presión, es un dedo mal apoyado o frío. No debe declarar HEAVY.
+    const reading = feed(state, 40, {
+      sealRatio: 0.2,
+      perfusedFraction: 0.05,
+      perfusionIndex: 0.0006,
+      dcLevel: 190,
+      roiRedCv: 0.004,
+    });
+
+    expect(reading.blanching).toBeLessThan(0.55);
+    expect(reading.state).not.toBe('HEAVY');
+    expect(reading.guidance.action).not.toBe('RELEASE');
   });
 
   it('exige histéresis para entrar y salir de HEAVY', () => {
     feed(state, 45);
-    const almost = feed(state, 5, {
-      coverage: 0.92,
+    const almost = feed(state, 4, {
+      sealRatio: 0.9,
+      perfusedFraction: 0.7,
       perfusionIndex: 0.0005,
-      dcLevel: 210,
+      dcLevel: 215,
       roiRedCv: 0.006,
     });
     expect(almost.state).toBe('IDEAL');
 
     const confirmed = feed(state, 6, {
-      coverage: 0.92,
+      sealRatio: 0.9,
+      perfusedFraction: 0.7,
       perfusionIndex: 0.0005,
-      dcLevel: 210,
+      dcLevel: 215,
       roiRedCv: 0.006,
     });
     expect(confirmed.state).toBe('HEAVY');
+    expect(confirmed.guidance.action).toBe('RELEASE');
 
     const stillHeavy = feed(state, 11, HEALTHY);
     expect(stillHeavy.state).toBe('HEAVY');
@@ -161,6 +236,7 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
     const recovered = feed(state, 25, HEALTHY);
     expect(recovered.state).toBe('IDEAL');
     expect(recovered.reason).toBe('OPTIMAL');
+    expect(recovered.guidance.action).toBe('HOLD');
   });
 
   it('el grado crece de forma monótona al aumentar el DC (eje de fuerza)', () => {
@@ -168,11 +244,15 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
     const fractions: number[] = [];
     const steps = [
       { dcLevel: 170, perfusionIndex: 0.003, roiRedCv: 0.04 },
-      { dcLevel: 190, perfusionIndex: 0.0015, roiRedCv: 0.02 },
-      { dcLevel: 210, perfusionIndex: 0.0006, roiRedCv: 0.008 },
+      { dcLevel: 195, perfusionIndex: 0.0015, roiRedCv: 0.02 },
+      { dcLevel: 220, perfusionIndex: 0.0006, roiRedCv: 0.008 },
     ];
     for (const step of steps) {
-      const reading = feed(state, 14, step);
+      const reading = feed(state, 14, {
+        ...step,
+        sealRatio: 0.7,
+        perfusedFraction: 0.6,
+      });
       fractions.push(reading.fraction);
     }
     for (let i = 1; i < fractions.length; i++) {
@@ -181,10 +261,11 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
     expect(fractions[fractions.length - 1]).toBeGreaterThan(fractions[0]);
   });
 
-  it('sin baseline de DC no amplifica ruido ni declara colapso', () => {
+  it('sin línea base de DC no amplifica ruido ni declara colapso', () => {
     feed(state, 45);
     const reading = feed(state, 20, {
-      coverage: 0.9,
+      sealRatio: 0.9,
+      perfusedFraction: 0.7,
       perfusionIndex: 0.0005,
       dcLevel: 2,
       roiRedCv: 0.001,
@@ -194,53 +275,13 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
     expect(reading.state).not.toBe('HEAVY');
   });
 
-  it('con dcMin=0 el proxy de fuerza no amplifica el ruido del sensor', () => {
-    feed(state, 20, {
-      coverage: 0.9,
-      perfusionIndex: 0,
-      dcLevel: 0,
-      roiRedCv: 0,
-    });
-    const reading = feed(state, 5, {
-      coverage: 0.9,
-      perfusionIndex: 0,
-      dcLevel: 1,
-      roiRedCv: 0,
-    });
-
-    expect(reading.forceProxy).toBe(0);
-    expect(reading.dcTrend).toBe(0);
-    expect(Number.isFinite(reading.fraction)).toBe(true);
-  });
-
-  it('HEAVY con movimiento conserva el eje OVER y el grado confirmado', () => {
-    feed(state, 45);
-    feed(state, 20, {
-      coverage: 0.92,
-      perfusionIndex: 0.0005,
-      dcLevel: 210,
-      roiRedCv: 0.006,
-    });
-    const moving = feed(state, 6, {
-      coverage: 0.92,
-      perfusionIndex: 0.0005,
-      dcLevel: 210,
-      roiRedCv: 0.006,
-      motionScore: 0.9,
-    });
-
-    expect(moving.state).toBe('HEAVY');
-    expect(moving.axis).toBe('OVER');
-    expect(moving.reason).toBe('MOTION');
-    expect(moving.fraction).toBeGreaterThan(0.7);
-  });
-
   it('el movimiento congela el grado en lugar de inventar un cambio', () => {
     const baseline = feed(state, 45);
     const moving = feed(state, 6, {
-      coverage: 0.92,
+      sealRatio: 0.9,
+      perfusedFraction: 0.7,
       perfusionIndex: 0.0005,
-      dcLevel: 210,
+      dcLevel: 215,
       roiRedCv: 0.006,
       motionScore: 0.9,
     });
@@ -248,14 +289,77 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
     expect(moving.reason).toBe('MOTION');
     expect(moving.state).toBe('IDEAL');
     expect(moving.fraction).toBeCloseTo(baseline.fraction, 5);
+    expect(moving.guidance.action).toBe('WAIT');
   });
 
-  it('resetTransmuralState limpia el episodio (pico, baseline y grado)', () => {
+  it('cada veredicto produce una acción distinta y coherente', () => {
+    const actions = new Set<string>();
+    actions.add(feed(state, 40).guidance.action);
+
+    resetTransmuralState(state);
+    actions.add(
+      feed(state, 40, {
+        sealRatio: 0.14,
+        perfusedFraction: 0.1,
+        perfusionIndex: 0.0008,
+        dcLevel: 60,
+        roiRedCv: 0.02,
+      }).guidance.action,
+    );
+
+    resetTransmuralState(state);
+    feed(state, 45);
+    actions.add(
+      feed(state, 20, {
+        sealRatio: 0.9,
+        perfusedFraction: 0.7,
+        perfusionIndex: 0.0005,
+        dcLevel: 215,
+        roiRedCv: 0.006,
+      }).guidance.action,
+    );
+
+    resetTransmuralState(state);
+    actions.add(
+      feed(state, 30, {
+        sealRatio: 0.03,
+        perfusedFraction: 0,
+        perfusionIndex: 0,
+        dcLevel: 0,
+        roiRedCv: 0,
+      }).guidance.action,
+    );
+
+    expect(actions).toEqual(new Set(['HOLD', 'PRESS_MORE', 'RELEASE', 'REPOSITION']));
+  });
+
+  it('la guía nunca contradice el veredicto', () => {
+    feed(state, 45);
+    const heavy = feed(state, 20, {
+      sealRatio: 0.9,
+      perfusedFraction: 0.7,
+      perfusionIndex: 0.0005,
+      dcLevel: 215,
+      roiRedCv: 0.006,
+    });
+    expect(heavy.state).toBe('HEAVY');
+    expect(heavy.guidance.action).toBe('RELEASE');
+    expect(heavy.guidance.progress).toBeLessThan(0.6);
+
+    resetTransmuralState(state);
+    const ideal = feed(state, 45);
+    expect(ideal.state).toBe('IDEAL');
+    expect(ideal.guidance.action).toBe('HOLD');
+    expect(ideal.guidance.progress).toBeGreaterThan(0.8);
+  });
+
+  it('resetTransmuralState limpia el episodio (pico, sellado y grado)', () => {
     feed(state, 45);
     resetTransmuralState(state);
 
     const reading = feed(state, 1, {
-      coverage: 0.9,
+      sealRatio: 0,
+      perfusedFraction: 0,
       perfusionIndex: 0,
       dcLevel: 0,
       roiRedCv: 0,
@@ -270,9 +374,10 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
   it('congela el aprendizaje del pico durante el movimiento', () => {
     feed(state, 45);
     const moving = feed(state, 20, {
-      coverage: 0.92,
+      sealRatio: 0.9,
+      perfusedFraction: 0.7,
       perfusionIndex: 0.0005,
-      dcLevel: 210,
+      dcLevel: 215,
       roiRedCv: 0.006,
       motionScore: 0.9,
     });

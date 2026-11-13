@@ -7,17 +7,32 @@
  *
  * ── Fisiología ──────────────────────────────────────────────────────────────
  * La presión transmural de un vaso es Pt = Pa − Pe (presión arterial interna
- * menos presión externa). La pulsación óptica es máxima cuando Pt ≈ 0, es decir
- * cuando la presión externa se acerca a la presión arterial media del lecho
- * superficial; si Pe supera la presión diastólica/arteriolar, los capilares se
- * colapsan (blanching) y la AC cae aunque el dedo siga apoyado.
+ * menos presión externa). La pulsación óptica es máxima cuando Pt ≈ 0; si Pe
+ * supera la presión diastólica/arteriolar, los capilares se colapsan
+ * (blanching) y la AC cae aunque el dedo siga apoyado.
  *
- * La cámara no mide fuerza ni mmHg. El modelo estima el LADO del óptimo en el
- * que está el dedo usando dos observables ya medidos por el pipeline:
- *  - DC rojo: crece de forma monótona con la fuerza de contacto.
- *  - PI (AC/DC): crece hasta un máximo y luego cae.
- * Ambas observaciones están publicadas y son el eje del modelo:
+ * ── Las DOS observaciones, y por qué están separadas ────────────────────────
+ * El error de diseño que hacía que el veredicto fuera arbitrario era medir una
+ * sola cosa con dos nombres. "Cobertura" se alimentaba de los píxeles que
+ * pasaban el filtro AC/DC, así que con el flash encendido y el rojo saturado el
+ * filtro colapsaba y el modelo veía "poco dedo" con el dedo bien apoyado. La
+ * física exige separar:
  *
+ *  1. SELLADO  (sealRatio)  → "¿la yema cubre la lente?"
+ *     Se mide por absorción cromática (el rojo domina al promedio verde/azul),
+ *     SIN exigir pulso ni exposición correcta. Es la variable de la FUERZA
+ *     aplicada en el rango de contacto útil.
+ *
+ *  2. PERFUSIÓN (perfusionIndex = AC/DC) → "¿hay flujo sanguíneo?"
+ *     Crece hasta un máximo y luego cae. Su colapso con sellado alto y DC alto
+ *     es la firma de la isquemia por presión.
+ *
+ * Con ambas, el lado del óptimo deja de ser una conjetura:
+ *   sellado bajo                        → LIGHT  (apoya más)
+ *   sellado alto + AC colapsada + DC ↑  → HEAVY  (suelta)
+ *   sellado alto + AC cerca del máximo  → IDEAL  (mantén)
+ *
+ * ── Anclas publicadas ───────────────────────────────────────────────────────
  *  1. Teng & Zhang, Physiol. Meas. 25(5):1323–1335 (2004) — 15 sujetos,
  *     0.2–1.8 N: DC ↑ monótono; AC y AC/DC ↑ hasta un máximo (0.2–1.0 N; la
  *     mayoría en 0.2–0.4 N) y después ↓. DOI 10.1088/0967-3334/25/5/020.
@@ -41,16 +56,21 @@
  * absoluta: es un índice relativo del estado del lecho capilar.
  *
  * `state` añade histéresis (entrar/salir de HEAVY exige evidencia sostenida)
- * y `reason` explica el veredicto para que la guía visual y el háptico sean
- * coherentes con la evidencia.
+ * y `guidance` entrega la instrucción exacta que la UI y el háptico deben
+ * mostrar, para que la guía no se reinvente en cada capa.
  */
 
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 
 const P = VITAL_THRESHOLDS.PRESSURE;
 
+/** El movimiento degrada pero no anula; por encima de esto la señal no vale. */
 const MOTION_BAD = 0.45;
 const MOTION_GOOD_MIN = 0.40;
+
+/** Fracción mínima de píxeles de tejido que deben estar perfundidos para que
+ *  el blanqueo sea atribuido a isquemia y no a un dedo frío o mal apoyado. */
+const PERFUSED_FLOOR = 0.22;
 
 export type TransmuralState = 'NONE' | 'LIGHT' | 'IDEAL' | 'HEAVY';
 export type TransmuralAxis = 'UNKNOWN' | 'UNDER' | 'OPTIMAL' | 'OVER';
@@ -58,23 +78,35 @@ export type TransmuralReason =
   | 'WARMUP'
   | 'NO_CONTACT'
   | 'MOTION'
-  | 'LOW_COUPLING'
   | 'NO_REFERENCE'
   | 'UNDER'
   | 'OPTIMAL'
   | 'OVER';
 
+/** Instrucción concreta para el usuario. La UI no inventa texto: lo recibe. */
+export type TransmuralAction =
+  | 'WAIT'
+  | 'PRESS_MORE'
+  | 'HOLD'
+  | 'RELEASE'
+  | 'REPOSITION';
+
 export interface TransmuralSample {
-  /** Cobertura del ROI por la yema [0..1]. */
-  coverageRatio: number;
+  /** Sellado óptico [0..1]: fracción del área explorada cubierta por tejido. */
+  sealRatio: number;
   /** Score de movimiento [0..1] (0 = quieto). */
   motionScore: number;
   /** PI crudo AC/DC medido por el pipeline. */
   perfusionIndex: number;
-  /** Nivel DC del rojo (misma escala 0–255 del sensor). */
+  /** Nivel DC del rojo de los píxeles de tejido (escala 0–255 del sensor). */
   dcLevel: number;
   /** CV temporal del rojo en el ROI. */
   roiRedCv: number;
+  /**
+   * Fracción de píxeles de tejido que además están perfundidos [0..1].
+   * Opcional: si no se informa, el blanqueo se evalúa solo con el sellado.
+   */
+  perfusedFraction?: number;
 }
 
 export interface TransmuralReading {
@@ -84,7 +116,7 @@ export interface TransmuralReading {
   axis: TransmuralAxis;
   /** Grado continuo [0..1]: 0.5 = óptimo. */
   fraction: number;
-  /** Confianza [0..1] de la estimación (cobertura + pulso + quietud). */
+  /** Confianza [0..1] de la estimación (sellado + pulso + quietud). */
   confidence: number;
   /** Índice de blanqueo [0..1] (AC colapsada + DC + planitud). */
   blanching: number;
@@ -92,10 +124,12 @@ export interface TransmuralReading {
   forceProxy: number;
   /** PI actual / mejor PI del episodio [0..1]. */
   perfusionRatio: number;
-  /** Acoplamiento óptico [0..1] (cobertura vs. sellado). */
+  /** Acoplamiento óptico [0..1] (sellado vs. sellado bueno). */
   coupling: number;
-  /** Cobertura EMA del episodio (para el score de colocación). */
-  coverage: number;
+  /** Sellado EMA del episodio [0..1]. */
+  seal: number;
+  /** Sellado normalizado [0..1] contra COVER_MIN..COVER_GOOD. */
+  sealNorm: number;
   /** Pulso normalizado contra PI_REF [0..1]. */
   pulsatility: number;
   /** Quietud EMA [0..1] (1 = dedo quieto). */
@@ -104,16 +138,33 @@ export interface TransmuralReading {
   dcTrend: number;
   /** Existe un PI de referencia válido para comparar. */
   hasReference: boolean;
-  /** Motivo del veredicto (para guía visual/háptica). */
+  /** Motivo del veredicto. */
   reason: TransmuralReason;
+  /** Instrucción concreta para el usuario. */
+  guidance: TransmuralGuidance;
+}
+
+export interface TransmuralGuidance {
+  action: TransmuralAction;
+  /** Titular corto, en mayúsculas, para el banner. */
+  headline: string;
+  /** Explicación breve del porqué (evidencia, no adivinación). */
+  detail: string;
+  /** Cercanía al óptimo [0..1]: 1 = Pt ≈ 0. */
+  progress: number;
+  /** Confianza del veredicto [0..1]. */
+  confidence: number;
 }
 
 export interface TransmuralModelState {
   frame: number;
-  cover: number;
+  /** Sellado EMA. */
+  seal: number;
   dcFast: number;
   dcSlow: number;
   dcMin: number;
+  /** DC lento cuando el dedo selló la lente por primera vez en el episodio. */
+  dcRef: number;
   /** DC lento en el instante del mejor PI del episodio. */
   dcAtPeak: number;
   cv: number;
@@ -125,6 +176,8 @@ export interface TransmuralModelState {
   lastFraction: number;
   /** El episodio ya fijó su PI/DC de referencia (primer frame hábil). */
   peakLearned: boolean;
+  /** El dedo ya selló la lente alguna vez en este episodio. */
+  sealLearned: boolean;
   state: TransmuralState;
   candidate: TransmuralState;
   candidateRun: number;
@@ -134,13 +187,18 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
+function clamp01(v: number): number {
+  return Number.isFinite(v) ? clamp(v, 0, 1) : 0;
+}
+
 export function createTransmuralState(): TransmuralModelState {
   return {
     frame: 0,
-    cover: 0,
+    seal: 0,
     dcFast: 0,
     dcSlow: 0,
     dcMin: 0,
+    dcRef: 0,
     dcAtPeak: 0,
     cv: 0,
     piFast: 0,
@@ -148,6 +206,7 @@ export function createTransmuralState(): TransmuralModelState {
     motion: 0,
     lastFraction: 0.5,
     peakLearned: false,
+    sealLearned: false,
     state: 'NONE',
     candidate: 'NONE',
     candidateRun: 0,
@@ -157,10 +216,11 @@ export function createTransmuralState(): TransmuralModelState {
 /** Reinicia el episodio sin cambiar la identidad del objeto (útil en refs). */
 export function resetTransmuralState(state: TransmuralModelState): void {
   state.frame = 0;
-  state.cover = 0;
+  state.seal = 0;
   state.dcFast = 0;
   state.dcSlow = 0;
   state.dcMin = 0;
+  state.dcRef = 0;
   state.dcAtPeak = 0;
   state.cv = 0;
   state.piFast = 0;
@@ -168,6 +228,7 @@ export function resetTransmuralState(state: TransmuralModelState): void {
   state.motion = 0;
   state.lastFraction = 0.5;
   state.peakLearned = false;
+  state.sealLearned = false;
   state.state = 'NONE';
   state.candidate = 'NONE';
   state.candidateRun = 0;
@@ -206,11 +267,15 @@ export function observeTransmuralPressure(
   const dc = Math.max(0, sample.dcLevel);
   const cv = Math.max(0, sample.roiRedCv);
   const pi = Math.max(0, sample.perfusionIndex);
-  const cover = clamp(sample.coverageRatio, 0, 1);
-  const motionScore = clamp(sample.motionScore, 0, 1);
+  const seal = clamp01(sample.sealRatio);
+  const motionScore = clamp01(sample.motionScore);
+  const perfusedFraction =
+    typeof sample.perfusedFraction === 'number' && Number.isFinite(sample.perfusedFraction)
+      ? clamp01(sample.perfusedFraction)
+      : null;
 
   if (state.frame === 1) {
-    state.cover = cover;
+    state.seal = seal;
     state.dcFast = dc;
     state.dcSlow = dc;
     state.dcMin = dc;
@@ -218,27 +283,39 @@ export function observeTransmuralPressure(
     state.cv = cv;
     state.piFast = pi;
     state.piPeak = pi;
-    state.motion = 1 - clamp(motionScore / MOTION_BAD, 0, 1);
+    state.motion = 1 - clamp01(motionScore / MOTION_BAD);
   } else {
     const aFast = P.EMA_FAST;
     const aSlow = P.EMA_SLOW;
-    state.cover += (cover - state.cover) * aFast;
+    state.seal += (seal - state.seal) * aFast;
     state.dcFast += (dc - state.dcFast) * aFast;
     state.dcSlow += (dc - state.dcSlow) * aSlow;
     state.cv += (cv - state.cv) * aFast;
     state.piFast += (pi - state.piFast) * aFast;
-    const motionInst = 1 - clamp(motionScore / MOTION_BAD, 0, 1);
+    const motionInst = 1 - clamp01(motionScore / MOTION_BAD);
     state.motion += (motionInst - state.motion) * aFast;
     if (dc < state.dcMin || state.dcMin === 0) state.dcMin = dc;
   }
 
   const motionBad = state.motion < MOTION_GOOD_MIN || motionScore > MOTION_BAD;
+  const hasContact = state.seal >= P.COVER_MIN;
 
-  // El mejor PI del episodio define el punto de Pt ≈ 0. Se congela en HEAVY y
-  // con movimiento para no aprender un máximo espurio ni olvidar el colapso.
+  // El sellado fija el DC de referencia del episodio: es el punto de "dedo
+  // apoyado sin fuerza extra". Se ancla una sola vez, cuando la lente se cubre
+  // por primera vez, para que la deriva del AE previa al contacto no falsee la
+  // lectura de fuerza (que es lo que hacía que "cualquier posición" pareciera
+  // presión alta).
+  if (!state.sealLearned && state.seal >= P.COVER_GOOD && state.dcSlow > 0) {
+    state.dcRef = state.dcSlow;
+    state.sealLearned = true;
+  }
+
+  // El mejor PI del episodio define Pt ≈ 0. Se congela en HEAVY y con
+  // movimiento para no aprender un máximo espurio ni olvidar el colapso.
   if (
     state.state !== 'HEAVY' &&
     !motionBad &&
+    hasContact &&
     state.frame >= P.MIN_EVIDENCE_FRAMES &&
     (!state.peakLearned || state.piFast > state.piPeak * (1 + P.PI_PEAK_MARGIN))
   ) {
@@ -248,30 +325,33 @@ export function observeTransmuralPressure(
   }
 
   const hasReference = state.piPeak >= P.AC_PEAK_MIN_PI;
-  const coupling = clamp(state.cover / P.COVER_GOOD, 0, 1);
-  const perfusionRatio = hasReference ? clamp(state.piFast / state.piPeak, 0, 1) : 0;
+  const coupling = clamp01(state.seal / Math.max(1e-6, P.COVER_GOOD));
+  const sealNorm = clamp01(
+    (state.seal - P.COVER_MIN) / Math.max(1e-6, P.COVER_GOOD - P.COVER_MIN),
+  );
+  const perfusionRatio = hasReference ? clamp01(state.piFast / state.piPeak) : 0;
   const piDeficit = hasReference ? 1 - perfusionRatio : 0;
+  const pulsatility = clamp01(state.piFast / Math.max(1e-6, P.PI_REF));
 
-  // DC: eje monótono de fuerza. El recorrido dinámico normaliza el episodio.
-  // Sin un DC mínimo válido (dedo fuera, sensor en negro) no hay baseline de
-  // fuerza: se reporta 0 en lugar de amplificar ruido.
-  const dcBaselineValid = state.dcMin >= P.DC_MIN_BASELINE;
-  const dcSpan = Math.max(state.dcMin * P.DC_DYNAMIC_SPAN, P.DC_MIN_SPAN);
+  // ── DC: eje monótono de la fuerza (Teng 2004, Sensors 2024) ────────────────
+  // Se compara contra el DC de referencia del sellado, no contra el mínimo del
+  // episodio: el mínimo puede ser un frame oscuro previo al contacto.
+  const dcBaseline = state.dcRef > 0 ? state.dcRef : state.dcMin;
+  const dcBaselineValid = dcBaseline >= P.DC_MIN_BASELINE;
+  const dcSpan = Math.max(dcBaseline * P.DC_DYNAMIC_SPAN, P.DC_MIN_SPAN);
   const forceProxy = dcBaselineValid
-    ? clamp((state.dcFast - state.dcMin) / dcSpan, 0, 1)
+    ? clamp01((state.dcFast - dcBaseline) / dcSpan)
     : 0;
   const dcDelta = hasReference && dcBaselineValid
     ? (state.dcFast - state.dcAtPeak) / Math.max(state.dcAtPeak, P.DC_REF_FLOOR)
     : 0;
   const dcRise = dcBaselineValid
-    ? clamp(
+    ? clamp01(
       ((state.dcFast - state.dcSlow) / Math.max(state.dcSlow, 1)) / P.DC_RISE_FULL,
-      0,
-      1,
     )
     : 0;
   const dcHigh = dcBaselineValid &&
-    (state.dcFast - state.dcMin) / Math.max(state.dcMin, 1) >= P.DC_HIGH_MIN;
+    (state.dcFast - dcBaseline) / Math.max(dcBaseline, 1) >= P.DC_HIGH_MIN;
   const dcTrend = dcBaselineValid
     ? clamp(
       ((state.dcFast - state.dcSlow) / Math.max(state.dcSlow, 1)) / P.DC_RISE_FULL,
@@ -281,27 +361,28 @@ export function observeTransmuralPressure(
     : 0;
 
   // Planitud del CV: 1 = sin pulsación, 0 = CV en el piso fisiológico.
-  const flat = 1 - clamp(state.cv / P.CV_FLAT_REF, 0, 1);
+  const flat = 1 - clamp01(state.cv / Math.max(1e-6, P.CV_FLAT_REF));
 
-  // El blanqueo solo es evaluable con la lente cubierta: con fuga de luz la AC
-  // baja por falta de acoplamiento, no por isquemia.
-  const couplingFactor = clamp(
-    (state.cover - P.COVER_MIN) / Math.max(P.COVER_GOOD - P.COVER_MIN, 0.01),
-    0,
-    1,
-  );
-  const blanching = clamp(
-    couplingFactor * (
-      P.BLANCH_AC_WEIGHT * piDeficit +
-      P.BLANCH_FLAT_WEIGHT * flat +
-      P.BLANCH_DC_WEIGHT * Math.max(dcRise, dcHigh ? 1 : 0)
-    ),
-    0,
-    1,
-  );
+  // ── Blanqueo microvascular ────────────────────────────────────────────────
+  // Solo se atribuye a isquemia si el tejido está sellado Y perfundido: un dedo
+  // frío o apoyado fuera de la lente da AC baja sin colapso por presión.
+  const couplingFactor = sealNorm;
+  const perfusedOk = perfusedFraction === null || perfusedFraction >= PERFUSED_FLOOR;
+  const blanchEligible = hasContact && perfusedOk;
+  const blanching = blanchEligible
+    ? clamp01(
+      couplingFactor * (
+        P.BLANCH_AC_WEIGHT * piDeficit +
+        P.BLANCH_FLAT_WEIGHT * flat +
+        P.BLANCH_DC_WEIGHT * Math.max(dcRise, dcHigh ? 1 : 0)
+      ),
+    )
+    : 0;
 
+  // ── Veredicto ─────────────────────────────────────────────────────────────
+  // Orden de prioridad: la isquemia manda, después el sellado, después el pulso.
   let candidate: TransmuralState;
-  if (state.frame < P.MIN_EVIDENCE_FRAMES || state.cover < P.COVER_MIN) {
+  if (state.frame < P.MIN_EVIDENCE_FRAMES || state.seal < P.COVER_MIN) {
     candidate = 'NONE';
   } else if (motionBad) {
     candidate = state.state === 'NONE' ? 'NONE' : state.state;
@@ -311,14 +392,15 @@ export function observeTransmuralPressure(
       perfusionRatio >= P.PI_RECOVER && blanching <= P.BLANCH_EXIT && !dcHigh
         ? 'IDEAL'
         : 'HEAVY';
-  } else if (state.cover < P.COVER_GOOD) {
+  } else if (blanchEligible && blanching >= P.BLANCH_ENTER && (dcHigh || dcRise >= P.DC_RISE_MIN)) {
+    candidate = 'HEAVY';
+  } else if (state.seal < P.COVER_GOOD) {
+    // Lente no cubierta por la yema: es el caso más común de "apoya bien".
     candidate = 'LIGHT';
   } else if (!hasReference) {
-    // Sin máximo de referencia no se puede distinguir presión excesiva de baja
-    // perfusión: no se afirma nada.
-    candidate = 'NONE';
-  } else if (blanching >= P.BLANCH_ENTER && (dcHigh || dcRise >= P.DC_RISE_MIN)) {
-    candidate = 'HEAVY';
+    // Sin máximo de referencia el pulso no es comparable: solo el sellado
+    // autoriza a afirmar que el apoyo es correcto.
+    candidate = pulsatility >= P.PI_GOOD ? 'IDEAL' : 'NONE';
   } else if (piDeficit >= P.PI_DEFICIT_LIGHT && !dcHigh) {
     candidate = 'LIGHT';
   } else {
@@ -326,22 +408,21 @@ export function observeTransmuralPressure(
   }
   settle(state, candidate);
 
-  // Eje: lado del óptimo. El veredicto asentado manda para que el cursor del
-  // gauge nunca contradiga la etiqueta.
+  // ── Eje: lado del óptimo ──────────────────────────────────────────────────
   let axis: TransmuralAxis;
-  if (state.frame < P.MIN_EVIDENCE_FRAMES || state.cover < P.COVER_MIN) {
+  if (state.frame < P.MIN_EVIDENCE_FRAMES || state.seal < P.COVER_MIN) {
     axis = 'UNKNOWN';
   } else if (state.state === 'HEAVY') {
     axis = 'OVER';
   } else if (state.state === 'LIGHT') {
     axis = 'UNDER';
-  } else if (state.cover < P.COVER_GOOD) {
+  } else if (state.seal < P.COVER_GOOD) {
     axis = 'UNDER';
   } else if (!hasReference) {
-    axis = 'UNKNOWN';
+    axis = pulsatility >= P.PI_GOOD ? 'OPTIMAL' : 'UNKNOWN';
   } else if (piDeficit <= P.PI_DEFICIT_OPTIMAL) {
     axis = 'OPTIMAL';
-  } else if (blanching >= P.BLANCH_ENTER && (dcHigh || dcRise >= P.DC_RISE_MIN)) {
+  } else if (blanchEligible && blanching >= P.BLANCH_ENTER && (dcHigh || dcRise >= P.DC_RISE_MIN)) {
     axis = 'OVER';
   } else if (dcDelta <= -P.DC_DISPLACE_MIN || !dcHigh) {
     axis = 'UNDER';
@@ -349,8 +430,8 @@ export function observeTransmuralPressure(
     axis = 'UNKNOWN';
   }
 
-  // Con movimiento no se afirma un lado nuevo: el eje queda anclado al
-  // veredicto ya confirmado (o neutro) hasta que la señal se estabilice.
+  // Con movimiento no se afirma un lado nuevo: el eje queda anclado al veredicto
+  // ya confirmado (o neutro) hasta que la señal se estabilice.
   if (motionBad) {
     axis = state.state === 'HEAVY'
       ? 'OVER'
@@ -359,17 +440,21 @@ export function observeTransmuralPressure(
         : 'UNKNOWN';
   }
 
-  // Grado continuo. La rama OVER/UNDER usa el déficit de PI y el blanqueo para
-  // que el cursor se mueva de forma proporcional, no a saltos.
+  // ── Grado continuo ────────────────────────────────────────────────────────
+  // OVER/UNDER usan el déficit de PI, el sellado y la pulsatilidad para que el
+  // cursor se mueva de forma proporcional, no a saltos entre dos mesetas.
   let fraction: number;
   if (axis === 'OVER') {
-    const lateral = clamp(0.30 + 0.70 * piDeficit, 0, 1);
-    fraction = 0.5 + 0.5 * Math.max(lateral, blanching * 0.9);
+    fraction = 0.5 + 0.5 * Math.max(piDeficit, blanching * 0.95);
   } else if (axis === 'UNDER') {
-    const lateral = clamp(0.30 + 0.70 * piDeficit, 0, 1);
-    fraction = 0.5 - 0.5 * lateral;
+    const lateral = Math.max(
+      1 - sealNorm,
+      piDeficit * 0.65,
+      1 - pulsatility,
+    );
+    fraction = 0.5 - 0.5 * clamp01(0.25 + 0.75 * lateral);
   } else if (axis === 'OPTIMAL') {
-    fraction = 0.5 + clamp(dcDelta * 0.4, -0.08, 0.08);
+    fraction = 0.5 + clamp(dcDelta * 0.3, -0.06, 0.06);
   } else {
     fraction = 0.5;
   }
@@ -384,25 +469,36 @@ export function observeTransmuralPressure(
   } else {
     state.lastFraction = fraction;
   }
-  fraction = clamp(fraction, 0, 1);
+  fraction = clamp01(fraction);
 
+  // ── Motivo ────────────────────────────────────────────────────────────────
   let reason: TransmuralReason;
   if (state.frame < P.MIN_EVIDENCE_FRAMES) reason = 'WARMUP';
-  else if (state.cover < P.COVER_MIN) reason = 'NO_CONTACT';
+  else if (state.seal < P.COVER_MIN) reason = 'NO_CONTACT';
   else if (motionBad) reason = 'MOTION';
   else if (state.state === 'HEAVY' || axis === 'OVER') reason = 'OVER';
   else if (state.state === 'LIGHT' || axis === 'UNDER') reason = 'UNDER';
   else if (!hasReference) reason = 'NO_REFERENCE';
   else reason = 'OPTIMAL';
 
-  const confidence = clamp(
-    0.30 * couplingFactor +
-    0.30 * perfusionRatio +
-    0.20 * state.motion +
+  const confidence = clamp01(
+    0.34 * coupling +
+    0.28 * perfusionRatio +
+    0.18 * state.motion +
     0.20 * (hasReference ? 1 : 0),
-    0,
-    1,
   );
+
+  const guidance = buildGuidance({
+    reason,
+    state: state.state,
+    action: axis,
+    seal,
+    sealNorm,
+    pulsatility,
+    blanching,
+    confidence,
+    perfusedOk,
+  });
 
   return {
     state: state.state,
@@ -413,11 +509,104 @@ export function observeTransmuralPressure(
     forceProxy,
     perfusionRatio,
     coupling,
+    seal: state.seal,
+    sealNorm,
+    pulsatility,
+    motion: state.motion,
     dcTrend,
     hasReference,
     reason,
-    coverage: state.cover,
-    pulsatility: clamp(state.piFast / P.PI_REF, 0, 1),
-    motion: state.motion,
+    guidance,
   };
+}
+
+/**
+ * Traduce el estado medido a una instrucción concreta. Vive aquí (y no en la
+ * UI) para que el texto que ve el usuario, el patrón háptico y el color del
+ * gauge sean la MISMA decisión, imposible de contradecir entre sí.
+ */
+function buildGuidance(input: {
+  reason: TransmuralReason;
+  state: TransmuralState;
+  action: TransmuralAxis;
+  seal: number;
+  sealNorm: number;
+  pulsatility: number;
+  blanching: number;
+  confidence: number;
+  perfusedOk: boolean;
+}): TransmuralGuidance {
+  const progress = clamp01(
+    input.state === 'HEAVY'
+      ? 1 - input.blanching
+      : input.state === 'LIGHT'
+        ? input.sealNorm * 0.5 + clamp01(input.pulsatility / Math.max(1e-6, P.PI_GOOD)) * 0.5
+        : input.state === 'IDEAL'
+          ? 0.85 + 0.15 * clamp01(input.pulsatility)
+          : 0.35,
+  );
+
+  const base = { progress, confidence: input.confidence };
+
+  switch (input.reason) {
+    case 'WARMUP':
+      return {
+        ...base,
+        action: 'WAIT',
+        headline: 'AJUSTANDO LA CÁMARA',
+        detail: 'Estabilizando exposición. Apoya el dedo sin moverlo.',
+      };
+    case 'NO_CONTACT':
+      return {
+        ...base,
+        action: 'REPOSITION',
+        headline: 'APOYA EL DEDO EN LA LENTE',
+        detail: 'No se detecta tejido cubriendo la lente. El flash debe quedar tapado por la yema.',
+      };
+    case 'MOTION':
+      return {
+        ...base,
+        action: 'WAIT',
+        headline: 'NO TE MUEVAS',
+        detail: 'El movimiento altera la lectura. Sostén el dedo quieto un instante.',
+      };
+    case 'NO_REFERENCE':
+      return {
+        ...base,
+        action: 'PRESS_MORE',
+        headline: 'PRESIONA UN POCO MÁS',
+        detail: 'La lente está cubierta pero el pulso todavía no es aprovechable. Aumenta el apoyo de forma suave y constante.',
+      };
+    case 'UNDER':
+      return input.seal < P.COVER_GOOD
+        ? {
+          ...base,
+          action: 'PRESS_MORE',
+          headline: 'PRESIONA UN POCO MÁS',
+          detail: 'La yema no cubre toda la lente. Apoya el centro del dedo sobre el cristal.',
+        }
+        : {
+          ...base,
+          action: 'PRESS_MORE',
+          headline: 'PRESIONA UN POCO MÁS',
+          detail: 'El contacto es correcto pero el pulso es débil. Aumenta la presión despacio.',
+        };
+    case 'OVER':
+      return {
+        ...base,
+        action: 'RELEASE',
+        headline: input.state === 'HEAVY' ? 'SUELTA UN POCO EL DEDO' : 'PRESIONAS DE MÁS',
+        detail: input.blanching > 0.7
+          ? 'El flujo sanguíneo se está cortando (los capilares se colapsan). Relaja la presión.'
+          : 'La presión excede la del lecho capilar. Afloja hasta notar el pulso otra vez.',
+      };
+    case 'OPTIMAL':
+    default:
+      return {
+        ...base,
+        action: 'HOLD',
+        headline: 'PRESIÓN ÓPTIMA · MANTÉN',
+        detail: 'El pulso tiene su amplitud máxima. No cambies la presión ni muevas el dedo.',
+      };
+  }
 }

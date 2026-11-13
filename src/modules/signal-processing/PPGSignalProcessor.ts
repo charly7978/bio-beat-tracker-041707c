@@ -80,6 +80,12 @@ interface ROIMetrics {
   coverageRatio: number;
   fingerScore: number;
   fingerTileCount: number;
+  /** Sellado óptico [0..1]: lente cubierta por tejido (sin exigir pulso). */
+  sealRatio: number;
+  /** Fracción del tejido que además está perfundido [0..1]. */
+  perfusedFraction: number;
+  /** DC rojo de los píxeles de tejido. */
+  tissueRed: number;
   roiX: number;
   roiY: number;
   roiH: number;
@@ -467,13 +473,17 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     // Evidencia de colocacion fisica REAL (presion, ubicacion, movimiento,
     // pulso) — alimenta la ventana 3D y la guia de UI. Cada frame con dedo.
+    // `sealRatio` es el sellado por tejido (no la máscara AC/DC): con el flash
+    // encendido el rojo satura y la máscara fisiológica colapsa, lo que hacía
+    // que el modelo leyera "poco dedo" con el dedo bien apoyado.
     this.lastPlacementEvidence = computePlacementEvidence({
-      coverageRatio: this.smoothedCoverage || roi.coverageRatio,
+      sealRatio: roi.sealRatio,
+      perfusedFraction: roi.perfusedFraction,
       centroidX: roi.centroidX,
       centroidY: roi.centroidY,
       motionScore: Math.max(this.motionScore, this.signalMotionScore),
       perfusionIndex: this.cachedPI,
-      dcLevel: this.redDC > 0 ? this.redDC : this.smoothedRed,
+      dcLevel: roi.tissueRed > 0 ? roi.tissueRed : this.redDC > 0 ? this.redDC : this.smoothedRed,
       roiRedCv: this.lastRoiRedCv,
     });
 
@@ -1066,6 +1076,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       hasPulsatility: extras?.hasPulsatility ?? false,
       pulsatilityValue: extras?.pulsatilityValue ?? 0,
       coverageRatio,
+      sealRatio: roi.sealRatio,
+      perfusedFraction: roi.perfusedFraction,
       placementMode: extras?.placementMode,
       placementHint: extras?.placementHint,
       status,
@@ -1115,6 +1127,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       coverageRatio: frame.coverageRatio,
       fingerScore: frame.fingerScore,
       fingerTileCount: frame.fingerRegionCount,
+      sealRatio: frame.tissueRatio,
+      perfusedFraction: frame.perfusionRatio,
+      tissueRed: frame.tissueRed,
       roiX: frame.roiX,
       roiY: frame.roiY,
       roiW: frame.roiW,

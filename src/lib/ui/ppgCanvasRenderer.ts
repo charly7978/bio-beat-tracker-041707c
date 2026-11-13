@@ -788,97 +788,165 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
 
 }
 
+/**
+ * GAUGE DE PRESIÓN TRANSMURAL.
+ *
+ * Debe dibujarse DESPUÉS de `drawSignal`: hasta ahora se pintaba antes y la
+ * onda lo tapaba, así que el usuario nunca veía la guía.
+ *
+ * Ya no se limita a pintar una etiqueta fija por veredicto: usa `guidance`
+ * (la MISMA decisión que alimenta el háptico) y muestra las dos magnitudes
+ * físicas que el modelo mide — sellado de lente y blanqueo capilar — para que
+ * el usuario entienda por qué se le pide ajustar.
+ */
 export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const p = state.props;
-  if (!p.isFingerDetected) return;
+  const evidence = p.diagnostics?.placementEvidence;
+  // Sin evidencia no se afirma nada. Tampoco se exige "dedo detectado": la
+  // guía de "apoya el dedo" es precisamente la que más se necesita cuando no
+  // hay contacto.
+  if (!evidence) return;
 
   const { plot } = state.layout;
-  const evidence = p.diagnostics?.placementEvidence;
-  const pressure = evidence?.pressure ?? 'NONE';
-  const pressureScore = typeof evidence?.pressureScore === 'number'
-    ? Math.max(0, Math.min(1, evidence.pressureScore))
-    : 0.5;
-  const targetPct = Math.max(0.04, Math.min(0.96, pressureScore));
+  const guidance = evidence.guidance;
+  const pressureScore = clamp01(
+    typeof evidence.pressureScore === 'number' ? evidence.pressureScore : 0.5,
+  );
+  const seal = clamp01(typeof evidence.seal === 'number' ? evidence.seal : evidence.coverage);
+  const blanching = clamp01(typeof evidence.blanching === 'number' ? evidence.blanching : 0);
 
-  // Posición libre: arriba del tachograma, a la izquierda, para no solapar la
-  // onda ni el panel rítmico (que ocupa plot.y+8..+64).
-  const gaugeW = Math.min(210, Math.max(168, plot.w * 0.46));
-  const gaugeH = 8;
+  const gaugeW = Math.min(250, Math.max(180, plot.w * 0.52));
+  const gaugeH = 9;
   const gaugeX = plot.x + 12;
-  const gaugeY = plot.y + plot.h - RR_TACHO_H - 16;
+  const gaugeY = plot.y + plot.h - RR_TACHO_H - 30;
+  const panelH = 34;
 
-  ctx.save();
-  ctx.font = `bold 9px ${FONT_MONO}`;
-  ctx.textAlign = 'left';
-
-  // Guía dinámica: la etiqueta y la dirección dependen del GRADO continuo, no
-  // solo del veredicto. "Suelta un poco" y "suelta más" son avisos distintos.
-  const scorePct = Math.round(targetPct * 100);
-  let labelText: string;
-  let labelColor: string;
-  let arrow: string;
-
-  if (pressure === 'LIGHT') {
-    labelText = pressureScore < 0.25 ? 'PRESIÓN BAJA · APOYA MÁS' : 'PRESIÓN BAJA · APOYA UN POCO';
-    labelColor = COLORS.TEXT_WARN;
-    arrow = '▲';
-  } else if (pressure === 'IDEAL') {
-    labelText = 'PRESIÓN ÓPTIMA · MANTÉN';
-    labelColor = COLORS.SIGNAL;
-    arrow = '●';
-  } else if (pressure === 'HEAVY') {
-    labelText = pressureScore > 0.80 ? 'PRESIÓN ALTA · SUELTA MÁS' : 'PRESIÓN ALTA · SUELTA UN POCO';
-    labelColor = COLORS.TEXT_DANGER;
-    arrow = '▼';
-  } else {
-    labelText = 'PRESIÓN · AJUSTA EL DEDO';
-    labelColor = COLORS.TEXT_DIM;
-    arrow = '·';
+  // Paleta por ACCIÓN, no por etiqueta: la acción es lo que el usuario debe hacer.
+  let accent: string;
+  let accentSoft: string;
+  switch (guidance?.action) {
+    case 'RELEASE':
+      accent = '#ef4444';
+      accentSoft = 'rgba(239,68,68,0.22)';
+      break;
+    case 'PRESS_MORE':
+      accent = '#f59e0b';
+      accentSoft = 'rgba(245,158,11,0.22)';
+      break;
+    case 'HOLD':
+      accent = '#22c55e';
+      accentSoft = 'rgba(34,197,94,0.22)';
+      break;
+    case 'REPOSITION':
+      accent = '#38bdf8';
+      accentSoft = 'rgba(56,189,248,0.20)';
+      break;
+    default:
+      accent = '#94a3b8';
+      accentSoft = 'rgba(148,163,184,0.18)';
   }
 
+  ctx.save();
+
   // Fondo translúcido para legibilidad sobre la onda.
-  ctx.fillStyle = 'rgba(2, 6, 23, 0.72)';
-  ctx.fillRect(gaugeX - 4, gaugeY - 14, gaugeW + 8, gaugeH + 20);
+  ctx.fillStyle = 'rgba(2, 6, 23, 0.82)';
+  ctx.fillRect(gaugeX - 6, gaugeY - 22, gaugeW + 12, panelH + 24);
+  ctx.strokeStyle = accentSoft;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(gaugeX - 6, gaugeY - 22, gaugeW + 12, panelH + 24);
 
-  ctx.fillStyle = labelColor;
-  ctx.fillText(`${arrow} ${labelText}`, gaugeX, gaugeY - 4);
-  ctx.textAlign = 'right';
-  ctx.fillText(`${scorePct}`, gaugeX + gaugeW, gaugeY - 4);
+  // Titular (la instrucción concreta) y detalle.
   ctx.textAlign = 'left';
+  ctx.font = `bold 10px ${FONT_MONO}`;
+  ctx.fillStyle = accent;
+  const headline = guidance?.headline ?? 'PRESIÓN · AJUSTA EL DEDO';
+  ctx.fillText(clipText(ctx, headline, gaugeW), gaugeX, gaugeY - 9);
 
+  ctx.font = `8px ${FONT_MONO}`;
+  ctx.fillStyle = COLORS.TEXT_DIM;
+  const detail = guidance?.detail ?? '';
+  if (detail) ctx.fillText(clipText(ctx, detail, gaugeW), gaugeX, gaugeY + 1);
+
+  // Barra de grado continuo.
+  const barY = gaugeY + 7;
   const grad = ctx.createLinearGradient(gaugeX, 0, gaugeX + gaugeW, 0);
   grad.addColorStop(0, '#f59e0b');
-  grad.addColorStop(0.35, '#f59e0b');
-  grad.addColorStop(0.45, '#22c55e');
-  grad.addColorStop(0.55, '#22c55e');
-  grad.addColorStop(0.65, '#ef4444');
+  grad.addColorStop(0.42, '#f59e0b');
+  grad.addColorStop(0.5, '#22c55e');
+  grad.addColorStop(0.58, '#22c55e');
+  grad.addColorStop(0.66, '#ef4444');
   grad.addColorStop(1, '#ef4444');
 
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
-  ctx.fillRect(gaugeX - 1, gaugeY - 1, gaugeW + 2, gaugeH + 2);
-
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+  ctx.fillRect(gaugeX - 1, barY - 1, gaugeW + 2, gaugeH + 2);
   ctx.fillStyle = grad;
-  ctx.fillRect(gaugeX, gaugeY, gaugeW, gaugeH);
+  ctx.fillRect(gaugeX, barY, gaugeW, gaugeH);
 
-  // Banda objetivo (Pt ≈ 0): referencia visual del óptimo.
+  // Banda objetivo (Pt ≈ 0).
   ctx.strokeStyle = 'rgba(255,255,255,0.85)';
   ctx.lineWidth = 1;
-  ctx.strokeRect(gaugeX + gaugeW * 0.42, gaugeY - 2, gaugeW * 0.16, gaugeH + 4);
+  ctx.strokeRect(gaugeX + gaugeW * 0.44, barY - 2, gaugeW * 0.14, gaugeH + 4);
 
-  const cursorX = gaugeX + gaugeW * targetPct;
-  // En colapso el cursor late para reforzar el aviso sin añadir texto.
-  const cursorAlpha = pressure === 'HEAVY'
-    ? 0.55 + 0.45 * Math.abs(state.sweepPulse)
-    : 1;
-  ctx.fillStyle = `rgba(255,255,255,${cursorAlpha.toFixed(3)})`;
+  // Aguja.
+  const needleX = gaugeX + gaugeW * Math.max(0.03, Math.min(0.97, pressureScore));
+  const pulseAlpha =
+    guidance?.action === 'RELEASE' ? 0.55 + 0.45 * Math.abs(state.sweepPulse) : 1;
+  ctx.fillStyle = `rgba(255,255,255,${pulseAlpha.toFixed(3)})`;
   ctx.beginPath();
-  ctx.moveTo(cursorX, gaugeY - 2);
-  ctx.lineTo(cursorX - 5, gaugeY - 8);
-  ctx.lineTo(cursorX + 5, gaugeY - 8);
+  ctx.moveTo(needleX, barY - 2);
+  ctx.lineTo(needleX - 5, barY - 8);
+  ctx.lineTo(needleX + 5, barY - 8);
   ctx.closePath();
   ctx.fill();
 
+  // Sub-lecturas: sellado (¿tapa la lente?) y blanqueo (¿hay isquemia?).
+  const subY = barY + gaugeH + 6;
+  const halfW = (gaugeW - 8) / 2;
+  drawMiniBar(ctx, gaugeX, subY, halfW, seal, '#38bdf8', 'SELLO');
+  drawMiniBar(ctx, gaugeX + halfW + 8, subY, halfW, blanching, blanching >= 0.5 ? '#ef4444' : '#64748b', 'BLANQUEO');
+
   ctx.restore();
+}
+
+/** Recorte a [0..1] tolerante a NaN (las métricas del modelo pueden faltar). */
+function clamp01(v: number): number {
+  return Number.isFinite(v) ? (v < 0 ? 0 : v > 1 ? 1 : v) : 0;
+}
+
+/** Texto recortado con elipsis para que nunca se salga del panel. */
+function clipText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText(`${text.slice(0, mid)}…`).width <= maxWidth) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo > 0 ? `${text.slice(0, lo)}…` : '';
+}
+
+/** Barra compacta etiquetada para las sub-lecturas del gauge. */
+function drawMiniBar(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  value: number,
+  color: string,
+  label: string,
+): void {
+  const v = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+  ctx.font = `7px ${FONT_MONO}`;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = COLORS.TEXT_DIM;
+  ctx.fillText(label, x, y + 5);
+  const barX = x + 44;
+  const barW = Math.max(10, w - 44);
+  ctx.fillStyle = 'rgba(15,23,42,0.9)';
+  ctx.fillRect(barX, y, barW, 5);
+  ctx.fillStyle = color;
+  ctx.fillRect(barX, y, barW * v, 5);
 }
 
 export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {

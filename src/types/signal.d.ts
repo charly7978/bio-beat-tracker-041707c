@@ -48,8 +48,12 @@ export interface ProcessedSignal {
     message: string;
     hasPulsatility: boolean;
     pulsatilityValue: number;
-    /** Cobertura del ROI por tiles â€œdedoâ€ (0â€“1) */
+    /** Cobertura del ROI por tiles "dedo" (0–1) */
     coverageRatio?: number;
+    /** Sellado óptico [0..1]: fracción de lente cubierta por tejido. */
+    sealRatio?: number;
+    /** Fracción del tejido que además está perfundido [0..1]. */
+    perfusedFraction?: number;
     placementMode?: FingerPlacementMode;
     placementHint?: string;
     /**

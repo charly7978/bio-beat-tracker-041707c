@@ -8,13 +8,13 @@
  * movimiento para producir el score de colocación y la guía de UI.
  *
  * Modelo transmural (resumen):
- *  - PRESIÓN BAJA : fuga de luz/cobertura insuficiente o pulso débil sin
+ *  - PRESIÓN BAJA : la yema no cubre la lente, o el pulso es débil sin
  *                   evidencia de colapso.
  *  - PRESIÓN ÓPTIMA: máxima amplitud pulsátil sostenida (PI cerca del mejor
- *                   reciente) con cobertura buena.
+ *                   reciente) con la lente sellada.
  *  - PRESIÓN ALTA : la presión externa supera la arteriolar y colapsa el lecho
- *                   capilar. La AC cae frente al mejor reciente, el DC sube o
- *                   se estanca alto y la varianza temporal se aplana.
+ *                   capilar. La AC cae frente al mejor reciente, el DC sube y la
+ *                   varianza temporal se aplana.
  *
  * La cámara NO mide fuerza ni mmHg: solo se clasifica el estado RELATIVO del
  * lecho capilar. Ver `transmuralPressureModel.ts` para las referencias.
@@ -26,12 +26,14 @@ import {
   observeTransmuralPressure,
   resetTransmuralState,
   type TransmuralAxis,
+  type TransmuralGuidance,
   type TransmuralModelState,
   type TransmuralState,
 } from '@/lib/pressure/transmuralPressureModel';
 
 export type PressureVerdict = TransmuralState;
 export type PlacementVerdict = 'NO_FINGER' | 'EDGE' | 'OFF_CENTER' | 'CENTERED';
+export type { TransmuralAction, TransmuralGuidance } from '@/lib/pressure/transmuralPressureModel';
 
 export interface FingerPlacementEvidence {
   score: number;
@@ -42,12 +44,20 @@ export interface FingerPlacementEvidence {
   pressureAxis: TransmuralAxis;
   /** Índice de blanqueo [0..1] del modelo transmural. */
   blanching: number;
+  /** Sellado óptico [0..1]: fracción de lente cubierta por tejido. */
+  seal: number;
+  /** Pulso normalizado [0..1]. */
+  pulsatility: number;
+  /** Fracción de tejido perfundido [0..1]. */
+  perfusedFraction: number;
   placement: PlacementVerdict;
+  /** Guía ANTES `failing`. Se mantiene por compatibilidad con la UI existente. */
   failing: string[];
+  /** Instrucción estructurada: acción + titular + detalle + progreso. */
+  guidance: TransmuralGuidance;
   coverage: number;
   centering: number;
   stability: number;
-  pulsatility: number;
   motion: number;
 }
 
@@ -64,6 +74,7 @@ const {
   COVER_GOOD,
   PULSE_FLAT,
   SCORE_ALPHA,
+  PI_PULSELESS,
 } = VITAL_THRESHOLDS.PRESSURE;
 
 /** Estado del modelo transmural (episodio de contacto actual). */
@@ -96,12 +107,19 @@ function norm(v: number, lo: number, hi: number): number {
 }
 
 export interface EvidenceInput {
-  coverageRatio: number;
+  /**
+   * Sellado óptico [0..1]: fracción del área explorada cubierta por tejido del
+   * dedo. NO es la máscara AC/DC (esa colapsa con el flash y hacía que el
+   * modelo viera "poco dedo" con el dedo bien apoyado).
+   */
+  sealRatio: number;
+  /** Fracción del tejido que además está perfundido [0..1]. */
+  perfusedFraction?: number;
   centroidX: number;
   centroidY: number;
   motionScore: number;
   perfusionIndex: number;
-  /** Nivel DC del rojo (misma escala 0–255 del sensor). */
+  /** Nivel DC del rojo de los píxeles de tejido (misma escala 0–255). */
   dcLevel: number;
   /** CV temporal del rojo en el ROI (pulsatilidad cruda + ruido). */
   roiRedCv: number;
@@ -109,7 +127,8 @@ export interface EvidenceInput {
 
 export function computePlacementEvidence(input: EvidenceInput): FingerPlacementEvidence {
   const reading = observeTransmuralPressure(model, {
-    coverageRatio: input.coverageRatio,
+    sealRatio: input.sealRatio,
+    perfusedFraction: input.perfusedFraction,
     motionScore: input.motionScore,
     perfusionIndex: input.perfusionIndex,
     dcLevel: input.dcLevel,
@@ -123,17 +142,17 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
   const dist = Math.min(1, Math.hypot(dx, dy) / 1.2);
   ev.center = ev.center * d + (1 - dist) * EMA_A;
 
-  // Estabilidad: cambio de cobertura frame a frame + quietud.
+  // Estabilidad: cambio de sellado frame a frame + quietud.
   const stabInst = clamp(
-    1 - (Math.abs(input.coverageRatio - ev.prevCover) * 2.2 + (1 - reading.motion) * 0.6),
+    1 - (Math.abs(input.sealRatio - ev.prevCover) * 2.2 + (1 - reading.motion) * 0.6),
     0,
     1,
   );
-  ev.prevCover = input.coverageRatio;
+  ev.prevCover = input.sealRatio;
   ev.stab = ev.stab * d + stabInst * EMA_A;
 
   const pressure = reading.state;
-  const coverage = reading.coverage;
+  const coverage = reading.seal;
 
   // Score continuo [0..1] para el cursor del gauge. En una transición de
   // veredicto se reinicia al valor instantáneo para no arrastrar la EMA del
@@ -193,18 +212,30 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
   if (ev.center < 0.6) failing.push('Centra la yema en la lente');
   if (reading.motion < 0.55) failing.push('Sostén el dedo quieto');
 
+  const guidance = reading.guidance;
+  // Mensajes redundantes fuera del titular: el banner ya dice la acción.
+  if (guidance.action === 'REPOSITION' && !failing.includes(guidance.headline)) {
+    failing.unshift(guidance.headline);
+  }
+  if (guidance.action === 'PRESS_MORE' && reading.pulsatility < PI_PULSELESS && coverage >= COVER_MIN) {
+    failing.push('Sin pulso útil: el lecho capilar necesita más apoyo');
+  }
+
   return {
     score,
     pressure,
     pressureScore: ev.score,
     pressureAxis: reading.axis,
     blanching: reading.blanching,
+    seal: reading.seal,
+    pulsatility: reading.pulsatility,
+    perfusedFraction: input.perfusedFraction ?? 0,
     placement,
     failing,
+    guidance,
     coverage,
     centering: ev.center,
     stability: ev.stab,
-    pulsatility: reading.pulsatility,
     motion: reading.motion,
   };
 }

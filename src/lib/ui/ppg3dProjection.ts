@@ -38,7 +38,7 @@ export interface WaveGeom {
 }
 
 /** Punto proyectado en pantalla + escala de perspectiva en esa profundidad. */
-interface ProjPoint {
+export interface ProjPoint {
   x: number;
   y: number;
   scale: number;
@@ -508,29 +508,32 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-// === POZO DE PREVISUALIZACIÃ“N DINÃMICO ==========================================
-// Ventana viva del dedo embebida en el piso 3D. CRECE con la calidad del
-// contacto (animaciÃ³n con easing asimÃ©trico: abre firme, encoge honesto y
-// rÃ¡pido) hasta â‰ˆ tamaÃ±o del dedo cuando el contacto es Ã³ptimo. Visor mÃ©dico
-// premium: bisel con gradiente, bracketes de visor, barra de progreso,
-// vidrio superior, scanline animada, tinte y pulso por estado.
-// La cinta de la onda fluye POR ENCIMA (el pozo se dibuja antes que ella).
+// === VENTANA DE PREVISUALIZACIÓN ACOSTADA SOBRE LA GRILLA 3D =================
+// La previsualización del dedo es una SUPERFICIE PLANA apoyada en el piso: se
+// proyecta como trapecio (keystone) sobre la misma grilla y el video se
+// muestrea fila a fila con correspondencia proyectiva exacta
+// (z = Z_NEAR · floorSpanY / (y − horizonY)). El borde LEJANO queda anclado a
+// la grilla y el CERCANO avanza hacia el observador al mejorar la colocación:
+// la ventana se abre acostada, nunca de pie. La cinta de la onda se dibuja
+// después y fluye por delante, como en el resto del escenario 3D.
+//
+// Nada de esto altera la medición: sólo cambia la proyección de presentación.
 
-const WELL_D_FRONT = 0.38;      // borde frontal del hueco (0=near, 1=horizonte)
-const WELL_D_BACK = 0.52;       // borde trasero (donde se apoya el panel)
-const WELL_HALF_W_FRAC = 0.26;  // semiancho del hueco vs plotW
-const WELL_PANEL_H_FRAC = 0.74; // altura del panel vs su ancho
-const WELL_SIZE_MIN = 0.30;     // tamaÃ±o inicial (sin contacto) vs hueco mÃ¡ximo
-const WELL_SIZE_MAX = 1.08;     // tamaÃ±o con contacto Ã³ptimo ("tamaÃ±o del dedo")
-const WELL_EASE_UP = 0.045;     // crecimiento suave por frame (~1.1 s a 60 fps)
-const WELL_EASE_DOWN = 0.20;    // encogimiento rÃ¡pido y honesto
+const PREVIEW_D_FAR = 0.60;          // borde lejano (anclado, junto al horizonte)
+const PREVIEW_D_NEAR_OPEN = 0.22;    // borde cercano con colocación óptima
+const PREVIEW_D_NEAR_CLOSED = 0.56;  // borde cercano sin contacto (plegada)
+const PREVIEW_HALF_W_OPEN = 0.40;    // semiancho vs plot.w con colocación óptima
+const PREVIEW_HALF_W_CLOSED = 0.10;  // semiancho vs plot.w sin contacto
+const PREVIEW_CROP_FRAC = 0.90;      // recorte central del video (lado menor)
+const PREVIEW_EASE_UP = 0.055;       // apertura suave (~1 s a 60 fps)
+const PREVIEW_EASE_DOWN = 0.20;      // cierre rápido y honesto
 
-/** TamaÃ±o animado persistente [0..1] (el render corre en rAF). */
-let wellSizeEma = 0;
+/** Tamaño animado persistente [0..1] (el render corre en rAF). */
+let previewOpenEma = 0;
 
 interface WellTheme { edge: string; core: string; glow: string; tint: string; label: string; }
 function wellThemeFor(contactState?: string, pressure?: string, pressureScore?: number): WellTheme {
-  // El color/etiqueta del pozo siguen el veredicto de presión cuando existe,
+  // El color/etiqueta de la ventana siguen el veredicto de presión cuando existe,
   // para no mostrar verde "CONTACTO ÓPTIMO" mientras hay colapso capilar.
   const score = typeof pressureScore === 'number' && Number.isFinite(pressureScore)
     ? Math.max(0, Math.min(1, pressureScore))
@@ -563,13 +566,13 @@ function wellThemeFor(contactState?: string, pressure?: string, pressureScore?: 
       return {
         edge: 'rgba(34,197,94,0.95)', core: 'rgba(134,239,172,0.9)',
         glow: 'rgba(34,197,94,0.40)', tint: '34,197,94',
-        label: 'CONTACTO Ã“PTIMO',
+        label: 'CONTACTO ÓPTIMO',
       };
     case 'UNSTABLE_CONTACT':
       return {
         edge: 'rgba(245,158,11,0.95)', core: 'rgba(253,230,138,0.9)',
         glow: 'rgba(245,158,11,0.35)', tint: '245,158,11',
-        label: 'AJUSTA LA POSICIÃ“N',
+        label: 'AJUSTA LA POSICIÓN',
       };
     default:
       return {
@@ -581,39 +584,153 @@ function wellThemeFor(contactState?: string, pressure?: string, pressureScore?: 
 }
 
 /**
- * Score de colocaciÃ³n [0..1] SOLO con seÃ±ales ya presentes en el render state
- * (cero cÃ³mputo nuevo del pipeline). El tamaÃ±o de la ventana es su feedback.
+ * Score de colocación [0..1] SOLO con señales ya presentes en el render state
+ * (cero cómputo nuevo del pipeline). El tamaño de la ventana es su feedback.
  */
 function wellScoreOf(state: PpgRenderState, _contactState?: string): number {
-  // EVIDENCIA FISICA REAL: score directo del modulo fingerPlacementEvidence
-  // (presion/ubicacion/movimiento/pulso medidos por frame en el pipeline).
-  // Sin evidencia (pipeline parado, sin monitoreo, senal stale) -> 0:
-  // la ventana NUNCA queda agrandada con datos viejos.
+  // EVIDENCIA FÍSICA REAL: score directo del módulo fingerPlacementEvidence
+  // (presión/ubicación/movimiento/pulso medidos por frame en el pipeline).
+  // Sin evidencia (pipeline parado, sin monitoreo, señal stale) -> 0:
+  // la ventana NUNCA queda abierta con datos viejos.
   const evidence = state.props.diagnostics?.placementEvidence;
   if (!evidence) return 0;
+  // Un score no finito (pipeline reiniciándose) no debe envenenar la animación.
+  if (!Number.isFinite(evidence.score)) return 0;
   return clamp(evidence.score, 0, 1);
 }
 
-/** RectÃ¡ngulo redondeado compatible (ctx.roundRect no existe en WebViews viejos). */
-function roundRectPath(
-  ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number,
-): void {
-  const rr = Math.min(r, w / 2, h / 2);
+/** Cuatro esquinas de la ventana proyectadas sobre el piso en perspectiva. */
+export interface FloorPreviewQuad {
+  nearLeft: ProjPoint;
+  nearRight: ProjPoint;
+  farLeft: ProjPoint;
+  farRight: ProjPoint;
+  /** Semiancho en unidades-mundo (px en el borde cercano de la grilla). */
+  halfW: number;
+  /** Profundidades mundo del borde cercano y lejano. */
+  zn: number;
+  zf: number;
+}
+
+/** Geometría de la ventana acostada + muestreo proyectivo del video. */
+export interface FloorPreviewGeometry {
+  proj: Projector;
+  quad: FloorPreviewQuad;
+  farY: number;
+  nearY: number;
+  /** v [0..1] del recorte del video para una fila de pantalla (0=arriba/lejos). */
+  sourceVAt: (screenY: number) => number;
+}
+
+/**
+ * Proyecta la ventana acostada para un grado de apertura `size` [0..1].
+ *
+ * Invariantes (verificados en tests):
+ *  - El borde LEJANO no se mueve: la ventana queda anclada a la misma fila de
+ *    la grilla y sólo crece hacia el observador.
+ *  - Las esquinas forman un trapecio con el borde cercano más ancho que el
+ *    lejano (keystone real de un plano horizontal).
+ *  - `sourceVAt` es monótona: fila superior del video → borde lejano, fila
+ *    inferior → borde cercano.
+ */
+export function computeFloorPreviewGeometry(
+  state: PpgRenderState,
+  size: number,
+): FloorPreviewGeometry {
+  const proj = makeProjector(state);
+  const { plot } = state.layout;
+  const open = clamp(size, 0, 1);
+  const dNear = PREVIEW_D_NEAR_CLOSED + (PREVIEW_D_NEAR_OPEN - PREVIEW_D_NEAR_CLOSED) * open;
+  const zRange = proj.zFar - proj.zNear;
+  const zn = proj.zNear + dNear * zRange;
+  const zf = proj.zNear + PREVIEW_D_FAR * zRange;
+  const halfFrac = PREVIEW_HALF_W_CLOSED + (PREVIEW_HALF_W_OPEN - PREVIEW_HALF_W_CLOSED) * open;
+  const halfW = plot.w * halfFrac;
+  const quad: FloorPreviewQuad = {
+    nearLeft: proj.floorPoint(-halfW, zn),
+    nearRight: proj.floorPoint(halfW, zn),
+    farLeft: proj.floorPoint(-halfW, zf),
+    farRight: proj.floorPoint(halfW, zf),
+    halfW,
+    zn,
+    zf,
+  };
+  const farY = quad.farLeft.y;
+  const nearY = quad.nearLeft.y;
+  const depthSpan = Math.max(1e-6, zf - zn);
+  const sourceVAt = (screenY: number): number => {
+    const dy = Math.max(0.5, screenY - proj.horizonY);
+    const z = (proj.zNear * proj.floorSpanY) / dy;
+    return 1 - clamp((z - zn) / depthSpan, 0, 1);
+  };
+  return { proj, quad, farY, nearY, sourceVAt };
+}
+
+/** Path del trapecio de la ventana (orden: cercano izquierdo → lejano izquierdo). */
+function quadPath(ctx: CanvasRenderingContext2D, quad: FloorPreviewQuad): void {
   ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.moveTo(quad.nearLeft.x, quad.nearLeft.y);
+  ctx.lineTo(quad.nearRight.x, quad.nearRight.y);
+  ctx.lineTo(quad.farRight.x, quad.farRight.y);
+  ctx.lineTo(quad.farLeft.x, quad.farLeft.y);
   ctx.closePath();
 }
 
 /**
- * Dibuja el pozo de previsualizaciÃ³n sobre el piso 3D. Debe llamarse DESPUÃ‰S de
- * `drawGrid3D` y ANTES de la onda (`drawSignal`), para que las ondas cardÃ­acas
- * fluyan visualmente por encima de la ventana.
+ * Mapeo proyectivo del video sobre el plano del piso.
  *
- * @param source  element de video de la cÃ¡mara trasera (o null â†’ pozo vacÃ­o).
+ * Para cada fila de pantalla se recupera su profundidad exacta
+ * (z = Z_NEAR · floorSpanY / (y − horizonY)), de ahí la fila del recorte
+ * central del video y el ancho del trapecio en esa profundidad. Las franjas se
+ * dibujan de a pocas filas (máx. ~48 por frame) y el clip al trapecio recorta
+ * el sobrante → bordes laterales exactos sin escalones, coste acotado en móvil.
+ */
+function drawFloorWarpedVideo(
+  ctx: CanvasRenderingContext2D,
+  source: HTMLVideoElement,
+  geo: FloorPreviewGeometry,
+): void {
+  const { quad, proj, farY, nearY, sourceVAt } = geo;
+  const cropSide = Math.min(source.videoWidth, source.videoHeight) * PREVIEW_CROP_FRAC;
+  if (cropSide <= 0) return;
+  const sx = (source.videoWidth - cropSide) / 2;
+  const sy = (source.videoHeight - cropSide) / 2;
+  const screenH = Math.max(1, nearY - farY);
+  const step = Math.max(1.5, screenH / 48);
+
+  ctx.save();
+  quadPath(ctx, quad);
+  ctx.clip();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'low';
+
+  for (let y = farY; y < nearY; y += step) {
+    const y1 = Math.min(nearY, y + step);
+    // La fila más ancha del par define el rectángulo; el clip al trapecio
+    // recorta el sobrante superior y mantiene el borde lateral exacto.
+    const scale = (y1 - proj.horizonY) / proj.floorSpanY;
+    const left = proj.vpX - quad.halfW * scale;
+    const width = quad.halfW * 2 * scale;
+    const v0 = sourceVAt(y);
+    const v1 = sourceVAt(y1);
+    const srcY = sy + v0 * cropSide;
+    const srcH = Math.max(0.01, (v1 - v0) * cropSide);
+    ctx.drawImage(
+      source,
+      sx, srcY, cropSide, srcH,
+      left, y, width, (y1 - y) + 0.5,
+    );
+  }
+
+  ctx.restore();
+}
+
+/**
+ * Dibuja la VENTANA DE PREVISUALIZACIÓN ACOSTADA sobre la grilla 3D.
+ * Debe llamarse DESPUÉS de `drawGrid3D` y ANTES de la onda (`drawSignal`), para
+ * que las ondas cardíacas fluyan visualmente por delante de la ventana.
+ *
+ * @param source  element de video de la cámara trasera (o null → ventana vacía).
  */
 export function drawPreviewWell3D(
   ctx: CanvasRenderingContext2D,
@@ -621,180 +738,190 @@ export function drawPreviewWell3D(
   source: HTMLVideoElement | null,
   contactState?: string,
 ): void {
-  const proj = makeProjector(state);
-  const { plot } = state.layout;
   const pressureEvidence = state.props.diagnostics?.placementEvidence;
   const theme = wellThemeFor(contactState, pressureEvidence?.pressure, pressureEvidence?.pressureScore);
 
-  // AnimaciÃ³n del tamaÃ±o: sube suave, baja rÃ¡pido (feedback honesto).
+  // Apertura animada: sube suave, baja rápido (feedback honesto).
   const target = wellScoreOf(state, contactState);
-  const ease = target > wellSizeEma ? WELL_EASE_UP : WELL_EASE_DOWN;
-  wellSizeEma += (target - wellSizeEma) * ease;
-  const size = wellSizeEma; // [0..1]
+  const ease = target > previewOpenEma ? PREVIEW_EASE_UP : PREVIEW_EASE_DOWN;
+  previewOpenEma += (target - previewOpenEma) * ease;
+  const size = clamp(previewOpenEma, 0, 1);
+
+  const seat = computeFloorPreviewGeometry(state, 1);
+  const geo = computeFloorPreviewGeometry(state, size);
+  const { proj, quad } = geo;
+  const { plot } = state.layout;
 
   ctx.save();
   ctx.beginPath();
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
-  // 1) HUECO en el piso (FIJO = el "sillÃ³n" donde vive la ventana): trapecio
-  // escorzado con paredes internas sombreadas.
-  const halfW = plot.w * WELL_HALF_W_FRAC;
-  const zF = proj.zNear + WELL_D_BACK * (proj.zFar - proj.zNear);
-  const zn = proj.zNear + WELL_D_FRONT * (proj.zFar - proj.zNear);
-  const fl = proj.floorPoint(-halfW, zn);
-  const fr = proj.floorPoint(halfW, zn);
-  const bl = proj.floorPoint(-halfW, zF);
-  const br = proj.floorPoint(halfW, zF);
+  // 1) ASIENTO fijo en la grilla: dónde se apoya la ventana cuando la
+  //    colocación es óptima. Es la referencia espacial del veredicto.
+  quadPath(ctx, seat.quad);
+  ctx.strokeStyle = `rgba(${theme.tint}, 0.30)`;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 5]);
+  ctx.stroke();
+  ctx.setLineDash([]);
 
-  ctx.beginPath();
-  ctx.moveTo(fl.x, fl.y);
-  ctx.lineTo(fr.x, fr.y);
-  ctx.lineTo(br.x, br.y);
-  ctx.lineTo(bl.x, bl.y);
-  ctx.closePath();
-  ctx.fillStyle = 'rgba(0,0,0,0.82)';
+  // 2) Base oscura: la pantalla oculta la grilla que queda debajo.
+  quadPath(ctx, quad);
+  ctx.fillStyle = 'rgba(3,7,12,0.94)';
   ctx.fill();
 
-  const wallShade = (a: ProjPoint, b: ProjPoint, alpha: number) => {
-    const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
-    g.addColorStop(0, `rgba(0,0,0,${alpha})`);
-    g.addColorStop(1, 'rgba(0,0,0,0.15)');
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.lineTo(b.x, b.y + 6 * b.scale);
-    ctx.lineTo(a.x, a.y + 6 * a.scale);
-    ctx.closePath();
-    ctx.fill();
-  };
-  wallShade(fl, bl, 0.55);
-  wallShade(fr, br, 0.55);
-  wallShade(bl, br, 0.35);
+  // 3) VIDEO real recortado al centro y proyectado sobre el piso.
+  const hasVideo = !!source && source.readyState >= 2 && source.videoWidth > 0;
+  if (hasVideo) {
+    drawFloorWarpedVideo(ctx, source as HTMLVideoElement, geo);
+  } else {
+    // Sensor aún sin imagen: vetas de espera que respetan la perspectiva.
+    ctx.save();
+    quadPath(ctx, quad);
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(148,163,184,0.16)';
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= 3; i++) {
+      const y = geo.farY + (geo.nearY - geo.farY) * (i / 4);
+      const s = (y - proj.horizonY) / proj.floorSpanY;
+      ctx.beginPath();
+      ctx.moveTo(proj.vpX - quad.halfW * s, y);
+      ctx.lineTo(proj.vpX + quad.halfW * s, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 
-  // Bisel del hueco con brillo degradado hacia el panel (luz que emana).
-  const bezGrad = ctx.createLinearGradient(0, fl.y, 0, bl.y);
-  bezGrad.addColorStop(0, 'rgba(255,255,255,0.10)');
-  bezGrad.addColorStop(1, theme.edge);
+  // 4) Tinte del veredicto (mismo lenguaje de color que el gauge de presión).
+  quadPath(ctx, quad);
+  ctx.fillStyle = `rgba(${theme.tint}, ${(0.08 + 0.10 * size).toFixed(3)})`;
+  ctx.fill();
+
+  // 5) Sombra de distancia: la pantalla se funde hacia el horizonte.
+  const depthShade = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
+  depthShade.addColorStop(0, 'rgba(0,0,0,0.55)');
+  depthShade.addColorStop(0.55, 'rgba(0,0,0,0.10)');
+  depthShade.addColorStop(1, 'rgba(0,0,0,0.05)');
+  quadPath(ctx, quad);
+  ctx.fillStyle = depthShade;
+  ctx.fill();
+
+  // 6) Vidrio de la pantalla: reflejo del horizonte en el borde lejano.
+  const glass = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
+  glass.addColorStop(0, 'rgba(255,255,255,0.13)');
+  glass.addColorStop(0.35, 'rgba(255,255,255,0.02)');
+  glass.addColorStop(1, 'rgba(255,255,255,0)');
+  quadPath(ctx, quad);
+  ctx.fillStyle = glass;
+  ctx.fill();
+
+  // 7) Scanline que recorre la pantalla en profundidad (sensor activo).
+  ctx.save();
+  quadPath(ctx, quad);
+  ctx.clip();
+  const phase = (state.now / 2400) % 1;
+  const scanY = geo.farY + (geo.nearY - geo.farY) * phase;
+  const scanH = Math.max(4, (geo.nearY - geo.farY) * 0.07);
+  const scan = ctx.createLinearGradient(0, scanY, 0, scanY + scanH);
+  scan.addColorStop(0, `rgba(${theme.tint}, 0)`);
+  scan.addColorStop(0.5, `rgba(${theme.tint}, 0.12)`);
+  scan.addColorStop(1, `rgba(${theme.tint}, 0)`);
+  ctx.fillStyle = scan;
+  ctx.fillRect(plot.x, scanY, plot.w, scanH);
+  ctx.restore();
+
+  // 8) CANTO frontal: grosor físico de la pantalla apoyada en el piso.
+  const lip = clamp(2 + 3 * size, 2, 5);
   ctx.beginPath();
-  ctx.moveTo(fl.x, fl.y);
-  ctx.lineTo(fr.x, fr.y);
-  ctx.lineTo(br.x, br.y);
-  ctx.lineTo(bl.x, bl.y);
+  ctx.moveTo(quad.nearLeft.x, quad.nearLeft.y);
+  ctx.lineTo(quad.nearRight.x, quad.nearRight.y);
+  ctx.lineTo(quad.nearRight.x, quad.nearRight.y + lip);
+  ctx.lineTo(quad.nearLeft.x, quad.nearLeft.y + lip);
   ctx.closePath();
-  ctx.strokeStyle = bezGrad;
-  ctx.lineWidth = 1.6;
-  ctx.stroke();
+  ctx.fillStyle = `rgba(${theme.tint}, 0.30)`;
+  ctx.fill();
 
-  // 2) PANEL DINÃMICO de pie sobre el borde trasero del hueco. TamaÃ±o = score.
-  const base = proj.floorPoint(0, zF);
-  const maxW = halfW * 2 * proj.scaleAt(WELL_D_BACK) * 1.18;
-  const panelW = maxW * (WELL_SIZE_MIN + (WELL_SIZE_MAX - WELL_SIZE_MIN) * size);
-  const panelH = panelW * WELL_PANEL_H_FRAC;
-  const px = base.x - panelW / 2;
-  const py = base.y - panelH;
-
-  // Glow reactivo (intensidad crece con el tamaÃ±o â†’ refuerzo positivo).
+  // 9) BISEL con brillo: el mismo borde que tenía el visor, ahora acostado.
+  const bez = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
+  bez.addColorStop(0, theme.core);
+  bez.addColorStop(1, theme.edge);
+  quadPath(ctx, quad);
+  ctx.strokeStyle = bez;
+  ctx.lineWidth = 1.4 + 1.1 * size;
   ctx.shadowColor = theme.glow;
-  ctx.shadowBlur = 10 + 18 * size;
-  roundRectPath(ctx, px, py, panelW, panelH, Math.max(6, panelW * 0.08));
-  const frameGrad = ctx.createLinearGradient(0, py, 0, py + panelH);
-  frameGrad.addColorStop(0, theme.core);
-  frameGrad.addColorStop(1, theme.edge);
-  ctx.strokeStyle = frameGrad;
-  ctx.lineWidth = 1.5 + 1.2 * size;
+  ctx.shadowBlur = 8 + 16 * size
+    + (contactState === 'STABLE_CONTACT' ? 10 * Math.max(state.sweepPulse, 0) : 0);
   ctx.stroke();
   ctx.shadowBlur = 0;
 
-  // 3) VIDEO vivo (o pantalla apagada), recorte central del dedo.
-  const hasVideo = !!source && source.readyState >= 2 && source.videoWidth > 0;
-  roundRectPath(ctx, px, py, panelW, panelH, Math.max(6, panelW * 0.08));
-  ctx.save();
-  ctx.clip();
-  if (hasVideo) {
-    const v = source as HTMLVideoElement;
-    const side = Math.min(v.videoWidth, v.videoHeight) * 0.9;
-    const sx = (v.videoWidth - side) / 2;
-    const sy = (v.videoHeight - side) / 2;
-    ctx.globalAlpha = 0.95;
-    ctx.drawImage(v, sx, sy, side, side, px, py, panelW, panelH);
-    ctx.globalAlpha = 1;
-  } else {
-    ctx.fillStyle = 'rgba(10,12,16,0.9)';
-    ctx.fillRect(px, py, panelW, panelH);
-  }
-
-  // 3a) Tinte por estado (baÃ±a el video con el color del veredicto).
-  ctx.fillStyle = `rgba(${theme.tint}, ${0.10 + 0.14 * size})`;
-  ctx.fillRect(px, py, panelW, panelH);
-
-  // 3b) Vidrio superior (reflejo de pantalla) â€”æ„Ÿ de visor mÃ©dico.
-  const glass = ctx.createLinearGradient(0, py, 0, py + panelH * 0.45);
-  glass.addColorStop(0, 'rgba(255,255,255,0.10)');
-  glass.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = glass;
-  ctx.fillRect(px, py, panelW, panelH * 0.45);
-
-  // 3c) Scanline animada (vive incluso sin video â†’ "sensor activo").
-  const scanY = py + ((state.now / 14) % Math.max(8, panelH));
-  const scan = ctx.createLinearGradient(0, scanY - 6, 0, scanY + 6);
-  scan.addColorStop(0, 'rgba(255,255,255,0)');
-  scan.addColorStop(0.5, `rgba(${theme.tint}, 0.10)`);
-  scan.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = scan;
-  ctx.fillRect(px, scanY - 6, panelW, 12);
-  ctx.restore(); // fin clip del panel
-
-  // 4) BRACKETES de visor (4 esquinas en L, estilo cÃ¡mara mÃ©dica).
-  const bl2 = Math.max(7, panelW * 0.16);
-  const bw = 2 + size;
+  // 10) BRACKETES de visor en las 4 esquinas, alineados a los lados convergentes.
+  const bracket = (c: ProjPoint, a: ProjPoint, b: ProjPoint): void => {
+    const lenA = Math.hypot(a.x - c.x, a.y - c.y);
+    const lenB = Math.hypot(b.x - c.x, b.y - c.y);
+    if (lenA < 1 || lenB < 1) return;
+    const len = Math.min(16, Math.max(7, Math.min(lenA, lenB) * 0.22));
+    const ax = (a.x - c.x) / lenA;
+    const ay = (a.y - c.y) / lenA;
+    const bx = (b.x - c.x) / lenB;
+    const by = (b.y - c.y) / lenB;
+    ctx.moveTo(c.x + ax * len, c.y + ay * len);
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(c.x + bx * len, c.y + by * len);
+  };
+  ctx.beginPath();
+  bracket(quad.nearLeft, quad.nearRight, quad.farLeft);
+  bracket(quad.nearRight, quad.farRight, quad.nearLeft);
+  bracket(quad.farLeft, quad.farRight, quad.nearLeft);
+  bracket(quad.farRight, quad.farLeft, quad.nearRight);
   ctx.strokeStyle = theme.core;
-  ctx.lineWidth = bw;
+  ctx.lineWidth = 2 + size * 0.8;
   ctx.lineCap = 'round';
-  const corners: Array<[number, number, number, number]> = [
-    [px, py + bl2, px, py], [px, py, px + bl2, py],
-    [px + panelW - bl2, py, px + panelW, py], [px + panelW, py, px + panelW, py + bl2],
-    [px + panelW, py + panelH - bl2, px + panelW, py + panelH], [px + panelW, py + panelH, px + panelW - bl2, py + panelH],
-    [px + bl2, py + panelH, px, py + panelH], [px, py + panelH, px, py + panelH - bl2],
-  ];
-  for (const [x1, y1, x2, y2] of corners) {
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-  }
+  ctx.stroke();
 
-  // 5) PULSO al latir (STABLE): anillo expansivo desde el centro del panel.
-  if (contactState === 'STABLE_CONTACT') {
+  // 11) PULSO al latir: anillo proyectado sobre el plano de la pantalla.
+  if (contactState === 'STABLE_CONTACT' && size > 0.35) {
     const pulse = Math.max(state.sweepPulse, 0.04);
-    const cx = base.x;
-    const cy = py + panelH / 2;
+    const cz = (quad.zn + quad.zf) / 2;
+    const rPx = quad.halfW * (0.42 + 0.5 * pulse);
+    const rZ = rPx / proj.floorSpanY;
+    ctx.save();
+    quadPath(ctx, quad);
+    ctx.clip();
     ctx.beginPath();
-    ctx.arc(cx, cy, Math.min(panelW, panelH) * (0.42 + pulse * 0.22), 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(34,197,94, ${(0.28 * (1 - pulse)).toFixed(3)})`;
-    ctx.lineWidth = 1.6;
+    for (let i = 0; i <= 48; i++) {
+      const t = (i / 48) * Math.PI * 2;
+      const pt = proj.floorPoint(rPx * Math.cos(t), cz + rZ * Math.sin(t));
+      if (i === 0) ctx.moveTo(pt.x, pt.y);
+      else ctx.lineTo(pt.x, pt.y);
+    }
+    ctx.strokeStyle = `rgba(${theme.tint}, ${(0.30 * (1 - pulse)).toFixed(3)})`;
+    ctx.lineWidth = 1.5;
     ctx.stroke();
+    ctx.restore();
   }
 
-  // 6) ETIQUETA de guÃ­a sobre el panel + porcentaje de colocaciÃ³n.
-  // Guia EXACTA: el primer criterio que falla segun la evidencia fisica.
+  // 12) GUÍA exacta sobre el borde lejano + porcentaje de colocación.
   const evidence = state.props.diagnostics?.placementEvidence;
   const guideText = evidence && evidence.failing.length > 0 && size > 0.08
     ? evidence.failing[0]
     : theme.label;
-  ctx.font = `bold 9px ${FONT}`;
   ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(0,0,0,0.85)';
+  ctx.shadowBlur = 4;
+  ctx.font = `bold 9px ${FONT}`;
   ctx.fillStyle = theme.core;
-  ctx.fillText(guideText, base.x, py - 14);
+  ctx.fillText(guideText, proj.vpX, geo.farY - 20);
   ctx.font = `bold 11px ${FONT}`;
-  ctx.fillText(`${Math.round(size * 100)}%`, base.x, py - 4);
+  ctx.fillText(`${Math.round(size * 100)}%`, proj.vpX, geo.farY - 8);
+  ctx.shadowBlur = 0;
 
-  // 7) BARRA de progreso bajo el panel (micro-feedback adicional).
-  const barW = panelW * 0.72;
+  // 13) BARRA de progreso pegada al borde cercano (sobre la grilla).
+  const nearW = quad.nearRight.x - quad.nearLeft.x;
+  const barW = Math.max(24, nearW * 0.72);
   const barH = 2.6;
-  const barX = base.x - barW / 2;
-  const barY = base.y + 5;
+  const barX = proj.vpX - barW / 2;
+  const barY = quad.nearLeft.y + 7;
   ctx.fillStyle = 'rgba(255,255,255,0.10)';
   ctx.fillRect(barX, barY, barW, barH);
   ctx.fillStyle = theme.edge;

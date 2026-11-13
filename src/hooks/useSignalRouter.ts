@@ -466,20 +466,24 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         }
       } else {
         const prev = pressureVerdictRef.current;
-        const settled = contactStartedAtRef.current > 0 &&
-          nowT - contactStartedAtRef.current >= PRESSURE_FEEDBACK_SETTLE_MS;
         const sinceHaptic = nowT - lastPressureHapticAtRef.current;
         const globalOk = sinceHaptic >= PRESSURE_HAPTIC_MIN_INTERVAL_MS;
+        // El PRIMER aviso de cada estado no espera asentamiento: si el dedo está
+        // mal apoyado hay que decirlo ya (el settle de 2 s hacía que el usuario
+        // corrigiera a ciegas durante los primeros segundos). El asentamiento
+        // solo gobierna la REPATICIÓN, que sí necesita cadencia.
+        const isTransition = prev !== verdict;
+        const contactAge = contactStartedAtRef.current > 0 ? nowT - contactStartedAtRef.current : 0;
+        const settled = contactAge >= PRESSURE_FEEDBACK_SETTLE_MS;
+        const repeatable = !isTransition && settled;
         let fire = false;
         if (verdict === 'HEAVY') {
-          fire = settled && globalOk &&
-            (prev !== 'HEAVY' || sinceHaptic >= PRESSURE_HEAVY_REPEAT_MS);
+          fire = globalOk && (isTransition || (repeatable && sinceHaptic >= PRESSURE_HEAVY_REPEAT_MS));
         } else if (verdict === 'LIGHT') {
-          fire = settled && globalOk &&
-            (prev !== 'LIGHT' || sinceHaptic >= PRESSURE_LIGHT_REPEAT_MS);
+          fire = globalOk && (isTransition || (repeatable && sinceHaptic >= PRESSURE_LIGHT_REPEAT_MS));
         } else {
           // IDEAL solo confirma la transición desde un estado corregible.
-          fire = settled && globalOk && (prev === 'LIGHT' || prev === 'HEAVY');
+          fire = globalOk && isTransition && (prev === 'LIGHT' || prev === 'HEAVY');
         }
         if (fire) {
           lastPressureHapticAtRef.current = nowT;

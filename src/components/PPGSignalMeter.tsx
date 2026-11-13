@@ -26,6 +26,7 @@ import { realSignalStrength } from '@/lib/ui/waveHonesty';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
 import { Ppg3DToggle } from './Ppg3DToggle';
+import { PressureCoach } from './PressureCoach';
 
 export interface PPGSignalMeterProps {
   value: number;
@@ -429,10 +430,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       } else {
         drawECGGrid(ctx, renderState);
       }
-      // Guía de presión SIEMPRE visible (2D y 3D): bucle visual cerrado con el
-      // háptico. Lee el modelo único `placementEvidence`, no un campo paralelo.
-      drawPressureGauge(ctx, renderState);
       drawSignal(ctx, renderState);
+      // Guía de presión SIEMPRE visible (2D y 3D): bucle visual cerrado con el
+      // háptico. Va DESPUÉS de la onda — antes quedaba debajo y no se veía.
+      drawPressureGauge(ctx, renderState);
       drawAcquisitionOverlay(ctx, renderState);
       drawTrendStrip(ctx, renderState);
       drawFooter(ctx, renderState);
@@ -483,6 +484,16 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         className="absolute inset-0 w-full h-full"
       />
       <PulseIndicator showPulse={showPulse} />
+      {/* Guía de presión: tarjeta legible por encima del canvas (el canvas la
+          complementa con el gauge fino, pero no puede ser la única vía). */}
+      <PressureCoach
+        evidence={
+          diagnostics?.placementEvidence as
+            | import('@/lib/finger/fingerPlacementEvidence').FingerPlacementEvidence
+            | undefined
+        }
+        isMonitoring={isMonitoring}
+      />
       <Ppg3DToggle />
       <ActionButtons
         isMonitoring={isMonitoring}

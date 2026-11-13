@@ -38,6 +38,16 @@ export interface AdaptivePixelRoiFrame {
   effectivePixels: number;
   physiologicalPixels: number;
   sampledPixels: number;
+  /**
+   * SELLADO ÓPTICO [0..1]: fracción del área explorada ocupada por tejido del
+   * dedo (dominancia roja), sin exigir pulsatilidad. Responde "¿la yema cubre
+   * la lente?" y es la entrada de "cobertura" del modelo de presión.
+   */
+  tissueRatio: number;
+  /** DC rojo medio de los píxeles de tejido (escala 0–255 del sensor). */
+  tissueRed: number;
+  /** Fracción de píxeles de tejido que además tienen AC/DC fisiológico. */
+  perfusionRatio: number;
   roiX: number;
   roiY: number;
   roiW: number;
@@ -228,6 +238,13 @@ export class AdaptivePixelRoi {
     let underexposed = 0;
     let nonPhysiological = 0;
 
+    // Sellado óptico: tejido del dedo detectado por absorción cromática, sin
+    // depender de la AC ni de la exposición. Se acumula para todo píxel muestreado
+    // (antes de los `continue` de saturación/subexposición).
+    let tissuePixels = 0;
+    let tissueRedSum = 0;
+    let tissuePerfused = 0;
+
     let rExp = 0;
     let gExp = 0;
     let bExp = 0;
@@ -252,6 +269,19 @@ export class AdaptivePixelRoi {
         const b = data[i + 2];
         sampled++;
 
+        // Tejido del dedo: el rojo domina al promedio de verde/azul porque la
+        // hemoglobina absorbe verde y azul. Prueba independiente de la AC y de la
+        // saturación, así que un dedo bien apoyado cuenta aunque el flash sature.
+        const tissueDominance = r - (g + b) * 0.5;
+        const isTissue =
+          tissueDominance >= P.TISSUE_DOMINANCE_MIN &&
+          r >= P.TISSUE_RED_MIN &&
+          g >= P.TISSUE_GREEN_MIN;
+        if (isTissue) {
+          tissuePixels++;
+          tissueRedSum += r;
+        }
+
         if (r >= P.SATURATION_RED) {
           saturated++;
           continue;
@@ -265,6 +295,7 @@ export class AdaptivePixelRoi {
         const idx = gy * this.gridW + gx;
         const od = opticalDensity(g);
         const n = this.samples[idx];
+        if (isTissue) this.maskLevel[idx] |= 4;
         let mean = this.meanOd[idx];
         let variance = this.varOd[idx];
         if (n === 0) {
@@ -310,9 +341,10 @@ export class AdaptivePixelRoi {
           qPh += quality * wPhInst;
           wPh += wPhInst;
           physiologicalPixels++;
-          this.maskLevel[idx] = 2;
+          this.maskLevel[idx] |= 2;
+          if (isTissue) tissuePerfused++;
         } else {
-          this.maskLevel[idx] = 1;
+          this.maskLevel[idx] |= 1;
           if (stable) nonPhysiological++;
         }
       }
@@ -344,6 +376,11 @@ export class AdaptivePixelRoi {
       ? physiologicalPixels
       : exposurePixels;
     const coverageRatio = sampled > 0 ? effectivePixels / sampled : 0;
+    // Sellado óptico: "¿cuánta lente cubre el dedo?" sin exigir pulso.
+    const tissueRatio = sampled > 0 ? tissuePixels / sampled : 0;
+    const tissueRed = tissuePixels > 0 ? tissueRedSum / tissuePixels : 0;
+    // De los píxeles de tejido, cuántos además están perfundidos (pulso real).
+    const perfusionRatio = tissuePixels > 0 ? tissuePerfused / tissuePixels : 0;
     const fingerRegionCount =
       sampled > 0
         ? Math.min(25, Math.floor((effectivePixels * 25) / sampled))
@@ -360,8 +397,8 @@ export class AdaptivePixelRoi {
 
     for (let gy = gy0; gy <= gy1; gy++) {
       for (let gx = gx0; gx <= gx1; gx++) {
-        const idx = gy * this.gridW + gx;
-        if (this.maskLevel[idx] !== maskLevelValue) continue;
+      const idx = gy * this.gridW + gx;
+      if ((this.maskLevel[idx] & maskLevelValue) === 0) continue;
         this.effectiveMask[idx] = 1;
         const x = gx * s;
         const y = gy * s;
@@ -476,6 +513,9 @@ export class AdaptivePixelRoi {
       effectivePixels,
       physiologicalPixels,
       sampledPixels: sampled,
+      tissueRatio,
+      tissueRed,
+      perfusionRatio,
       roiX,
       roiY,
       roiW,

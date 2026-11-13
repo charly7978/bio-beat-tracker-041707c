@@ -299,6 +299,22 @@ export const VITAL_THRESHOLDS = {
     SATURATION_RED: 250,
     /** R ≤ este valor = píxel subexpuesto (sin información útil). */
     UNDEREXPOSED_RED: 15,
+    /**
+     * SELLADO ÓPTICO POR TEJIDO (independiente de la AC).
+     *
+     * Un píxel es "tejido del dedo" cuando el rojo domina al promedio de verde y
+     * azul (la hemoglobina absorbe verde/azul y deja pasar rojo). Esta prueba NO
+     * depende de la pulsación ni de la exposición: un dedo que cubre la lente da
+     * sellado alto aunque el sensor sature, y una pared blanca da sellado ≈ 0
+     * aunque esté perfectamente expuesta.
+     *
+     * Sin esta separación, "cobertura" se confundía con "píxeles con AC/DC
+     * fisiológico" → con el flash encendido el rojo satura, el filtro AC/DC
+     * colapsa y la cobertura parecía baja con el dedo bien apoyado.
+     */
+    TISSUE_DOMINANCE_MIN: 8,
+    TISSUE_RED_MIN: 24,
+    TISSUE_GREEN_MIN: 10,
     /** Límite inferior del AC/DC fisiológico por píxel (0.1%). */
     AC_DC_MIN: 0.001,
     /** Límite superior del AC/DC fisiológico por píxel (3%). */
@@ -535,93 +551,102 @@ export const VITAL_THRESHOLDS = {
    * `fingerPlacementEvidence.ts` solo agrega ubicación/cobertura/movimiento.
    */
   PRESSURE: {
-    /** Cobertura mínima del ROI para considerar que hay apoyo del dedo. */
-    COVER_MIN: 0.12,
-    /** Cobertura buena: la yema cubre la lente. */
-    COVER_GOOD: 0.62,
-    /** Cobertura sellada: descarta fuga de luz como causa del pulso débil. */
-    COVER_SEALED: 0.80,
+    /*
+     * ── SELLADO (cobertura de lente por tejido) ──────────────────────────────
+     * Se mide como fracción de píxeles del área explorada que son tejido del
+     * dedo, EXCLUYENDO el filtro AC/DC (ver PIXEL_ROI.TISSUE_*). Responde a
+     * "¿la yema cubre la lente?" sin confundirse con la exposición.
+     */
+    /** Sellar por debajo de esto = no hay apoyo del dedo. */
+    COVER_MIN: 0.10,
+    /** Lente cubierta por la yema. */
+    COVER_GOOD: 0.42,
+    /** Sellado completo: descarta fuga de luz como causa de pulso débil. */
+    COVER_SEALED: 0.68,
 
+    /*
+     * ── PULSATILIDAD (AC/DC) ─────────────────────────────────────────────────
+     * Responde a "¿hay flujo sanguíneo?" y es el eje del colapso capilar.
+     */
     /** PI RAW (AC/DC) que representa pulso pleno en este sensor. */
     PI_REF: 0.004,
-    /** Mejor PI reciente mínimo para poder diagnosticar colapso relativo. */
-    AC_PEAK_MIN_PI: 0.0018,
-    /** Mejora relativa mínima para mover el PI de referencia (anti-deriva). */
-    PI_PEAK_MARGIN: 0.02,
+    /** Por debajo de este PI no hay pulso útil (ruido del sensor). */
+    PI_PULSELESS: 0.0006,
+    /** PI a partir del cual el pulso se considera pleno. */
+    PI_GOOD: 0.0022,
     /** PI normalizado por debajo del cual el pulso está plano. */
     PULSE_FLAT: 0.18,
     /** PI normalizado mínimo para considerar apoyo óptimo. */
-    PULSE_OK: 0.32,
-    /** CV temporal del rojo que marca el piso de pulsatilidad. */
-    CV_FLAT_REF: 0.015,
-
-    /** Suavizados de evidencia (misma base temporal que el pipeline). */
-    EMA_FAST: 0.22,
-    EMA_SLOW: 0.012,
-    /** EMA del grado continuo de presión (cursor del gauge). */
-    SCORE_ALPHA: 0.18,
-
-    /**
-     * Proxy de fuerza de contacto (eje DC, monótono según Teng 2004 y
-     * Sensors 2024). Se normaliza contra el recorrido dinámico del episodio:
-     * 30% del DC mínimo, con piso absoluto para no amplificar ruido.
-     */
-    DC_DYNAMIC_SPAN: 0.30,
-    DC_MIN_SPAN: 12,
-    /** DC mínimo del episodio para dar por válido el baseline de fuerza. */
-    DC_MIN_BASELINE: 10,
-    /** Piso del DC de referencia para comparar desplazamientos relativos. */
-    DC_REF_FLOOR: 24,
-    /** Desplazamiento relativo del DC (sobre el DC del mejor PI) que define
-     *  el lado del óptimo en la curva en U invertida. */
-    DC_DISPLACE_MIN: 0.08,
-    /** Subida relativa de DC (fracción del DC lento) que evidencia fuerza. */
-    DC_RISE_MIN: 0.20,
-    /** DC por encima del mínimo del episodio: presión sostenida. */
-    DC_HIGH_MIN: 0.15,
-    /** Subida relativa de DC que satura la evidencia de fuerza. */
-    DC_RISE_FULL: 0.10,
-
-    /** Caída de PI que aún cae dentro del plateau óptimo (histeresis fina). */
+    PULSE_OK: 0.40,
+    /** Mejor PI reciente mínimo para poder diagnosticar colapso relativo. */
+    AC_PEAK_MIN_PI: 0.0016,
+    /** Mejora relativa mínima para mover el PI de referencia (anti-deriva). */
+    PI_PEAK_MARGIN: 0.02,
+    /** Fracción del PI de referencia que confirma la salida de colapso. */
+    PI_RECOVER: 0.80,
+    /** Caída de PI que aún cae dentro del plateau óptimo (histéresis fina). */
     PI_DEFICIT_OPTIMAL: 0.15,
     /** Caída de PI que ya justifica pedir más apoyo. */
     PI_DEFICIT_LIGHT: 0.25,
-    /** Fracción del PI de referencia que confirma la salida de colapso. */
-    PI_RECOVER: 0.85,
+    /** CV temporal del rojo que marca el piso de pulsatilidad. */
+    CV_FLAT_REF: 0.012,
 
-    /**
-     * Índice de blanqueo (0..1). La AC colapsada es el signo primario; el DC y
-     * la planitud del CV solo lo confirman (evita confundir baja perfusión por
-     * frío con isquemia por presión).
+    /*
+     * ── DC = FUERZA DE CONTACTO (Teng 2004, Sensors 2024) ───────────────────
+     * El DC sube de forma monótona con la fuerza. Se compara contra el DC que
+     * había cuando el dedo selló la lente por primera vez en el episodio
+     * (`dcRef`), no contra el mínimo global: así la deriva del AE antes del
+     * contacto no falsea la lectura de fuerza.
      */
-    BLANCH_ENTER: 0.50,
-    BLANCH_EXIT: 0.30,
-    BLANCH_AC_WEIGHT: 0.65,
-    BLANCH_FLAT_WEIGHT: 0.15,
+    DC_DYNAMIC_SPAN: 0.30,
+    DC_MIN_SPAN: 12,
+    DC_MIN_BASELINE: 12,
+    DC_REF_FLOOR: 24,
+    DC_DISPLACE_MIN: 0.08,
+    DC_RISE_MIN: 0.18,
+    DC_RISE_FULL: 0.10,
+    DC_HIGH_MIN: 0.14,
+
+    /*
+     * ── BLANQUEO MICROVASCULAR ──────────────────────────────────────────────
+     * Índice [0..1]. El colapso de la AC es el signo primario; el DC alto y la
+     * planitud del CV solo lo confirman. Exige sellado suficiente: con fuga de
+     * luz la AC baja por falta de acoplamiento, no por isquemia.
+     */
+    BLANCH_ENTER: 0.55,
+    BLANCH_EXIT: 0.32,
+    BLANCH_AC_WEIGHT: 0.62,
+    BLANCH_FLAT_WEIGHT: 0.18,
     BLANCH_DC_WEIGHT: 0.20,
-    /** Cobertura a partir de la cual el blanqueo es evaluable (sin fuga). */
-    BLANCH_COUPLING_MIN: 0.85,
+    /** Sellado mínimo para que el blanqueo sea evaluable. */
+    BLANCH_COUPLING_MIN: 0.55,
 
-    /** Frames de contacto antes de diagnosticar presión (AE asentado). */
-    HEAVY_WARMUP_FRAMES: 15,
-    /** Frames consecutivos para confirmar HEAVY (anti-parpadeo). */
-    HEAVY_ENTER_FRAMES: 6,
-    /** Frames consecutivos para confirmar cualquier otro veredicto. */
-    VERDICT_CONFIRM_FRAMES: 8,
-    /** Frames mínimos de evidencia antes de afirmar un veredicto. */
-    MIN_EVIDENCE_FRAMES: 12,
+    /*
+     * ── CONFIRMACIÓN TEMPORAL ───────────────────────────────────────────────
+     * La respuesta debe ser rápida: el usuario está corrigiendo en tiempo real.
+     */
+    MIN_EVIDENCE_FRAMES: 10,
+    HEAVY_WARMUP_FRAMES: 12,
+    HEAVY_ENTER_FRAMES: 5,
+    VERDICT_CONFIRM_FRAMES: 6,
 
-    /** Contacto mínimo antes de habilitar el háptico de presión (AE asentado). */
-    FEEDBACK_SETTLE_MS: 2000,
-    /** Repetición del aviso háptico mientras persiste presión alta. */
-    HEAVY_REPEAT_MS: 5000,
-    /** Repetición del aviso háptico mientras persiste presión baja. */
-    LIGHT_REPEAT_MS: 12000,
-    /** Intervalo mínimo entre avisos hápticos de presión (anti-rebote global). */
-    HAPTIC_MIN_INTERVAL_MS: 900,
-    /** Grado a partir del cual el patrón háptico se considera severo. */
-    HAPTIC_SEVERE_FRACTION: 0.80,
-    /** Frames de contacto perdido antes de considerar salida real. */
+    /** Suavizados de evidencia. */
+    EMA_FAST: 0.30,
+    EMA_SLOW: 0.02,
+    /** EMA del grado continuo de presión (cursor del gauge). */
+    SCORE_ALPHA: 0.25,
+
+    /*
+     * ── GUÍA Y HÁPTICO ──────────────────────────────────────────────────────
+     * El primer aviso no espera asentamiento: si el dedo está mal apoyado hay
+     * que decirlo ya. La repetición sí mantiene cadencia para no saturar.
+     */
+    GUIDANCE_MIN_CONFIDENCE: 0.30,
+    FEEDBACK_SETTLE_MS: 900,
+    HEAVY_REPEAT_MS: 3500,
+    LIGHT_REPEAT_MS: 9000,
+    HAPTIC_MIN_INTERVAL_MS: 700,
+    HAPTIC_SEVERE_FRACTION: 0.75,
     CONTACT_LOST_FRAMES: 6,
   },
 

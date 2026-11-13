@@ -121,25 +121,28 @@ export function pressureHapticCue(
 
   if (verdict === 'LIGHT') {
     const severity = clamp01((0.5 - score) / 0.5);
-    const pulse = Math.round(24 + 26 * severity);
+    // Doble toque: se distingue del "mantén" sin necesidad de mirar la pantalla.
+    const pulse = Math.round(28 + 30 * severity);
     return {
       verdict,
       severity,
-      webPattern: [0, pulse, 70, pulse],
+      webPattern: [0, pulse, 90, pulse],
       nativeStyle: ImpactStyle.Medium,
-      nativeRepeats: severity >= severe ? 2 : 1,
+      nativeRepeats: severity >= severe ? 3 : 2,
     };
   }
 
   if (verdict === 'HEAVY') {
     const severity = clamp01((score - 0.5) / 0.5);
-    const pulse = Math.round(35 + 45 * severity);
+    // Patrón largo-corto-largo: imposible de confundir con el latido ni con el
+    // "presiona más". Escala en duración y en número de repeticiones.
+    const pulse = Math.round(55 + 65 * severity);
     return {
       verdict,
       severity,
-      webPattern: [0, pulse, 60, pulse, 60, pulse],
+      webPattern: [0, pulse, 70, Math.round(pulse * 0.45), 70, pulse],
       nativeStyle: ImpactStyle.Heavy,
-      nativeRepeats: 2 + Math.round(severity),
+      nativeRepeats: 2 + Math.round(severity * 2),
     };
   }
 
