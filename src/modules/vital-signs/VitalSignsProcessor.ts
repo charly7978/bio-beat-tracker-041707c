@@ -250,7 +250,6 @@ export class VitalSignsProcessor {
         ? morphologyValue
         : signalValue;
     })();
-    this.updateRespirationWindow(signalValue, respirationSample, sampleTimestampMs);
     this.updateMorphologyWindow(morphSample, morphologyBatch);
 
     // Canal 4 (LP respiratorio): si disponible, usa señal pre-filtrada a banda respiratoria;
@@ -261,7 +260,7 @@ export class VitalSignsProcessor {
         ? fromSplitter
         : signalValue;
     })();
-    // La serie respiratoria ya se actualizó con timestamp y frecuencia observada.
+    this.updateRespirationWindow(signalValue, respirationSample, sampleTimestampMs);
 
     // Guarda los RR para la modalidad RIFV de respiración (getFormattedResult no
     // recibe rrData en su firma).
