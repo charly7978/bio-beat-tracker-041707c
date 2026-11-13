@@ -590,6 +590,14 @@ export const VITAL_THRESHOLDS = {
     PI_DEFICIT_LIGHT: 0.25,
     /** CV temporal del rojo que marca el piso de pulsatilidad. */
     CV_FLAT_REF: 0.012,
+    /**
+     * Margen relativo para declarar TENDENCIA del PI (subiendo/bajando).
+     * Un dedo vasoconstrigido que se recalienta bajo el flash ve subir su PI de
+     * forma monótona; un dedo aplastado no. Es el segundo signo que separa
+     * frío/estrés de presión mecánica (Sci Rep 2020;10:6741: la vasoconstricción
+     * baja la AC con el DC estable; la presión mecánica la baja con el DC arriba).
+     */
+    PI_TREND_MARGIN: 0.06,
 
     /*
      * ── DC = FUERZA DE CONTACTO (Teng 2004, Sensors 2024) ───────────────────

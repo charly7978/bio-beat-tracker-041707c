@@ -51,12 +51,28 @@ const ACCENTS: Record<string, Accent> = {
     bar: 'bg-emerald-500',
     glow: 'shadow-[0_0_24px_-6px_rgba(34,197,94,0.7)]',
   },
-  REPOSITION: {
+  WARM: {
+    // Vasoconstricción: el dedo está frío o hay tono simpático. No es un problema
+    // de presión, así que no se usa ámbar (que dice "aprieta").
     border: 'border-sky-500/60',
-    bg: 'bg-sky-950/80',
+    bg: 'bg-sky-950/85',
     text: 'text-sky-300',
-    bar: 'bg-sky-500',
-    glow: 'shadow-[0_0_24px_-6px_rgba(56,189,248,0.7)]',
+    bar: 'bg-sky-400',
+    glow: 'shadow-[0_0_24px_-6px_rgba(56,189,248,0.6)]',
+  },
+  REPOSITION: {
+    border: 'border-violet-500/60',
+    bg: 'bg-violet-950/85',
+    text: 'text-violet-300',
+    bar: 'bg-violet-400',
+    glow: 'shadow-[0_0_24px_-6px_rgba(167,139,250,0.6)]',
+  },
+  CENTER: {
+    border: 'border-violet-500/60',
+    bg: 'bg-violet-950/85',
+    text: 'text-violet-300',
+    bar: 'bg-violet-400',
+    glow: 'shadow-[0_0_24px_-6px_rgba(167,139,250,0.6)]',
   },
   WAIT: {
     border: 'border-slate-600/60',

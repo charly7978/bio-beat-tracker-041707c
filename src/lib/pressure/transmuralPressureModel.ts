@@ -1,9 +1,15 @@
 /**
  * MODELO FISIOLÓGICO DE PRESIÓN TRANSMURAL (microvascular blanching).
  *
- * Este módulo es la ÚNICA implementación del razonamiento de presión. Es puro
+ * Este módulo es la ÚNICA implementación del razonamiento de PRESIÓN. Es puro
  * (sin React, sin DOM, sin temporizadores) para poder verificarse en tests y
  * ejecutarse dentro del Worker de señal.
+ *
+ * NO decide instrucciones ni genera mensajes. Entrega las magnitudes físicas
+ * medidas (sellado, pulsatilidad, blanqueo, tendencia del PI, ratio de DC) para
+ * que el motor de etiología (`signalEtiology.ts`) razone la causa. Mantener la
+ * física y la inferencia en módulos separados evita que la decisión se
+ * duplique y hace que cada una sea verificable por separado.
  *
  * ── Fisiología ──────────────────────────────────────────────────────────────
  * La presión transmural de un vaso es Pt = Pa − Pe (presión arterial interna
@@ -12,16 +18,11 @@
  * (blanching) y la AC cae aunque el dedo siga apoyado.
  *
  * ── Las DOS observaciones, y por qué están separadas ────────────────────────
- * El error de diseño que hacía que el veredicto fuera arbitrario era medir una
- * sola cosa con dos nombres. "Cobertura" se alimentaba de los píxeles que
- * pasaban el filtro AC/DC, así que con el flash encendido y el rojo saturado el
- * filtro colapsaba y el modelo veía "poco dedo" con el dedo bien apoyado. La
- * física exige separar:
- *
  *  1. SELLADO  (sealRatio)  → "¿la yema cubre la lente?"
  *     Se mide por absorción cromática (el rojo domina al promedio verde/azul),
- *     SIN exigir pulso ni exposición correcta. Es la variable de la FUERZA
- *     aplicada en el rango de contacto útil.
+ *     SIN exigir pulso ni exposición correcta. Es robusto al flash y a la
+ *     saturación, que era lo que hacía que "cobertura" se confundiera con
+ *     "píxeles con AC/DC fisiológico".
  *
  *  2. PERFUSIÓN (perfusionIndex = AC/DC) → "¿hay flujo sanguíneo?"
  *     Crece hasta un máximo y luego cae. Su colapso con sellado alto y DC alto
@@ -34,19 +35,17 @@
  *
  * ── Anclas publicadas ───────────────────────────────────────────────────────
  *  1. Teng & Zhang, Physiol. Meas. 25(5):1323–1335 (2004) — 15 sujetos,
- *     0.2–1.8 N: DC ↑ monótono; AC y AC/DC ↑ hasta un máximo (0.2–1.0 N; la
- *     mayoría en 0.2–0.4 N) y después ↓. DOI 10.1088/0967-3334/25/5/020.
- *  2. May, Mejía-Mejía et al., Sensors 21(24):8421 (2021) — phantom tejido-vaso:
- *     óptimo de SNR entre 35.1 y 48.1 mmHg; por encima cae la amplitud.
- *     DOI 10.3390/s21248421 · PMID 34960512.
+ *     0.2–1.8 N: DC sube monótono; AC y AC/DC suben hasta un máximo (0.2–1.0 N;
+ *     la mayoría en 0.2–0.4 N) y después bajan. DOI 10.1088/0967-3334/25/5/020.
+ *  2. May, Mejía-Mejía et al., Sensors 21(24):8421 (2021) — fantasma
+ *     tejido-vaso: óptimo de SNR entre 35.1 y 48.1 mmHg; por encima cae la
+ *     amplitud. DOI 10.3390/s21248421 · PMID 34960512.
  *  3. Biomed. Eng. Lett. 44 (2024) — 20–30 mmHg (leve) hasta la DBP da los
  *     mejores índices; por encima de la MAP aparece sobrenormalización.
- *     DOI 10.1016/j.bea.2024.100123.
  *  4. Sensors 24(9):2692 (2024) — el DC correlaciona con la fuerza de contacto
  *     y hay histéresis entre carga y descarga. DOI 10.3390/s24092692.
  *  5. IEEE TIM 62 (2023), tonometría MW-PPG — Pt = Pa − Pe y colapso
  *     progresivo de capilares/arteriolas superficiales al subir Pe.
- *     DOI 10.1109/TIM.2023.3293873.
  *  6. Appl. Sci. 14(13):5704 (2024) — SQI óptimo con fuerza normalizada
  *     0.2–0.4; 0.4–0.6 captura morfología más compleja. DOI 10.3390/app14135704.
  *
@@ -55,9 +54,9 @@
  * 0.5 = óptimo (Pt ≈ 0), 1 = presión excesiva con colapso. No es una presión
  * absoluta: es un índice relativo del estado del lecho capilar.
  *
- * `state` añade histéresis (entrar/salir de HEAVY exige evidencia sostenida)
- * y `guidance` entrega la instrucción exacta que la UI y el háptico deben
- * mostrar, para que la guía no se reinvente en cada capa.
+ * `state` añade histéresis (entrar/salir de HEAVY exige evidencia sostenida).
+ * `piTrend`, `dcRatio` y `cvRatio` son los signos que el motor de inferencia
+ * necesita para separar vasoconstricción (frío/estrés) de presión mecánica.
  */
 
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
@@ -67,10 +66,6 @@ const P = VITAL_THRESHOLDS.PRESSURE;
 /** El movimiento degrada pero no anula; por encima de esto la señal no vale. */
 const MOTION_BAD = 0.45;
 const MOTION_GOOD_MIN = 0.40;
-
-/** Fracción mínima de píxeles de tejido que deben estar perfundidos: se usa
- *  solo como contexto de guía, nunca para decidir el blanqueo. */
-const PERFUSED_FLOOR = 0.22;
 
 export type TransmuralState = 'NONE' | 'LIGHT' | 'IDEAL' | 'HEAVY';
 export type TransmuralAxis = 'UNKNOWN' | 'UNDER' | 'OPTIMAL' | 'OVER';
@@ -83,14 +78,6 @@ export type TransmuralReason =
   | 'UNDER'
   | 'OPTIMAL'
   | 'OVER';
-
-/** Instrucción concreta para el usuario. La UI no inventa texto: lo recibe. */
-export type TransmuralAction =
-  | 'WAIT'
-  | 'PRESS_MORE'
-  | 'HOLD'
-  | 'RELEASE'
-  | 'REPOSITION';
 
 export interface TransmuralSample {
   /** Sellado óptico [0..1]: fracción del área explorada cubierta por tejido. */
@@ -105,7 +92,8 @@ export interface TransmuralSample {
   roiRedCv: number;
   /**
    * Fracción de píxeles de tejido que además están perfundidos [0..1].
-   * Opcional: si no se informa, el blanqueo se evalúa solo con el sellado.
+   * Informativo: el modelo no decide con él (la isquemia total da 0 y debe
+   * seguir siendo detectable). Lo consume el motor de etiología.
    */
   perfusedFraction?: number;
 }
@@ -141,20 +129,15 @@ export interface TransmuralReading {
   hasReference: boolean;
   /** Motivo del veredicto. */
   reason: TransmuralReason;
-  /** Instrucción concreta para el usuario. */
-  guidance: TransmuralGuidance;
-}
-
-export interface TransmuralGuidance {
-  action: TransmuralAction;
-  /** Titular corto, en mayúsculas, para el banner. */
-  headline: string;
-  /** Explicación breve del porqué (evidencia, no adivinación). */
-  detail: string;
-  /** Cercanía al óptimo [0..1]: 1 = Pt ≈ 0. */
-  progress: number;
-  /** Confianza del veredicto [0..1]. */
-  confidence: number;
+  /**
+   * Tendencia del PI: +1 subiendo (recalentamiento del dedo), -1 bajando
+   * (colapso), 0 estable. Segundo signo del discriminador frío/presión.
+   */
+  piTrend: -1 | 0 | 1;
+  /** DC actual / DC del punto de mejor pulso del propio dedo. */
+  dcRatio: number;
+  /** CV temporal normalizado contra el piso fisiológico [0..1]. */
+  cvRatio: number;
 }
 
 export interface TransmuralModelState {
@@ -164,12 +147,14 @@ export interface TransmuralModelState {
   dcFast: number;
   dcSlow: number;
   dcMin: number;
-  /** DC lento cuando el dedo selló la lente por primera vez en el episodio. */
+  /** DC cuando el dedo selló la lente por primera vez en el episodio. */
   dcRef: number;
-  /** DC lento en el instante del mejor PI del episodio. */
+  /** DC en el instante del mejor PI del episodio. */
   dcAtPeak: number;
   cv: number;
   piFast: number;
+  /** EMA lenta del PI: referencia de tendencia (recalentamiento vs colapso). */
+  piSlow: number;
   /** Mejor PI del episodio (referencia de Pt ≈ 0). */
   piPeak: number;
   motion: number;
@@ -203,6 +188,7 @@ export function createTransmuralState(): TransmuralModelState {
     dcAtPeak: 0,
     cv: 0,
     piFast: 0,
+    piSlow: 0,
     piPeak: 0,
     motion: 0,
     lastFraction: 0.5,
@@ -225,6 +211,7 @@ export function resetTransmuralState(state: TransmuralModelState): void {
   state.dcAtPeak = 0;
   state.cv = 0;
   state.piFast = 0;
+  state.piSlow = 0;
   state.piPeak = 0;
   state.motion = 0;
   state.lastFraction = 0.5;
@@ -289,10 +276,6 @@ export function observeTransmuralPressure(
   const pi = Math.max(0, sample.perfusionIndex);
   const seal = clamp01(sample.sealRatio);
   const motionScore = clamp01(sample.motionScore);
-  const perfusedFraction =
-    typeof sample.perfusedFraction === 'number' && Number.isFinite(sample.perfusedFraction)
-      ? clamp01(sample.perfusedFraction)
-      : null;
 
   if (state.frame === 1) {
     state.seal = seal;
@@ -302,6 +285,7 @@ export function observeTransmuralPressure(
     state.dcAtPeak = dc;
     state.cv = cv;
     state.piFast = pi;
+    state.piSlow = pi;
     state.piPeak = pi;
     state.motion = 1 - clamp01(motionScore / MOTION_BAD);
   } else {
@@ -312,6 +296,10 @@ export function observeTransmuralPressure(
     state.dcSlow += (dc - state.dcSlow) * aSlow;
     state.cv += (cv - state.cv) * aFast;
     state.piFast += (pi - state.piFast) * aFast;
+    // EMA lenta del PI: referencia para la TENDENCIA. Un dedo vasoconstrigido
+    // que se recalienta bajo el flash ve subir su PI de forma monótona; un dedo
+    // aplastado no. Es el segundo signo que separa frío de presión mecánica.
+    state.piSlow += (pi - state.piSlow) * aSlow;
     const motionInst = 1 - clamp01(motionScore / MOTION_BAD);
     state.motion += (motionInst - state.motion) * aFast;
     if (dc < state.dcMin || state.dcMin === 0) state.dcMin = dc;
@@ -322,8 +310,8 @@ export function observeTransmuralPressure(
 
   // El sellado fija el DC de referencia del episodio: es el punto de "dedo
   // apoyado sin fuerza extra". Se ancla al DC RÁPIDO del instante en que la
-  // lente se cubre — si se usara el EMA lento arrastraría el valor oscuro
-  // previo al contacto y cualquier apoyo posterior parecería presión excesiva.
+  // lente se cubre: si se usara el EMA lento arrastraría el valor oscuro previo
+  // al contacto y cualquier apoyo posterior parecería presión excesiva.
   if (!state.sealLearned && state.seal >= P.COVER_GOOD && state.dcFast > 0) {
     state.dcRef = state.dcFast;
     state.sealLearned = true;
@@ -397,7 +385,7 @@ export function observeTransmuralPressure(
   // ── Blanqueo microvascular ────────────────────────────────────────────────
   // Requiere evidencia de FUERZA (DC subiendo o alto). Sin ese requisito, un
   // dedo frío con AC baja y DC normal se leería como "blanqueo 74%" en el gauge.
-  // Y con él, el caso extremo —isquemia total, cero píxeles perfundidos— sigue
+  // Y con él, el caso extremo (isquemia total, cero píxeles perfundidos) sigue
   // siendo detectable, porque el DC delata la fuerza: atar el blanqueo a la
   // fracción perfundida lo apagaba justo cuando el colapso era completo.
   const couplingFactor = sealNorm;
@@ -530,7 +518,7 @@ export function observeTransmuralPressure(
 
   // ── Motivo ────────────────────────────────────────────────────────────────
   // Se deriva del veredicto ASENTADO, no del candidato instantáneo. Derivarlo del
-  // candidato hacía que el texto de guía cambiara 3 veces mientras la histéresis
+  // candidato hacía que la guía cambiara 3 veces mientras la histéresis
   // confirmaba un solo estado: el usuario veía "presiona más" → "mantén" →
   // "suelta" en menos de medio segundo, sin que nada real hubiera cambiado.
   let reason: TransmuralReason;
@@ -555,17 +543,17 @@ export function observeTransmuralPressure(
     0.20 * (hasReference ? 1 : 0),
   );
 
-  const guidance = buildGuidance({
-    reason,
-    state: state.state,
-    action: axis,
-    seal,
-    sealNorm,
-    pulsatility,
-    blanching,
-    confidence,
-    perfusedOk: perfusedFraction === null || perfusedFraction >= PERFUSED_FLOOR,
-  });
+  // ── Signos para el motor de inferencia ────────────────────────────────────
+  // No se decide aquí ninguna instrucción: se exponen los tres signos que la
+  // etiología necesita para razonar.
+  const dcRatio = dcBaselineValid ? state.dcFast / Math.max(1e-6, dcBaseline) : 1;
+  const cvRatio = clamp01(state.cv / Math.max(1e-6, P.CV_FLAT_REF));
+  const piTrend: -1 | 0 | 1 =
+    state.piFast > state.piSlow * (1 + P.PI_TREND_MARGIN)
+      ? 1
+      : state.piFast < state.piSlow * (1 - P.PI_TREND_MARGIN)
+        ? -1
+        : 0;
 
   return {
     state: state.state,
@@ -583,111 +571,8 @@ export function observeTransmuralPressure(
     dcTrend,
     hasReference,
     reason,
-    guidance,
+    piTrend,
+    dcRatio,
+    cvRatio,
   };
-}
-
-/**
- * Traduce el estado medido a una instrucción concreta. Vive aquí (y no en la
- * UI) para que el texto que ve el usuario, el patrón háptico y el color del
- * gauge sean la MISMA decisión, imposible de contradecir entre sí.
- */
-function buildGuidance(input: {
-  reason: TransmuralReason;
-  state: TransmuralState;
-  action: TransmuralAxis;
-  seal: number;
-  sealNorm: number;
-  pulsatility: number;
-  blanching: number;
-  confidence: number;
-  perfusedOk: boolean;
-}): TransmuralGuidance {
-  const progress = clamp01(
-    input.state === 'HEAVY'
-      ? 1 - input.blanching
-      : input.state === 'LIGHT'
-        ? input.sealNorm * 0.5 + clamp01(input.pulsatility / Math.max(1e-6, P.PULSE_OK)) * 0.5
-        : input.state === 'IDEAL'
-          ? 0.85 + 0.15 * clamp01(input.pulsatility)
-          : 0.35,
-  );
-
-  const base = { progress, confidence: input.confidence };
-
-  switch (input.reason) {
-    case 'WARMUP':
-      return {
-        ...base,
-        action: 'WAIT',
-        headline: 'AJUSTANDO LA CÁMARA',
-        detail: 'Estabilizando exposición. Apoya el dedo sin moverlo.',
-      };
-    case 'NO_CONTACT':
-      return {
-        ...base,
-        action: 'REPOSITION',
-        headline: 'APOYA EL DEDO EN LA LENTE',
-        detail: 'No se detecta tejido cubriendo la lente. El flash debe quedar tapado por la yema.',
-      };
-    case 'MOTION':
-      return {
-        ...base,
-        action: 'WAIT',
-        headline: 'NO TE MUEVAS',
-        detail: 'El movimiento altera la lectura. Sostén el dedo quieto un instante.',
-      };
-    case 'NO_REFERENCE':
-      return {
-        ...base,
-        action: 'PRESS_MORE',
-        headline: 'PRESIONA UN POCO MÁS',
-        detail: 'La lente está cubierta pero el pulso todavía no es aprovechable. Aumenta el apoyo de forma suave y constante.',
-      };
-    case 'SETTLING':
-      // El estado aún no está confirmado: no se afirma ni se pide corregir.
-      return {
-        ...base,
-        action: 'WAIT',
-        headline: 'AJUSTANDO LA PRESIÓN',
-        detail: 'La señal todavía no permite confirmar la presión. Mantén el dedo quieto un instante.',
-      };
-    case 'UNDER':
-      return input.seal < P.COVER_GOOD
-        ? {
-          ...base,
-          action: 'PRESS_MORE',
-          headline: 'PRESIONA UN POCO MÁS',
-          detail: input.seal < P.COVER_SEALED
-            ? 'La yema no cubre toda la lente: entra luz de la habitación. Apoya el centro del dedo.'
-            : 'La yema no cubre toda la lente. Apoya el centro del dedo sobre el cristal.',
-        }
-        : {
-          ...base,
-          action: 'PRESS_MORE',
-          headline: 'PRESIONA UN POCO MÁS',
-          detail: !input.perfusedOk
-            ? 'El tejido apenas tiene riego. Puede ser un dedo frío: caliéntalo o apoya un poco más.'
-            : 'El contacto es correcto pero el pulso es débil. Aumenta la presión despacio.',
-        };
-    case 'OVER':
-      return {
-        ...base,
-        action: 'RELEASE',
-        headline: input.state === 'HEAVY' ? 'SUELTA UN POCO EL DEDO' : 'PRESIONAS DE MÁS',
-        detail: !input.perfusedOk
-          ? 'El riego ha desaparecido del lecho capilar: la presión es excesiva. Afloja de inmediato.'
-          : input.blanching > 0.7
-            ? 'El flujo sanguíneo se está cortando (los capilares se colapsan). Relaja la presión.'
-            : 'La presión excede la del lecho capilar. Afloja hasta notar el pulso otra vez.',
-      };
-    case 'OPTIMAL':
-    default:
-      return {
-        ...base,
-        action: 'HOLD',
-        headline: 'PRESIÓN ÓPTIMA · MANTÉN',
-        detail: 'El pulso tiene su amplitud máxima. No cambies la presión ni muevas el dedo.',
-      };
-  }
 }

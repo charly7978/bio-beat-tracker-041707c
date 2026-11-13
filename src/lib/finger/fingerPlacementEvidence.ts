@@ -22,18 +22,32 @@
 
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import {
+  inferSignalEtiology,
+  type CaptureCondition,
+  type SignalAction,
+  type SignalEtiology,
+} from '@/lib/pressure/signalEtiology';
+import {
   createTransmuralState,
   observeTransmuralPressure,
   resetTransmuralState,
   type TransmuralAxis,
-  type TransmuralGuidance,
   type TransmuralModelState,
   type TransmuralState,
 } from '@/lib/pressure/transmuralPressureModel';
 
 export type PressureVerdict = TransmuralState;
 export type PlacementVerdict = 'NO_FINGER' | 'EDGE' | 'OFF_CENTER' | 'CENTERED';
-export type { TransmuralAction, TransmuralGuidance } from '@/lib/pressure/transmuralPressureModel';
+export type { SignalAction as TransmuralAction, SignalEtiology };
+
+/** Guía que consume la capa de presentación. */
+export interface TransmuralGuidance {
+  action: SignalAction;
+  headline: string;
+  detail: string;
+  progress: number;
+  confidence: number;
+}
 
 export interface FingerPlacementEvidence {
   score: number;
@@ -55,6 +69,8 @@ export interface FingerPlacementEvidence {
   failing: string[];
   /** Instrucción estructurada: acción + titular + detalle + progreso. */
   guidance: TransmuralGuidance;
+  /** Razonamiento causal completo: causa ganadora, alternativas y evidencia. */
+  etiology: SignalEtiology;
   coverage: number;
   centering: number;
   stability: number;
@@ -106,6 +122,10 @@ function norm(v: number, lo: number, hi: number): number {
   return v <= lo ? 0 : v >= hi ? 1 : (v - lo) / (hi - lo);
 }
 
+function clamp01(v: number): number {
+  return Number.isFinite(v) ? clamp(v, 0, 1) : 0;
+}
+
 export interface EvidenceInput {
   /**
    * Sellado óptico [0..1]: fracción del área explorada cubierta por tejido del
@@ -123,6 +143,12 @@ export interface EvidenceInput {
   dcLevel: number;
   /** CV temporal del rojo en el ROI (pulsatilidad cruda + ruido). */
   roiRedCv: number;
+  /**
+   * Condición técnica de la captura. Un sensor saturado, subexpuesto o lento no
+   * aporta evidencia fisiológica: el motor la trata como precondición, no como
+   * una hipótesis que compita con las demás.
+   */
+  capture?: import('@/lib/pressure/signalEtiology').CaptureCondition;
 }
 
 export function computePlacementEvidence(input: EvidenceInput): FingerPlacementEvidence {
@@ -183,42 +209,53 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
     1,
   );
 
-  const failing: string[] = [];
-  if (pressure === 'HEAVY') {
-    failing.push(
-      ev.score > 0.80
-        ? 'Presión excesiva: suelta más'
-        : 'Presión excesiva: suelta un poco el dedo',
-    );
-  } else if (pressure === 'LIGHT') {
-    failing.push(
-      coverage < COVER_GOOD
-        ? 'Presión baja: cubre la lente con la yema'
-        : ev.score < 0.25
-          ? 'Presiona más: la señal es débil'
-          : 'Presiona un poco más: la señal es débil',
-    );
-  } else if (pressure === 'NONE' && coverage >= COVER_MIN && reading.pulsatility < PULSE_FLAT) {
-    failing.push('Presión no evaluable: recoloca el dedo');
-  }
-  if (reading.pulsatility < 0.25 && pressure !== 'HEAVY' && coverage >= COVER_MIN) {
-    failing.push('Sin pulso detectable: mantén presión suave y constante');
-  }
-  if (reading.pulsatility < 0.25 && pressure === 'HEAVY' && coverage >= COVER_MIN) {
-    // La confirmación de colapso manda sobre el mensaje genérico.
-    failing.push('Sin pulso útil: el lecho capilar está colapsado');
-  }
-  if (coverage < 0.45 && pressure !== 'LIGHT') failing.push('Cubre más la lente con la yema');
-  if (ev.center < 0.6) failing.push('Centra la yema en la lente');
-  if (reading.motion < 0.55) failing.push('Sostén el dedo quieto');
+  // ── Razonamiento causal: el sistema decide la causa, no una tabla de frases ──
+  // Se le entregan TODAS las magnitudes medidas y el motor pondera qué hipótesis
+  // explica mejor la señal. La instrucción y la explicación salen de ahí.
+  const etiology = inferSignalEtiology({
+    seal: reading.seal,
+    sealNorm: reading.sealNorm,
+    pulsatility: reading.pulsatility,
+    perfusionRatio: reading.perfusionRatio,
+    hasReference: reading.hasReference,
+    dcRatio: reading.dcRatio,
+    dcRise: Math.max(0, reading.dcTrend),
+    blanching: reading.blanching,
+    piTrend: reading.piTrend,
+    cvRatio: reading.cvRatio,
+    perfusedFraction: input.perfusedFraction ?? 0,
+    stillness: reading.motion,
+    centering: ev.center,
+    capture: input.capture ?? 'OK',
+  });
 
-  const guidance = reading.guidance;
-  // Mensajes redundantes fuera del titular: el banner ya dice la acción.
-  if (guidance.action === 'REPOSITION' && !failing.includes(guidance.headline)) {
-    failing.unshift(guidance.headline);
+  // Guía derivada de la causa inferida. El titular y el detalle son la
+  // explicación generada por el motor con los números de ESTE frame.
+  const guidance: TransmuralGuidance = {
+    action: guidanceAction(etiology.action),
+    headline: etiology.headline,
+    detail: etiology.explanation,
+    progress: clamp01(
+      etiology.cause === 'OPTIMAL'
+        ? 0.85 + 0.15 * reading.pulsatility
+        : etiology.cause === 'EXCESS_PRESSURE'
+          ? 1 - reading.blanching
+          : etiology.cause === 'INSUFFICIENT_CONTACT' || etiology.cause === 'OFF_CENTER'
+            ? reading.sealNorm
+            : 0.15,
+    ),
+    confidence: etiology.confidence,
+  };
+
+  // `failing` se mantiene por compatibilidad con la UI que ya lo consume. Solo
+  // contiene incidencias REALES: si la causa es óptima no hay nada que corregir.
+  const failing: string[] =
+    etiology.cause === 'OPTIMAL' ? [] : [etiology.explanation];
+  if (ev.center < 0.6 && etiology.cause !== 'OFF_CENTER') {
+    failing.push('Centra la yema en la lente');
   }
-  if (guidance.action === 'PRESS_MORE' && reading.pulsatility < PI_PULSELESS && coverage >= COVER_MIN) {
-    failing.push('Sin pulso útil: el lecho capilar necesita más apoyo');
+  if (reading.motion < 0.55 && etiology.cause !== 'MOTION') {
+    failing.push('Sostén el dedo quieto');
   }
 
   return {
@@ -233,9 +270,38 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
     placement,
     failing,
     guidance,
+    etiology,
     coverage,
     centering: ev.center,
     stability: ev.stab,
     motion: reading.motion,
   };
+}
+
+/**
+ * Traduce la acción inferida por el motor de etiología a la acción que espera la
+ * capa de presentación. Es una traducción de vocabulario, no una decisión: si el
+ * motor cambia de causa, la acción cambia con él.
+ */
+function guidanceAction(action: SignalAction): SignalAction {
+  switch (action) {
+    case 'RELEASE':
+      return 'RELEASE';
+    case 'PRESS_MORE':
+      return 'PRESS_MORE';
+    case 'HOLD':
+      return 'HOLD';
+    case 'CENTER':
+    case 'REPOSITION':
+      return 'REPOSITION';
+    case 'WARM':
+      // El dedo frío necesita una instrucción propia: "calienta", no "aprieta".
+      return 'WARM';
+    case 'FIX_SATURATION':
+    case 'FIX_LIGHT':
+    case 'FIX_FPS':
+    case 'WAIT':
+    default:
+      return 'WAIT';
+  }
 }

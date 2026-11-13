@@ -32,6 +32,7 @@ import {
   resetPlacementEvidence,
   type FingerPlacementEvidence,
 } from '../../lib/finger/fingerPlacementEvidence';
+import type { CaptureCondition } from '../../lib/pressure/signalEtiology';
 import {
   isExposureFlickerNotFingerPulse,
   isOpenFlashWithoutContact,
@@ -72,6 +73,13 @@ import { RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProc
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
+
+/**
+ * Frecuencia de muestreo por debajo de la cual la señal no permite reconstruir
+ * el pulso. Se usa para que el motor de etiología sepa que la evidencia
+ * fisiológica no es fiable por un problema de captura, no de fisiología.
+ */
+const MIN_ACCEPTABLE_PPG_FPS = 12;
 
 interface ROIMetrics {
   rawRed: number;
@@ -769,6 +777,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const motionScore = motionArtifact
       ? 1
       : Math.max(this.motionScore, this.signalMotionScore);
+    // Condición de captura: el motor de etiología la usa como precondición. Un
+    // sensor saturado o subexpuesto no aporta evidencia fisiológica, así que
+    // ninguna causa de presión puede sostenerse con esos datos.
+    const capture = this.captureCondition();
     this.lastPlacementEvidence = computePlacementEvidence({
       sealRatio: roi.sealRatio,
       perfusedFraction: roi.perfusedFraction,
@@ -779,7 +791,25 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       perfusionIndex: this.cachedPI,
       dcLevel: roi.tissueRed > 0 ? roi.tissueRed : this.redDC > 0 ? this.redDC : this.smoothedRed,
       roiRedCv: this.lastRoiRedCv,
+      capture: motionArtifact ? 'MOTION' : capture,
     });
+  }
+
+  /**
+   * Condición óptica de la captura, derivada de las mediciones del frame (no de
+   * un estado de UI). Un sensor saturado o subexpuesto no entrega evidencia
+   * fisiológica: ninguna causa de presión puede sostenerse con esos datos.
+   */
+  private captureCondition(): CaptureCondition {
+    if (this.smoothedRed > 250) return 'SATURATED';
+    if (this.underexposureEma > 0.5) return 'UNDEREXPOSED';
+    if (
+      this.estimatedSampleRate > 0 &&
+      this.estimatedSampleRate < MIN_ACCEPTABLE_PPG_FPS
+    ) {
+      return 'LOW_FPS';
+    }
+    return 'OK';
   }
 
   private updateContactState(roi: ROIMetrics): void {

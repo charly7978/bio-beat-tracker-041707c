@@ -837,9 +837,15 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
       accent = '#22c55e';
       accentSoft = 'rgba(34,197,94,0.22)';
       break;
-    case 'REPOSITION':
+    case 'WARM':
+      // Frío/vasoconstricción: el problema no es la presión, es la perfusión.
       accent = '#38bdf8';
       accentSoft = 'rgba(56,189,248,0.20)';
+      break;
+    case 'REPOSITION':
+    case 'CENTER':
+      accent = '#a78bfa';
+      accentSoft = 'rgba(167,139,250,0.20)';
       break;
     default:
       accent = '#94a3b8';
