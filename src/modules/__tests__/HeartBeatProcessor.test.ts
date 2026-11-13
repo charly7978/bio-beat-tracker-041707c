@@ -28,6 +28,7 @@ vi.mock('../../utils/haptics', () => ({
 }));
 
 import { HeartBeatProcessor } from '../HeartBeatProcessor';
+import { bpmFromEmittedRr } from '../../lib/measurement/peakEmitPolicy';
 
 function makeSignal(bpm: number, fs: number, amplitude: number, dc: number, n: number): { filtered: number[]; times: number[] } {
   const filtered: number[] = [];
@@ -114,6 +115,34 @@ describe('HeartBeatProcessor', () => {
     }
     expect(lastResult!.rrData!.intervals.length).toBeGreaterThanOrEqual(1);
     expect(lastResult!.rrData!.lastPeakTime).toBeGreaterThan(0);
+  });
+
+  it('publishes the exact RR estimator, without EMA or integer rounding', () => {
+    const { filtered, times } = makeSignal(73, 30, 8, 0, 400);
+    hbp.setFingerContactConfirmed(true);
+    let compared = 0;
+    let fractional = false;
+    for (let i = 0; i < filtered.length; i++) {
+      const result = hbp.processSignal(filtered[i], times[i]);
+      if (result.bpm > 0 && result.rrData) {
+        expect(result.bpm).toBe(bpmFromEmittedRr(result.rrData.intervals));
+        fractional ||= Math.abs(result.bpm - Math.round(result.bpm)) > 1e-6;
+        compared++;
+      }
+    }
+    expect(compared).toBeGreaterThan(20);
+    expect(fractional).toBe(true);
+  });
+
+  it('does not publish BPM without contact or after the existing 4200ms peak hold', () => {
+    const { filtered, times } = makeSignal(72, 30, 8, 0, 400);
+    hbp.setFingerContactConfirmed(true);
+    for (let i = 0; i < filtered.length; i++) hbp.processSignal(filtered[i], times[i]);
+    hbp.setPpgQualityMetrics(80, 0.005, 1); // Suppress new peaks; exercise expiry.
+    const lastPeak = hbp.getLastPeakTime();
+    expect(hbp.processSignal(1, lastPeak + 4201).bpm).toBe(0);
+    hbp.setFingerContactConfirmed(false);
+    expect(hbp.processSignal(1, lastPeak + 4250).bpm).toBe(0);
   });
 
   it('resets peak tracking correctly', () => {

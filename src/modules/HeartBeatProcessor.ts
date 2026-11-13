@@ -32,7 +32,6 @@ export class HeartBeatProcessor {
 
   private lastPeakTime = 0;
   private rrIntervals: number[] = [];
-  private smoothBPM = 0;
 
   private audioContext: AudioContext | null = null;
   private audioUnlocked = false;
@@ -316,26 +315,7 @@ export class HeartBeatProcessor {
           }
         }
 
-        const instantBpm = bpmFromEmittedRr(this.rrIntervals);
         this.consecutivePeaks += 1;
-
-        if (instantBpm > 0) {
-          const acceptOutlier =
-            this.smoothBPM <= 0 ||
-            Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= 0.4;
-          if (acceptOutlier) {
-            if (this.smoothBPM === 0) {
-              this.smoothBPM = instantBpm;
-            } else {
-              const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
-              const trust = clamp(0.18 + wScore * 0.32, 0.18, 0.50);
-              // A menor desviación, más suavizado (alpha bajo)
-              // A mayor desviación, más seguimiento (alpha alto)
-              const alpha = rel > 0.22 ? trust : rel > 0.12 ? trust * 0.75 : trust * 0.45;
-              this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
-            }
-          }
-        }
 
         if (wScore >= 0.4 && this.rrIntervals.length >= 1) {
           this.vibrate();
@@ -367,9 +347,6 @@ export class HeartBeatProcessor {
     const peakAgeMs = this.lastPeakTime > 0 ? now - this.lastPeakTime : Number.POSITIVE_INFINITY;
     if (!isPeak && peakAgeMs > this.BPM_PUBLISH_HOLD_MS) {
       this.consecutivePeaks = 0;
-      if (peakAgeMs > this.BPM_PUBLISH_HOLD_MS * 2) {
-        this.smoothBPM = 0;
-      }
     }
 
     const rrBpm = bpmFromEmittedRr(this.rrIntervals);
@@ -378,14 +355,8 @@ export class HeartBeatProcessor {
       this.fingerContactConfirmed &&
       peakAgeMs < this.BPM_PUBLISH_HOLD_MS
     ) {
-      if (this.smoothBPM > 0 && rrBpm > 0) {
-        const agree = Math.abs(this.smoothBPM - rrBpm) / Math.max(1, rrBpm) < 0.08;
-        publishBpm = Math.round(agree ? this.smoothBPM : rrBpm);
-      } else if (this.smoothBPM > 0) {
-        publishBpm = Math.round(this.smoothBPM);
-      } else if (rrBpm > 0) {
-        publishBpm = Math.round(rrBpm);
-      }
+      // RR median remains the estimator; no extra presentation EMA or rounding.
+      publishBpm = rrBpm;
     }
 
     const confidence = this.calculateConfidence(ensembleConf, isPeak);
@@ -577,7 +548,6 @@ export class HeartBeatProcessor {
     this.signalBuffer = [];
     this.timestampBuffer = [];
     this.rrIntervals = [];
-    this.smoothBPM = 0;
     this.lastPeakTime = 0;
     this.lastEmittedPeakTime = 0;
     this.consecutivePeaks = 0;

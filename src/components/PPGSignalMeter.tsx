@@ -3,10 +3,6 @@ import { CircularBuffer } from '../utils/CircularBuffer';
 import { isNative } from '@/lib/device/platform';
 import { calculateHRV, isPhysiologicalRR } from '../utils/physio';
 import {
-  DISPLAY_SMOOTH_ALPHAS,
-  lerpDisplayValue,
-} from '@/lib/measurement/displaySmoothing';
-import {
   TARGET_FPS,
   BUFFER_SIZE,
   TREND_WINDOW_MS,
@@ -374,18 +370,11 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       const targetSpo2 = fingerOn || preserve ? p.spo2 ?? 0 : 0;
       const targetSys = fingerOn || preserve ? p.pressure?.systolic ?? 0 : 0;
       const targetDia = fingerOn || preserve ? p.pressure?.diastolic ?? 0 : 0;
-      displayBpmRef.current = Math.round(
-        lerpDisplayValue(displayBpmRef.current, targetBpm, DISPLAY_SMOOTH_ALPHAS.hr),
-      );
-      displaySpo2Ref.current = Math.round(
-        lerpDisplayValue(displaySpo2Ref.current, targetSpo2, DISPLAY_SMOOTH_ALPHAS.spo2),
-      );
-      displaySysRef.current = Math.round(
-        lerpDisplayValue(displaySysRef.current, targetSys, DISPLAY_SMOOTH_ALPHAS.bp),
-      );
-      displayDiaRef.current = Math.round(
-        lerpDisplayValue(displayDiaRef.current, targetDia, DISPLAY_SMOOTH_ALPHAS.bp),
-      );
+      // Already filtered by the router: render directly, regardless of canvas FPS.
+      displayBpmRef.current = Math.round(targetBpm);
+      displaySpo2Ref.current = Math.round(targetSpo2);
+      displaySysRef.current = Math.round(targetSys);
+      displayDiaRef.current = Math.round(targetDia);
 
       // La onda se muestra SIEMPRE, con altura honesta (signalStrength). El latch
       // solo controla el indicador fino de progreso (barra), que desaparece al

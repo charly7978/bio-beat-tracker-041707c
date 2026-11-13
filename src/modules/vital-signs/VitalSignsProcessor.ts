@@ -100,17 +100,6 @@ export class VitalSignsProcessor {
   /** Frames seguidos con SpO2 fuera de banda de coherencia → adapta cambios reales sostenidos. */
   private spo2IncoherentStreak = 0;
 
-  // Suavizado adaptativo para estabilidad SIN perder respuesta
-  // Alpha más bajo = más suavizado = lecturas más estables
-  private readonly EMA_ALPHA_STABLE = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_PRIMARY_STABLE;
-  private readonly EMA_ALPHA_DYNAMIC = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_PRIMARY_DYNAMIC;
-  /** Segundo EMA (doble suavizado) — reduce ruido residual con menos latencia que un único EMA fuerte. */
-  private readonly EMA_ALPHA_SECONDARY = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_SECONDARY;
-  // Estados del segundo EMA por signo vital
-  private ema2Spo2 = 0;
-  private ema2Sys = 0;
-  private ema2Dia = 0;
-
   // Contador de pulsos válidos
   private validPulseCount: number = 0;
   private readonly MIN_PULSES_REQUIRED = 2;
@@ -511,7 +500,7 @@ export class VitalSignsProcessor {
     const res: VitalSignsResult = {
       heartRate: {
         name: "Heart Rate",
-        value: hrOk ? Math.round(this.lastBPM) : null,
+        value: hrOk ? this.lastBPM : null,
         unit: "bpm",
         timestamp: now,
         confidence: hrOk ? Math.min(0.98, 0.45 + sqi / 200) : (sqi >= hrMinSqi ? 0.35 : 0.12),
@@ -524,7 +513,7 @@ export class VitalSignsProcessor {
       },
       spo2: {
         name: "SpO2",
-        value: spo2HasDisplay ? Math.round(this.measurements.spo2) : null,
+        value: spo2HasDisplay ? spo2Shown : null,
         unit: "%",
         timestamp: now,
         confidence: !spo2HasDisplay
@@ -547,8 +536,8 @@ export class VitalSignsProcessor {
         name: "Blood Pressure",
         value: bpHasMorph
           ? {
-            systolic: Math.round(bpSysShown),
-            diastolic: Math.round(bpDiaShown),
+            systolic: bpSysShown,
+            diastolic: bpDiaShown,
           }
           : null,
         unit: "mmHg",
@@ -664,10 +653,8 @@ export class VitalSignsProcessor {
       if (isCoherent || this.spo2IncoherentStreak >= 25) {
         this.spo2IncoherentStreak = 0;
         this.lastCoherentSpO2 = spo2;
-        const pi = this.currentPerfusionIndex();
-        const wSpo2 = clamp(signalQuality / 80, 0.1, 1.0) * clamp(pi / 0.005, 0.1, 1.0);
-        const firstPass = this.displaySmoothing.smoothWeightedValue(this.measurements.spo2, spo2, wSpo2, 'stable');
-        this.measurements.spo2 = this.applyEma2('ema2Spo2', firstPass);
+        // Accepted estimator output stays raw; presentation EMA lives in the router.
+        this.measurements.spo2 = spo2;
       }
     }
 
@@ -710,20 +697,8 @@ export class VitalSignsProcessor {
           const cw = this.confidenceToWeight(bpEstimate.confidence)
             * clamp(bpEstimate.featureQuality / 60, 0.1, 1.0);
 
-          const bpFirstSys = this.displaySmoothing.smoothWeightedValue(
-            this.measurements.systolicPressure,
-            finalSys,
-            cw,
-            'stable',
-          );
-          this.measurements.systolicPressure = this.applyEma2('ema2Sys', bpFirstSys);
-          const bpFirstDia = this.displaySmoothing.smoothWeightedValue(
-            this.measurements.diastolicPressure,
-            finalDia,
-            cw,
-            'stable',
-          );
-          this.measurements.diastolicPressure = this.applyEma2('ema2Dia', bpFirstDia);
+          this.measurements.systolicPressure = finalSys;
+          this.measurements.diastolicPressure = finalDia;
 
           this.bpSysWeightedSum += finalSys * cw;
           this.bpDiaWeightedSum += finalDia * cw;
@@ -772,30 +747,6 @@ export class VitalSignsProcessor {
    * optimización 2026 para evitar duplicación de lógica.
    */
 
-  /**
-   * Segundo pase EMA sobre un valor ya suavizado por {@link DisplaySmoothing}.
-   * El primer pase (ponderado por confianza) lo hace displaySmoothing;
-   * este segundo pase reduce el residuo ruidoso con alpha fijo, sin añadir
-   * latencia apreciable porque el primer pase ya respondió al cambio.
-   */
-  private applyEma2(
-    key: 'ema2Spo2' | 'ema2Sys' | 'ema2Dia',
-    firstPass: number,
-  ): number {
-    if (firstPass === 0 || isNaN(firstPass)) {
-      this[key] = 0;
-      return firstPass;
-    }
-    const prev = this[key];
-    if (prev === 0 || isNaN(prev)) {
-      this[key] = firstPass;
-      return firstPass;
-    }
-    const out = prev * (1 - this.EMA_ALPHA_SECONDARY) + firstPass * this.EMA_ALPHA_SECONDARY;
-    this[key] = out;
-    return out;
-  }
-
   getCalibrationProgress(): number {
     return Math.min(100, Math.round((this.calibrationSamples / this.CALIBRATION_REQUIRED) * 100));
   }
@@ -803,8 +754,8 @@ export class VitalSignsProcessor {
   reset(): VitalSignsResult | null {
     const result = this.getFormattedResult();
     if (this.bpTotalWeight > 0 && result.bloodPressure.value) {
-      const wAvgSys = Math.round(this.bpSysWeightedSum / this.bpTotalWeight);
-      const wAvgDia = Math.round(this.bpDiaWeightedSum / this.bpTotalWeight);
+      const wAvgSys = this.bpSysWeightedSum / this.bpTotalWeight;
+      const wAvgDia = this.bpDiaWeightedSum / this.bpTotalWeight;
       if (wAvgSys > 0 && wAvgDia > 0) {
         result.bloodPressure.value.systolic = wAvgSys;
         result.bloodPressure.value.diastolic = wAvgDia;
@@ -825,9 +776,6 @@ export class VitalSignsProcessor {
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
-    this.ema2Spo2 = 0;
-    this.ema2Sys = 0;
-    this.ema2Dia = 0;
     return result;
   }
 
@@ -863,9 +811,6 @@ export class VitalSignsProcessor {
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
-    this.ema2Spo2 = 0;
-    this.ema2Sys = 0;
-    this.ema2Dia = 0;
   }
 }
 

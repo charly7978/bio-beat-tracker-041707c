@@ -1,88 +1,20 @@
 /**
- * Suavizado EMA adaptativo y lógica de display hold para signos vitales.
+ * Lógica de display hold para signos vitales; no aplica suavizado numérico.
  *
  * Extraído de VitalSignsProcessor para reducir su tamaño y permitir testeo
  * unitario del suavizado independientemente del pipeline completo.
  *
- * - EMA adaptativo con detección de outliers (cambios bruscos → alpha menor)
  * - Display hold: mantiene el último valor válido cuando el gate baja
  *   temporalmente, evitando parpadeo en la UI.
  */
 
 export class DisplaySmoothing {
-  // EMA alfas base — más rápidos para que la UI refleje cambios reales sin
-  // latencia excesiva. El suavizado fino se delega al HeartBeatProcessor.
-  private readonly EMA_ALPHA_STABLE = 0.20;
-  private readonly EMA_ALPHA_DYNAMIC = 0.35;
-
   // Estado del display hold
   private holdSpO2 = 0;
   private holdSystolic = 0;
   private holdDiastolic = 0;
   private missedFrames = 0;
   private readonly DISPLAY_HOLD_MAX_FRAMES = 240;
-
-  /**
-   * Suavizado EMA adaptativo — cambios grandes trackean rápido, cambios
-   * pequeños se suavizan (opuesto a la detección de outliers clásica que
-   * frena ante cambios bruscos). Para signos vitales en cámara PPG los
-   * cambios grandes suelen ser eventos reales (arritmia, desaturación) que
-   * necesitan seguimiento rápido, mientras que el ruido de baja amplitud
-   * debe ser suavizado.
-   * - 'stable': para valores que cambian lentamente (SpO2, PA)
-   * - 'dynamic': para valores más variables
-   */
-  smoothValue(current: number, newVal: number, type: 'stable' | 'dynamic' = 'stable'): number {
-    if (current === 0 || isNaN(current) || !isFinite(current)) return newVal;
-    if (isNaN(newVal) || !isFinite(newVal)) return current;
-
-    const baseAlpha = type === 'stable' ? this.EMA_ALPHA_STABLE : this.EMA_ALPHA_DYNAMIC;
-    const relativeChange = Math.abs(newVal - current) / (Math.abs(current) + 0.01);
-
-    let adaptiveAlpha = baseAlpha;
-    if (relativeChange > 0.5) {
-      adaptiveAlpha = baseAlpha * 2.0;
-    } else if (relativeChange > 0.3) {
-      adaptiveAlpha = baseAlpha * 1.5;
-    } else if (relativeChange < 0.05) {
-      adaptiveAlpha = baseAlpha * 0.5;
-    }
-
-    adaptiveAlpha = Math.max(0.05, Math.min(0.5, adaptiveAlpha));
-    return current * (1 - adaptiveAlpha) + newVal * adaptiveAlpha;
-  }
-
-  /**
-   * Suavizado EMA adaptativo ponderado por confianza del frame.
-   * weight en [0..1] penaliza o beneficia la velocidad de actualización.
-   */
-  smoothWeightedValue(
-    current: number,
-    newVal: number,
-    weight: number,
-    type: 'stable' | 'dynamic' = 'stable',
-  ): number {
-    if (current === 0 || isNaN(current) || !isFinite(current)) return newVal;
-    if (isNaN(newVal) || !isFinite(newVal)) return current;
-
-    const baseAlpha = type === 'stable' ? this.EMA_ALPHA_STABLE : this.EMA_ALPHA_DYNAMIC;
-    const relativeChange = Math.abs(newVal - current) / (Math.abs(current) + 0.01);
-
-    let adaptiveAlpha = baseAlpha;
-    if (relativeChange > 0.5) {
-      adaptiveAlpha = baseAlpha * 2.0;
-    } else if (relativeChange > 0.3) {
-      adaptiveAlpha = baseAlpha * 1.5;
-    } else if (relativeChange < 0.05) {
-      adaptiveAlpha = baseAlpha * 0.5;
-    }
-
-    const w = Math.max(0, Math.min(1, weight));
-    adaptiveAlpha = adaptiveAlpha * (0.15 + 0.85 * w);
-    adaptiveAlpha = Math.max(0.015, Math.min(0.5, adaptiveAlpha));
-
-    return current * (1 - adaptiveAlpha) + newVal * adaptiveAlpha;
-  }
 
   /**
    * Actualiza el display hold de SpO2. Devuelve el valor a mostrar.

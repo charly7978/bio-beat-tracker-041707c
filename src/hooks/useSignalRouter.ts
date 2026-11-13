@@ -16,11 +16,7 @@ import {
   createStabilizationState,
   updateStabilization,
 } from '@/lib/measurement/signalStabilization';
-import {
-  DISPLAY_SMOOTH_ALPHAS,
-  smoothDisplayPair,
-  smoothDisplayValue,
-} from '@/lib/measurement/displaySmoothing';
+import { VitalDisplayFilter } from '@/lib/measurement/displaySmoothing';
 import { createDefaultVitalSignsResult } from '@/lib/vitals/defaultVitalSignsResult';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import { VitalsSanityChecker } from '@/lib/sanity/vitalsSanity';
@@ -144,9 +140,9 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const prevHasUsableContactRef = useRef(false);
   const noContactSessionFramesRef = useRef(0);
   const lastHbInputRef = useRef(0);
-  const displayHrRef = useRef(0);
-  const displaySpo2Ref = useRef(0);
-  const displayBpRef = useRef({ systolic: 0, diastolic: 0 });
+  const displayFilterRef = useRef(new VitalDisplayFilter());
+  const displaySnapshotRef = useRef(vitalSigns);
+  const lastHrFilterInputRef = useRef('');
   // Latch de estabilización de adquisición: hasta que la señal estabiliza
   // (acquisitionStage READY) no se publica el número de HR (evita BPM errático
   // mientras la cámara/AE y el contacto se asientan). Una vez estabilizado, se
@@ -182,10 +178,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const sanityToastAtRef = useRef<number>(0);
   const isMonitoringRef = useRef(false);
 
-  useEffect(() => {
-    vitalSignsRef.current = vitalSigns;
-  }, [vitalSigns]);
-
   // Cleanup: cancela cualquier timer pendiente al desmontar para evitar
   // setBeatMarker sobre un componente desmontado.
   useEffect(() => {
@@ -198,32 +190,9 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   }, []);
 
   const applyLiveDisplaySmooth = useCallback((vitals: VitalSignsResult): VitalSignsResult => {
-    const hr = vitals.heartRate.value ?? 0;
-    const spo2 = typeof vitals.spo2.value === "number" ? vitals.spo2.value : 0;
-    const sys = vitals.bloodPressure.value?.systolic ?? 0;
-    const dia = vitals.bloodPressure.value?.diastolic ?? 0;
-
-    displayHrRef.current = Math.round(
-      smoothDisplayValue(displayHrRef.current, hr, DISPLAY_SMOOTH_ALPHAS.hr),
-    );
-    displaySpo2Ref.current = Math.round(
-      smoothDisplayValue(displaySpo2Ref.current, spo2, DISPLAY_SMOOTH_ALPHAS.spo2),
-    );
-    displayBpRef.current = smoothDisplayPair(
-      displayBpRef.current,
-      { systolic: sys, diastolic: dia },
-      DISPLAY_SMOOTH_ALPHAS.bp,
-    );
-
-    return {
-      ...vitals,
-      heartRate: { ...vitals.heartRate, value: displayHrRef.current },
-      spo2: { ...vitals.spo2, value: displaySpo2Ref.current },
-      bloodPressure: {
-        ...vitals.bloodPressure,
-        value: displayBpRef.current,
-      },
-    };
+    const shown = displayFilterRef.current.update(vitals);
+    displaySnapshotRef.current = shown;
+    return shown;
   }, []);
 
   const resetFingerContactSession = useCallback(() => {
@@ -243,9 +212,11 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     }
     bpmSanityRef.current.reset();
     sanityErrorRef.current = null;
-    displayHrRef.current = 0;
-    displaySpo2Ref.current = 0;
-    displayBpRef.current = { systolic: 0, diastolic: 0 };
+    displayFilterRef.current.reset();
+    lastHrFilterInputRef.current = '';
+    vitalSignsRef.current = createDefaultVitalSignsResult();
+    displaySnapshotRef.current = vitalSignsRef.current;
+    setVitalSigns(displaySnapshotRef.current);
     lastHbInputRef.current = 0;
     lastHrPushRef.current = 0;
     lastVitalsPushRef.current = 0;
@@ -258,6 +229,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
 
   const resetSessionRefs = useCallback(() => {
+    displayFilterRef.current.reset();
+    lastHrFilterInputRef.current = '';
     totalBeatsRef.current = 0;
     arrhythmiaBeatsRef.current = 0;
     lastArrhythmiaCountForBeatsRef.current = 0;
@@ -397,7 +370,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     const rrForBpm = heartBeatResult.rrData?.intervals ?? [];
     const bpmFromRr =
-      rrForBpm.length >= 1 ? Math.round(bpmFromEmittedRr(rrForBpm)) : 0;
+      rrForBpm.length >= 1 ? bpmFromEmittedRr(rrForBpm) : 0;
     const bpmProcessor =
       heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
       heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX
@@ -481,15 +454,22 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
           : bpmDisplay > 0
             ? 'WARMUP'
             : 'NO_VALID_SIGNAL';
-      setVitalSigns(prev => {
-        const next = {
-          ...prev,
-          heartRate: { ...prev.heartRate, value: bpmDisplay, status: hrStatus },
-          signalQuality: sqRounded,
-        };
-        vitalSignsRef.current = next;
-        return applyLiveDisplaySmooth(next);
-      });
+      const raw = {
+        ...vitalSignsRef.current,
+        heartRate: { ...vitalSignsRef.current.heartRate, value: bpmDisplay, status: hrStatus },
+        signalQuality: sqRounded,
+      };
+      vitalSignsRef.current = raw;
+      const inputKey = `${heartBeatResult.rrData?.lastPeakTime ?? 0}:${bpmDisplay}:${hrStatus}`;
+      // Held BPM frames are not new observations. Never filter inside an updater.
+      if (inputKey !== lastHrFilterInputRef.current) {
+        lastHrFilterInputRef.current = inputKey;
+        displaySnapshotRef.current = displayFilterRef.current.update(
+          { ...displaySnapshotRef.current, heartRate: raw.heartRate, signalQuality: sqRounded },
+          ['heartRate'],
+        );
+      }
+      setVitalSigns({ ...displaySnapshotRef.current, signalQuality: sqRounded });
     }
 
     // Limpieza INMEDIATA del BPM ante NO_CONTACT inequívoco: evita el "BPM sin
@@ -504,15 +484,12 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       vitalSignsRef.current.heartRate.value !== 0
     ) {
       lastHrPushRef.current = nowT;
-      displayHrRef.current = 0;
-      setVitalSigns(prev => {
-        const next = {
-          ...prev,
-          heartRate: { ...prev.heartRate, value: 0, status: 'NO_VALID_SIGNAL' as const },
-        };
-        vitalSignsRef.current = next;
-        return next;
-      });
+      displayFilterRef.current.reset(['heartRate']);
+      lastHrFilterInputRef.current = '';
+      const heartRate = { ...vitalSignsRef.current.heartRate, value: 0, status: 'NO_VALID_SIGNAL' as const };
+      vitalSignsRef.current = { ...vitalSignsRef.current, heartRate };
+      displaySnapshotRef.current = { ...displaySnapshotRef.current, heartRate };
+      setVitalSigns(displaySnapshotRef.current);
     }
 
     if (hrReady && bpmOut > 0) {
@@ -557,15 +534,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
           unstableFrameCounter.current === STALE_FINGER_NO_BPM
         ) {
           processHeartBeat.reacquirePeaks(nowT);
-          setVitalSigns(prev => ({
-            ...prev,
-            spo2: { ...prev.spo2, value: 0, status: 'NO_VALID_SIGNAL' },
-            bloodPressure: {
-              ...prev.bloodPressure,
-              value: { systolic: 0, diastolic: 0 },
-              status: 'NO_VALID_SIGNAL',
-            },
-          }));
+          displayFilterRef.current.reset(['spo2', 'bloodPressure']);
           vitalSignsRef.current = {
             ...vitalSignsRef.current,
             spo2: { ...vitalSignsRef.current.spo2, value: 0, status: 'NO_VALID_SIGNAL' },
@@ -575,6 +544,12 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
               status: 'NO_VALID_SIGNAL',
             },
           };
+          displaySnapshotRef.current = {
+            ...displaySnapshotRef.current,
+            spo2: vitalSignsRef.current.spo2,
+            bloodPressure: vitalSignsRef.current.bloodPressure,
+          };
+          setVitalSigns(displaySnapshotRef.current);
         }
       } else {
         unstableFrameCounter.current = Math.max(0, unstableFrameCounter.current - 2);
@@ -587,20 +562,19 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         measurementLatchRef.current = createMeasurementSessionLatch();
         lastGoodBpmRef.current = 0;
         lastRrSnapshotRef.current = null;
-        setVitalSigns(prev => (
-          prev.heartRate.value === 0 &&
-          (prev.spo2.value == null || prev.spo2.value === 0) &&
-          (prev.bloodPressure.value?.systolic ?? 0) === 0
-            ? prev
-            : {
-                ...prev,
-                heartRate: { ...prev.heartRate, value: 0, status: "NO_VALID_SIGNAL" },
-                spo2: { ...prev.spo2, value: 0, status: "NO_VALID_SIGNAL" },
-                bloodPressure: { ...prev.bloodPressure, value: { systolic: 0, diastolic: 0 }, status: "NO_VALID_SIGNAL" },
-                arrhythmia: { ...prev.arrhythmia, value: { count: 0, status: "NORMAL" } },
-                signalQuality: 0,
-              }
-        ));
+        displayFilterRef.current.reset();
+        lastHrFilterInputRef.current = '';
+        const raw: VitalSignsResult = {
+          ...vitalSignsRef.current,
+          heartRate: { ...vitalSignsRef.current.heartRate, value: 0, status: 'NO_VALID_SIGNAL' },
+          spo2: { ...vitalSignsRef.current.spo2, value: 0, status: 'NO_VALID_SIGNAL' },
+          bloodPressure: { ...vitalSignsRef.current.bloodPressure, value: { systolic: 0, diastolic: 0 }, status: 'NO_VALID_SIGNAL' },
+          arrhythmia: { ...vitalSignsRef.current.arrhythmia, value: { count: 0, status: 'NORMAL' } },
+          signalQuality: 0,
+        };
+        vitalSignsRef.current = raw;
+        displaySnapshotRef.current = raw;
+        setVitalSigns(raw);
       }
     }
 
@@ -653,8 +627,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         lastVitalsPushRef.current = nowT;
         setVitalSigns(prev => ({
           ...prev,
-          spo2: vitalSignsRef.current.spo2,
-          bloodPressure: vitalSignsRef.current.bloodPressure,
+          spo2: displaySnapshotRef.current.spo2,
+          bloodPressure: displaySnapshotRef.current.bloodPressure,
           signalQuality: Math.round(rawSqi),
         }));
       }
@@ -728,11 +702,15 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       );
 
       vitalSignsRef.current = vitals;
+      displaySnapshotRef.current = displayFilterRef.current.update(
+        { ...vitals, heartRate: displaySnapshotRef.current.heartRate },
+        ['spo2', 'bloodPressure'],
+      );
 
       const uiDue = nowT - lastVitalsPushRef.current >= VITALS_PUSH_THROTTLE_MS;
       if (uiDue) {
         lastVitalsPushRef.current = nowT;
-        setVitalSigns(applyLiveDisplaySmooth(vitals));
+        setVitalSigns(displaySnapshotRef.current);
       }
 
       if (
@@ -768,7 +746,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     processVitalSigns,
     cameraHintsRef,
     resetFingerContactSession,
-    applyLiveDisplaySmooth,
     ppgMeterRef,
   ]);
 
