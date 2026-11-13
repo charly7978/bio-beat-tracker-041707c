@@ -54,10 +54,13 @@ La medición **no asume** torch ni FPS solicitados: baja `confidence` o bloquea 
 
 ## ROI y contacto con el dedo
 
-`PPGSignalProcessor` + `fingerSceneClassifier` / `fingerRoiPulsation`:
+`PPGSignalProcessor` + `adaptivePixelRoi` / `fingerSceneClassifier`:
 
-- ROI central y adaptativo, rechazo de saturación/subexposición
-- **No se acepta dedo solo por color**: hace falta evidencia pulsátil (perfusión, estabilidad temporal)
+- Ventana de búsqueda adaptativa que sigue el centroide de la máscara; el ROI publicado es el bounding box de los píxeles válidos, no un cuadrado fijo.
+- Máscara **Beer-Lambert diferencial** por píxel: densidad óptica temporal en verde, AC/DC en [0.1%, 3%], exclusión estricta de saturación (R ≥ 250) y subexposición (R ≤ 15).
+- Agregación ponderada por pulsatilidad OD y actividad |ΔOD| — sin promedio estático ni fusión fija por celdas.
+- **Anti-jitter espacial**: correlación Jaccard de la máscara entre `t` y `t−1` + desplazamiento de centroide; la señal se atenúa antes de entrar al detector de latidos y el movimiento se fusiona con el IMU.
+- **No se acepta dedo solo por color**: hace falta evidencia pulsátil (perfusión, estabilidad temporal).
 - Estados: `NO_CONTACT`, `UNSTABLE_CONTACT`, `VALID_CONTACT`, saturación, movimiento, etc.
 
 ## Detección de picos
@@ -111,7 +114,7 @@ npm run check:all
 npm run check:architecture
 ```
 
-Tests relevantes: `Detectors.test.ts`, `PPGSignalProcessor.test.ts`, `fingerRoiPulsation.test.ts`, `resolveAcquisitionStatus.test.ts`.
+Tests relevantes: `Detectors.test.ts`, `PPGSignalProcessor.test.ts`, `adaptivePixelRoi.test.ts`, `resolveAcquisitionStatus.test.ts`.
 
 ## Limitaciones explícitas
 

@@ -249,7 +249,7 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
     settled && (
       (hasPeak && acCollapse >= AC_COLLAPSE_CLEAR && ev.cover >= COVER_GOOD) ||
       (dcHigh && ev.pulse <= PULSE_FLAT && flat >= FLAT_HEAVY && ev.cover >= COVER_GOOD) ||
-      (ev.pulse <= PULSE_FLAT && flat >= FLAT_HEAVY * 0.75 && ev.cover >= COVER_GOOD) ||
+      (ev.pulse <= PULSE_FLAT && flat >= FLAT_HEAVY * 0.75 && ev.cover >= COVER_GOOD && (hasPeak || dcHigh)) ||
       sealedFlat
     )
   ) {
@@ -290,7 +290,7 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
   const heavyCandidate = settled && (
     (hasPeak && acCollapse >= AC_COLLAPSE_CLEAR && ev.cover >= COVER_GOOD) ||
     (dcHigh && ev.pulse <= PULSE_FLAT && flat >= FLAT_HEAVY && ev.cover >= COVER_GOOD) ||
-    (ev.pulse <= PULSE_FLAT && flat >= FLAT_HEAVY * 0.75 && ev.cover >= COVER_GOOD) ||
+    (ev.pulse <= PULSE_FLAT && flat >= FLAT_HEAVY * 0.75 && ev.cover >= COVER_GOOD && (hasPeak || dcHigh)) ||
     sealedFlat
   );
   const weakPulse = (!heavyCandidate && !sealedFlat && acCollapse < AC_COLLAPSE_CLEAR)

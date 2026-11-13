@@ -279,22 +279,58 @@ export const VITAL_THRESHOLDS = {
   },
 
   /**
-   * FUSIÓN ADAPTATIVA MULTI-CELDA POR PULSATILIDAD (Tiling & Aggregation, estado
-   * del arte para PPG por cámara). Cada celda de la grilla ROI mantiene su señal
-   * temporal; se puntúa por PULSATILIDAD real (AC/DC en banda cardíaca) y la señal
-   * compuesta pondera más las celdas con pulso fuerte → robusto a colocación
-   * imperfecta del dedo, optimiza la SNR inicial. Fallback seguro: sin info de
-   * pulsatilidad (arranque) el realce es neutro = comportamiento por presencia actual.
+   * ROI ADAPTATIVO POR PÍXEL + MÁSCARA BEER-LAMBERT DIFERENCIAL.
+   *
+   * Cada píxel muestreado mantiene su propia densidad óptica (OD) temporal en el
+   * canal verde. La máscara resultante:
+   *   1. Excluye saturación (R ≥ SATURATION_RED) y subexposición (R ≤ UNDEREXPOSED_RED).
+   *   2. Excluye píxeles cuyo AC/DC fisiológico cae fuera de [AC_DC_MIN, AC_DC_MAX]
+   *      (0.1%–3%), calculado sobre la varianza de la OD (Beer-Lambert diferencial).
+   *   3. Pondera la agregación por pulsatilidad OD y actividad diferencial |ΔOD|.
+   *   4. Compara la máscara con la del frame anterior (Jaccard + desplazamiento de
+   *      centroide) para detectar y penalizar movimiento del dedo antes del latido.
+   *
+   * Fallback seguro: si ningún píxel alcanza el rango fisiológico (arranque o escena
+   * sin pulso), se usa la máscara de exposición válida. El resto del pipeline sigue
+   * exigiendo perfusión real, así que este fallback nunca publica un latido falso.
    */
-  TILE_FUSION: {
-    /** Tamaño del ring de verde por celda (≈2 s @30 fps). */
-    BUFFER_SIZE: 64,
-    /** Muestras mínimas por celda antes de confiar en su pulsatilidad. */
-    MIN_SAMPLES: 24,
-    /** Cada cuántos frames se recalcula la pulsatilidad por celda (throttle). */
-    THROTTLE_FRAMES: 8,
-    /** Ganancia del realce: la mejor celda pesa (1+GAIN)× respecto a la de peor pulso. */
-    BOOST_GAIN: 3.5,
+  PIXEL_ROI: {
+    /** R ≥ este valor = píxel saturado (clipping del sensor). */
+    SATURATION_RED: 250,
+    /** R ≤ este valor = píxel subexpuesto (sin información útil). */
+    UNDEREXPOSED_RED: 15,
+    /** Límite inferior del AC/DC fisiológico por píxel (0.1%). */
+    AC_DC_MIN: 0.001,
+    /** Límite superior del AC/DC fisiológico por píxel (3%). */
+    AC_DC_MAX: 0.03,
+    /** Muestras mínimas antes de aplicar el filtro fisiológico (evita rechazo en frío). */
+    MIN_STAT_SAMPLES: 10,
+    /** Píxeles fisiológicos mínimos para aceptar la máscara fisiológica; si no, fallback. */
+    MIN_PHYSIOLOGICAL_PIXELS: 12,
+    /** EMA de la OD media y de su varianza (≈0,67 s @30 fps). */
+    OD_EMA_ALPHA: 0.07,
+    /** |ΔOD| que satura la actividad diferencial de un píxel. */
+    DOD_ACTIVITY_REF: 0.002,
+    /** Jaccard mínimo para considerar que la máscara no se desplazó. */
+    MASK_CORRELATION_MIN: 0.45,
+    /** Desplazamiento de centroide que satura la penalización (fracción del ROI). */
+    SHIFT_PENALTY_FRACTION: 0.12,
+    /** Peso de la caída de correlación en la penalización. */
+    CORRELATION_PENALTY_WEIGHT: 0.70,
+    /** Peso del desplazamiento de centroide en la penalización. */
+    SHIFT_PENALTY_WEIGHT: 0.30,
+    /** Atenuación máxima de la señal PPG por desplazamiento detectado. */
+    JITTER_ATTENUATION: 0.55,
+    /** Alpha de seguimiento del centroide de búsqueda. */
+    CENTER_TRACK_ALPHA: 0.18,
+    /** Paso máximo del centroide de búsqueda por frame (fracción del frame). */
+    CENTER_MAX_STEP: 0.08,
+    /** Margen del bounding box del ROI efectivo (fracción del lado de búsqueda). */
+    ROI_MARGIN_FRACTION: 0.02,
+    /** Máscaras más pequeñas no se usan para correlación anti-jitter. */
+    MIN_MASK_PIXELS_FOR_CORRELATION: 16,
+    /** EMA de la penalización de desplazamiento (anti-parpadeo). */
+    PENALTY_SMOOTH_ALPHA: 0.35,
   },
 
   /**
@@ -409,11 +445,8 @@ export const VITAL_THRESHOLDS = {
   // (ROI más grande, centerBias más plano, tiles más permisivos)
   // ENSEMBLE: detección multi-métrica universal (brightness + coverage + histogram + temporal variance)
   FINGER: {
-    /** Fracción del lado corto del frame usada como ROI cuadrado central. */
+    /** Fracción del lado corto del frame usada como ventana de búsqueda del ROI. */
     ROI_SIZE_FRACTION: 0.82,
-    ROI_CENTER_BIAS_MULT: 0.50,
-    ROI_CENTER_BIAS_MIN: 0.50,
-    TILE_BRIGHTNESS_OFFSET: 82,
     MIN_RED_INTENSITY: 36,
     MIN_RED_DOMINANCE: 5,
     MIN_RG_RATIO: 1.00,
@@ -463,13 +496,7 @@ export const VITAL_THRESHOLDS = {
     PULSATILE_ACQUIRE_FINGER_ROI: 0.12,
     PULSATILE_ACQUIRE_MAX_MOTION: 1.0,
     PULSATILE_ACQUIRE_MIN_DOMINANCE: 4.4,
-    /** Clasificación por tile (ROI 5×5) — umbrales relajados para tolerar dedo parcial/ladeado */
-    TILE_MIN_RED: 24,
-    TILE_MIN_TOTAL: 44,
-    TILE_MIN_DOMINANCE: 3,
-    TILE_MIN_RG: 1.04,
-    TILE_MIN_COMBINED_SCORE: 0.21,
-    TILE_DOMINANCE_SCORE_OFFSET: 5,
+    /** Número mínimo de regiones equivalentes con señal para considerar contacto. */
     MIN_FINGER_TILES_FOR_WEIGHTING: 2,
     FINGER_CONFIRM_FRAMES: 5,
     /** Tras perder firma instantánea: frames hasta degradar */
