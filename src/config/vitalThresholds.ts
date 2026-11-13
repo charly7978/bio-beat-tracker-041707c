@@ -303,13 +303,13 @@ export const VITAL_THRESHOLDS = {
     WINDOW_MS: 4500,
     /** Span temporal MÍNIMO de BPM válido y convergido antes de READY (ms). El
      *  mínimo físico para confirmar que un ritmo se asentó — NO un warm-up ciego. */
-    MIN_WINDOW_MS: 3000,
-    /** Muestras mínimas de BPM válido en la ventana. */
-    MIN_SAMPLES: 40,
+    MIN_WINDOW_MS: 1800,
+    /** Muestras mínimas de BPM válido en la ventana; exige además 2 RR medidos. */
+    MIN_SAMPLES: 20,
     /** Margen máx (max−min) del BPM en la ventana para considerarlo CONVERGIDO (bpm). */
     BPM_SPREAD_MAX: 6,
     /** Frames de calidad sostenida (SQI/PI/periodicidad/movimiento) requeridos. */
-    QUALITY_DWELL_FRAMES: 30,
+    QUALITY_DWELL_FRAMES: 18,
     /** Umbrales de calidad instantánea (sostenidos durante el dwell). */
     MIN_SQI: 32,
     MIN_PI: 0.0010,
