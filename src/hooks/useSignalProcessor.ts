@@ -250,6 +250,7 @@ export const useSignalProcessor = () => {
     if (isProcessing) {
       return;
     }
+    pendingFrameRef.current = null;
     isProcessingRef.current = true;
     setIsProcessing(true);
     workerRef.current.postMessage({ type: 'start' });
@@ -260,6 +261,7 @@ export const useSignalProcessor = () => {
       return;
     }
     isProcessingRef.current = false;
+    pendingFrameRef.current = null;
     workerRef.current.postMessage({ type: 'stop' });
     setIsProcessing(false);
     setLastSignal(null);
@@ -271,16 +273,32 @@ export const useSignalProcessor = () => {
     if (!workerRef.current || initializationState.current !== 'READY' || !isProcessingRef.current) {
       return;
     }
-    
-    // Transferir el buffer de píxeles (Uint8ClampedArray.buffer) de forma eficiente sin copiar
-    const buffer = imageData.data.buffer;
-    workerRef.current.postMessage({
-      type: 'processFrame',
-      data: {
+
+    // Si el Worker está ocupado, reemplazamos el pendiente por el frame más nuevo.
+    // La cola queda acotada a una imagen: la interfaz nunca reproduce señal atrasada.
+    if (frameInFlightRef.current) {
+      pendingFrameRef.current = {
         imageData,
-        timestamp: frameTimestampMs
-      }
-    }, [buffer]);
+        timestamp: frameTimestampMs,
+      };
+      return;
+    }
+
+    frameInFlightRef.current = true;
+    try {
+      // Transferir el ArrayBuffer de píxeles sin copiar.
+      const buffer = imageData.data.buffer;
+      workerRef.current.postMessage({
+        type: 'processFrame',
+        data: {
+          imageData,
+          timestamp: frameTimestampMs,
+        }
+      }, [buffer]);
+    } catch (error) {
+      frameInFlightRef.current = false;
+      log.error('Could not transfer PPG frame to Worker:', error);
+    }
   }, []);
 
   const getRGBStats = useCallback(() => {
