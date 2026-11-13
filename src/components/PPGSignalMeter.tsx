@@ -484,9 +484,11 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         className="absolute inset-0 w-full h-full"
       />
       <PulseIndicator showPulse={showPulse} />
-      {/* Guía de presión: tarjeta legible por encima del canvas (el canvas la
-          complementa con el gauge fino, pero no puede ser la única vía). */}
+      {/* Guía de colocación: vive DENTRO de la ventana de previsualización
+          (canvas). Aquí sólo queda el anuncio accesible: la tarjeta flotante
+          tapaba la ventana y era el "cartel" que el usuario pidió retirar. */}
       <PressureCoach
+        srOnly
         evidence={
           diagnostics?.placementEvidence as
             | import('@/lib/finger/fingerPlacementEvidence').FingerPlacementEvidence

@@ -362,7 +362,7 @@ export function fingerprintRidges(
   cv: number,
   scale: number,
   count: number = OV.RIDGES,
-  samplesPerRidge = 56,
+  samplesPerRidge = 40,
 ): RidgePoint[][] {
   return buildRidges(cu, cv, scale, count, samplesPerRidge);
 }
@@ -397,7 +397,7 @@ function buildRidges(
 /** Plantilla centrada en el origen y a escala 1: se construye una sola vez. */
 let ridgeTemplate: RidgePoint[][] | null = null;
 function unitRidges(): RidgePoint[][] {
-  if (!ridgeTemplate) ridgeTemplate = buildRidges(0, 0, 1, OV.RIDGES, 56);
+  if (!ridgeTemplate) ridgeTemplate = buildRidges(0, 0, 1, OV.RIDGES, 40);
   return ridgeTemplate;
 }
 
@@ -472,7 +472,7 @@ function strokeWellEllipse(
   rv: number,
   from = 0,
   to = Math.PI * 2,
-  samples = 72,
+  samples = 48,
 ): void {
   const { zn, zf, halfW } = geo.quad;
   const span = zf - zn;
@@ -719,11 +719,10 @@ function drawScrim(
     size -= 0.5;
   } while (size > 7);
 
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
-  ctx.shadowBlur = 6;
+  // El zócalo ya aporta contraste: nada de `shadowBlur` en el texto (caro por
+  // glifo en móvil y aquí se pinta en cada frame).
   ctx.fillStyle = view.phase === 'LOCKED' ? palette.tint : TEXT_MAIN;
   ctx.fillText(view.instruction, anchor.x, anchor.y);
-  ctx.shadowBlur = 0;
 
   // Punto de estado: el color no es el único canal (posición + texto lo dicen).
   const subSize = OV.TEXT_SUB;
@@ -742,7 +741,6 @@ function drawScrim(
 
   ctx.fillStyle = TEXT_SUB;
   ctx.fillText(view.detail, anchor.x, dotY);
-  ctx.shadowBlur = 0;
 }
 
 /**
@@ -769,9 +767,9 @@ export function drawWellFingerprintGuide(
   ctx.clip();
 
   // 1) DIANA: fija en el centro óptico de la lente. Es la referencia.
+  //    Sin `shadowBlur`: el halo sobre trazos es de lo más caro del canvas 2D y
+  //    este bucle compite con la captura de frames del detector de latidos.
   ctx.save();
-  ctx.shadowColor = `rgba(${palette.tint}, 0.35)`;
-  ctx.shadowBlur = locked ? 6 + 6 * view.lock : 0;
   drawRidgeSet(ctx, geo, view.target.u, view.target.v, 1, {
     baseAlpha: view.targetAlpha * (searching ? 0.75 : 1) * view.breath,
     lineWidth: OV.RIDGE_WIDTH,

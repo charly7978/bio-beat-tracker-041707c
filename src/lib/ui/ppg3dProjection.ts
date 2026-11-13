@@ -697,23 +697,19 @@ function drawFloorWarpedVideo(
   const sx = (source.videoWidth - cropSide) / 2;
   const sy = (source.videoHeight - cropSide) / 2;
   const screenH = Math.max(1, nearY - farY);
-  // Franjas más finas = menos escalones verticales en el borde del trapecio. El
-  // coste es acotado (88 drawImage por frame) y el vídeo es la única vista real
-  // de la cámara: la fidelidad del borde es parte de poder colocar el dedo.
-  const step = Math.max(1.2, screenH / 88);
+  // Franjas finas = menos escalones verticales en el borde del trapecio. El coste
+  // está acotado (48 drawImage por frame). NO se usa `ctx.filter`: aplicarlo a
+  // cada franja de un canvas escalado por devicePixelRatio fuerza a Chrome a
+  // salir de la ruta GPU y el bucle de dibujo se come el frame, dejando al
+  // `<video>` sin muestras para el worker (→ no se detectan latidos). La
+  // claridad se consigue con menos velo, no con filtros caros.
+  const step = Math.max(1.5, screenH / 48);
 
   ctx.save();
   quadPath(ctx, quad);
   ctx.clip();
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'low';
-
-  // CLARIDAD REAL: la yema sobre la lente es rojo oscuro sobre negro; sin
-  // realce, la ventana parece un rectángulo apagado y el dedo no se distingue.
-  // `ctx.filter` es best-effort (Chrome/Android WebView sí; Safari aún no): si no
-  // existe, no se rompe nada. Es presentación pura: no toca ninguna medida.
-  const canFilter = typeof ctx.filter === 'string';
-  if (canFilter) ctx.filter = 'brightness(1.22) contrast(1.12) saturate(1.35)';
 
   for (let y = farY; y < nearY; y += step) {
     const y1 = Math.min(nearY, y + step);
@@ -733,7 +729,6 @@ function drawFloorWarpedVideo(
     );
   }
 
-  if (canFilter) ctx.filter = 'none';
   ctx.restore();
 }
 

@@ -17,6 +17,13 @@ import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 interface PressureCoachProps {
   evidence?: FingerPlacementEvidence;
   isMonitoring: boolean;
+  /**
+   * `true` = sólo para lectores de pantalla. La guía visible vive DENTRO de la
+   * ventana de previsualización (canvas); esta tarjeta flotante tapaba la
+   * ventana y se retiró de la vista. El anuncio `role="status"` se conserva
+   * porque el texto del canvas no es accesible.
+   */
+  srOnly?: boolean;
 }
 
 interface Accent {
@@ -131,7 +138,7 @@ const FALLBACK: Accent = ACCENTS.WAIT;
  * "presión óptima · mantén" con la imagen saturada o subexpuesta sería otra vez
  * "decir cualquier cosa": el modelo no puede ver el lecho capilar.
  */
-export function PressureCoach({ evidence, isMonitoring }: PressureCoachProps) {
+export function PressureCoach({ evidence, isMonitoring, srOnly = false }: PressureCoachProps) {
   if (!isMonitoring || !evidence) return null;
 
   const guidance = evidence.guidance;
@@ -166,9 +173,9 @@ export function PressureCoach({ evidence, isMonitoring }: PressureCoachProps) {
 
   return (
     <div
-      className="pointer-events-none absolute left-2 right-2 z-20"
+      className={srOnly ? 'sr-only' : 'pointer-events-none absolute left-2 right-2 z-20'}
       // Debajo de la cabecera (36 px) y de la barra de métricas (hasta ~108 px).
-      style={{ top: 'calc(150px + env(safe-area-inset-top, 0px))' }}
+      style={srOnly ? undefined : { top: 'calc(150px + env(safe-area-inset-top, 0px))' }}
     >
       <div
         role="status"
