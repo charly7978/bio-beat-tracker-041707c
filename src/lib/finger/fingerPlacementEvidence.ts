@@ -40,6 +40,15 @@ export type PressureVerdict = TransmuralState;
 export type PlacementVerdict = 'NO_FINGER' | 'EDGE' | 'OFF_CENTER' | 'CENTERED';
 export type { SignalEtiology };
 
+/**
+ * Veredicto AGREGADO de colocación. Es el único que la ventana de
+ * previsualización puede usar para decir "OK": sólo `READY` significa que la
+ * lente está sellada, el dedo centrado, el pulso presente, la mano quieta y la
+ * captura limpia. Un `READY` de aquí más un `acquisitionStage === 'READY'` del
+ * estabilizador es lo que la app llama "todo bien".
+ */
+export type PlacementReadiness = 'NO_CONTACT' | 'ALIGNING' | 'PRESSURE' | 'READY';
+
 /** Guía que consume la capa de presentación. */
 export interface TransmuralGuidance {
   action: SignalAction;
@@ -65,6 +74,21 @@ export interface FingerPlacementEvidence {
   /** Fracción de tejido perfundido [0..1]. */
   perfusedFraction: number;
   placement: PlacementVerdict;
+  /**
+   * Centroide SUAVIZADO del tejido en coordenadas del encuadre [0..1]
+   * (0,0 = esquina superior izquierda del frame). Es la posición REAL del dedo
+   * que ve la cámara: la guía visual se dibuja aquí, no en un vector inventado.
+   */
+  centroid: { x: number; y: number };
+  /**
+   * Vector de CORRECCIÓN: lo que hay que mover el dedo para llevar el centroide
+   * al centro óptico de la lente, en coordenadas del encuadre. `(0,0)` = centrado.
+   */
+  offset: { x: number; y: number };
+  /** [0..1]: 1 = perfectamente centrado (misma escala que `centering`). */
+  alignment: number;
+  /** Veredicto agregado: sólo `READY` declara la colocación completa correcta. */
+  readiness: PlacementReadiness;
   /** Guía ANTES `failing`. Se mantiene por compatibilidad con la UI existente. */
   failing: string[];
   /** Instrucción estructurada: acción + titular + detalle + progreso. */
@@ -89,7 +113,15 @@ const {
   COVER_MIN,
   COVER_GOOD,
   SCORE_ALPHA,
+  PULSE_OK,
 } = VITAL_THRESHOLDS.PRESSURE;
+
+const {
+  CENTERED_MIN,
+  EDGE_MAX,
+  CENTER_HINT_MIN,
+  STILL_MIN,
+} = VITAL_THRESHOLDS.PLACEMENT;
 
 /** Estado del modelo transmural (episodio de contacto actual). */
 const model: TransmuralModelState = createTransmuralState();
@@ -101,6 +133,9 @@ const ev = {
   prevCover: 0,
   score: 0.5,
   scoreVerdict: 'NONE' as PressureVerdict,
+  /** Centroide suavizado del tejido (coordenadas del encuadre). */
+  cx: 0.5,
+  cy: 0.5,
 };
 
 export function resetPlacementEvidence(): void {
@@ -110,6 +145,8 @@ export function resetPlacementEvidence(): void {
   ev.prevCover = 0;
   ev.score = 0.5;
   ev.scoreVerdict = 'NONE';
+  ev.cx = 0.5;
+  ev.cy = 0.5;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -166,6 +203,23 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
   const dist = Math.min(1, Math.hypot(dx, dy) / 1.2);
   ev.center = ev.center * d + (1 - dist) * EMA_A;
 
+  // Centroide SUAVIZADO del tejido: es la posición real del dedo en el frame y
+  // lo que dibuja la guía de la ventana. El primer frame arranca en la medida
+  // (no en el centro) para no arrastrar medio segundo de animación falsa.
+  const cxInst = clamp01(input.centroidX);
+  const cyInst = clamp01(input.centroidY);
+  if (model.frame <= 1) {
+    ev.cx = cxInst;
+    ev.cy = cyInst;
+  } else {
+    ev.cx = ev.cx * d + cxInst * EMA_A;
+    ev.cy = ev.cy * d + cyInst * EMA_A;
+  }
+  // Vector de corrección: del centroide medido AL centro de la lente.
+  const offsetX = 0.5 - ev.cx;
+  const offsetY = 0.5 - ev.cy;
+  const alignment = clamp01(ev.center);
+
   // Estabilidad: cambio de sellado frame a frame + quietud.
   const stabInst = clamp(
     1 - (Math.abs(input.sealRatio - ev.prevCover) * 2.2 + (1 - reading.motion) * 0.6),
@@ -193,9 +247,31 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
 
   let placement: PlacementVerdict;
   if (model.frame < 12 || coverage < COVER_MIN) placement = 'NO_FINGER';
-  else if (ev.center >= 0.72) placement = 'CENTERED';
-  else if (ev.center >= 0.45) placement = 'OFF_CENTER';
+  else if (ev.center >= CENTERED_MIN) placement = 'CENTERED';
+  else if (ev.center >= EDGE_MAX) placement = 'OFF_CENTER';
   else placement = 'EDGE';
+
+  // ── Veredicto AGREGADO de colocación ────────────────────────────────────────
+  // Sólo READY afirma que la colocación está completa. Se apoya en magnitudes
+  // ya medidas (sellado, centrado, pulso, quietud) y en la precondición de
+  // captura: un sensor saturado, subexpuesto o lento no puede dar READY aunque
+  // el dedo esté perfecto (no se ve el lecho capilar).
+  const captureOk = (input.capture ?? 'OK') === 'OK';
+  let readiness: PlacementReadiness;
+  if (placement === 'NO_FINGER') readiness = 'NO_CONTACT';
+  else if (
+    pressure === 'IDEAL' &&
+    placement === 'CENTERED' &&
+    reading.motion >= STILL_MIN &&
+    reading.pulsatility >= PULSE_OK &&
+    captureOk
+  ) {
+    readiness = 'READY';
+  } else if (pressure === 'LIGHT' || pressure === 'HEAVY') {
+    readiness = 'PRESSURE';
+  } else {
+    readiness = 'ALIGNING';
+  }
 
   const score = clamp(
     W_PULSE * reading.pulsatility +
@@ -249,7 +325,7 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
   // contiene incidencias REALES: si la causa es óptima no hay nada que corregir.
   const failing: string[] =
     etiology.cause === 'OPTIMAL' ? [] : [etiology.explanation];
-  if (ev.center < 0.6 && etiology.cause !== 'OFF_CENTER') {
+  if (ev.center < CENTER_HINT_MIN && etiology.cause !== 'OFF_CENTER') {
     failing.push('Centra la yema en la lente');
   }
   if (reading.motion < 0.55 && etiology.cause !== 'MOTION') {
@@ -266,6 +342,10 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
     pulsatility: reading.pulsatility,
     perfusedFraction: input.perfusedFraction ?? 0,
     placement,
+    centroid: { x: ev.cx, y: ev.cy },
+    offset: { x: offsetX, y: offsetY },
+    alignment,
+    readiness,
     failing,
     guidance,
     etiology,

@@ -236,3 +236,67 @@ describe('fingerPlacementEvidence — evidencia física de colocación', () => {
     }
   });
 });
+
+describe('fingerPlacementEvidence — veredicto READY de la ventana', () => {
+  beforeEach(() => {
+    resetPlacementEvidence();
+  });
+
+  it('dedo sellado, centrado, con pulso y quieto → READY', () => {
+    const evidence = feed(45);
+    expect(evidence.readiness).toBe('READY');
+    expect(evidence.placement).toBe('CENTERED');
+    expect(evidence.alignment).toBeGreaterThan(0.9);
+    expect(evidence.offset.x).toBeCloseTo(0, 6);
+    expect(evidence.offset.y).toBeCloseTo(0, 6);
+  });
+
+  it('sin dedo no hay READY aunque el resto esté bien', () => {
+    const evidence = feed(30, {
+      sealRatio: 0.02,
+      perfusedFraction: 0,
+      perfusionIndex: 0,
+      dcLevel: 0,
+      roiRedCv: 0,
+    });
+    expect(evidence.readiness).toBe('NO_CONTACT');
+  });
+
+  it('el centroide manda la dirección de corrección (dedo a la derecha → corregir a la izquierda)', () => {
+    const evidence = feed(45, { centroidX: 0.8, centroidY: 0.5 });
+
+    expect(evidence.centroid.x).toBeGreaterThan(0.75);
+    expect(evidence.offset.x).toBeLessThan(-0.2);
+    expect(evidence.offset.y).toBeCloseTo(0, 2);
+    expect(evidence.alignment).toBeLessThan(0.7);
+    expect(evidence.readiness).toBe('ALIGNING');
+  });
+
+  it('presión no óptima impide READY', () => {
+    feed(45);
+    const evidence = feed(30, PRESSING_HARD);
+    expect(evidence.readiness).toBe('PRESSURE');
+  });
+
+  it('pulso insuficiente impide READY aunque el dedo esté centrado', () => {
+    const evidence = feed(45, {
+      sealRatio: 0.62,
+      perfusedFraction: 0.2,
+      perfusionIndex: 0.0004,
+      dcLevel: 150,
+      roiRedCv: 0.02,
+    });
+    expect(evidence.placement).toBe('CENTERED');
+    expect(evidence.readiness).not.toBe('READY');
+  });
+
+  it('movimiento impide READY', () => {
+    const evidence = feed(45, { motionScore: 0.95 });
+    expect(evidence.readiness).not.toBe('READY');
+  });
+
+  it('una captura degradada impide READY (no se ve el lecho capilar)', () => {
+    const evidence = feed(30, { ...GOOD, capture: 'SATURATED' });
+    expect(evidence.readiness).not.toBe('READY');
+  });
+});

@@ -45,6 +45,47 @@ export const VITAL_THRESHOLDS = {
     BP_CYCLE_QUALITY_TIP: 0.24,
     BP_CYCLE_QUALITY_PAD: 0.28,
     BP_CYCLE_QUALITY_HYBRID: 0.26,
+
+    /*
+     * ── VENTANA DE PREVISUALIZACIÓN: CUÁNDO ESTÁ "TODO OK" ───────────────────
+     * La ventana es la única vista de la cámara: si dice OK tiene que ser
+     * verdad. Estos números son la conversión de la evidencia medida a
+     * veredicto de COLOCACIÓN (el veredicto de presión sigue en PRESSURE y el
+     * de adquisición en `AcquisitionStabilizer`; aquí no se redecide ninguno).
+     */
+    /** Centroide a esta distancia del centro de la lente = dedo centrado. */
+    CENTERED_MIN: 0.72,
+    /** Por debajo de esto el tejido está en el borde del encuadre. */
+    EDGE_MAX: 0.45,
+    /** Aviso de "centra la yema" por debajo de este valor. */
+    CENTER_HINT_MIN: 0.60,
+    /** Quietud mínima (1 = totalmente quieto) para dar la colocación por buena. */
+    STILL_MIN: 0.55,
+
+    /**
+     * Capa de guía dentro de la ventana (huella de registro). Es PRESENTACIÓN:
+     * no altera ninguna medida, sólo traduce la evidencia a un dibujo.
+     */
+    OVERLAY: {
+      /**
+       * Apertura mínima de la ventana mientras hay imagen de cámara. Sin ella la
+       * ventana se pliega a un hilo cuando no hay dedo y el usuario no tiene
+       * dónde apuntar: la diana debe verse siempre que haya sensor activo.
+       */
+      GUIDE_FLOOR: 0.62,
+      /** Zona muerta del descentrado (unidades del recorte): dentro no se corrige. */
+      DEADBAND: 0.05,
+      /** Descentrado que se dibuja como corrección de longitud completa. */
+      MAX_OFFSET: 0.34,
+      /** Periodo del barrido de las crestas de la huella (ms). */
+      SCAN_PERIOD_MS: 1900,
+      /** Crestas de la huella guía. */
+      RIDGES: 7,
+      /** Semieje horizontal de la huella (unidades del recorte). */
+      RIDGE_U: 0.240,
+      /** Semieje vertical de la huella (unidades del recorte). */
+      RIDGE_V: 0.300,
+    },
   },
 
   // BLOOD PRESSURE — rangos fisiológicos (AHA / supervivencia) + normalización morfológica PPG
