@@ -570,7 +570,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const showWaveform = hasUsableContact;
 
     if (ppgMeterRef?.current) {
-      ppgMeterRef.current.pushSignal(showWaveform ? signalValue : 0, Date.now());
+      ppgMeterRef.current.pushSignal(showWaveform ? signalValue : 0, lastSignal.timestamp);
     }
 
     if (hasUsableContact && nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {

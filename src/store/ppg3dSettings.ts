@@ -28,7 +28,7 @@ export interface Ppg3DSettings {
 export const usePpg3dSettings = create<Ppg3DSettings>()(
   persist(
     (set) => ({
-      enabled: true,
+      enabled: false,
       intensity: 1,
       toggle: () => set((s) => ({ enabled: !s.enabled })),
       setEnabled: (v) => set({ enabled: v }),
@@ -36,7 +36,13 @@ export const usePpg3dSettings = create<Ppg3DSettings>()(
     }),
     {
       name: 'ppg-3d-settings',
-      version: 1,
+      version: 2,
+      // El render 2D pasa a ser el perfil inicial para priorizar fluidez en móvil.
+      // La opción 3D sigue disponible en el toggle y se puede activar explícitamente.
+      migrate: (persistedState) => ({
+        ...((persistedState ?? {}) as Partial<Ppg3DSettings>),
+        enabled: false,
+      }) as Ppg3DSettings,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({ enabled: s.enabled, intensity: s.intensity }),
     },

@@ -10,6 +10,11 @@ import { createLogger } from '../utils/logger';
 
 const log = createLogger('useSignalProcessor');
 
+interface PendingPpgFrame {
+  imageData: ImageData;
+  timestamp?: number;
+}
+
 /**
  * Hook que adapta el procesamiento de PPG a través de un Web Worker en un hilo separado.
  * Mantiene compatibilidad total con la interfaz del hilo principal de React.
@@ -42,6 +47,9 @@ export const useSignalProcessor = () => {
 
   // Hot-path callback: corre por cada frame SIN pasar por React.
   const realtimeCbRef = useRef<((s: ProcessedSignal) => void) | null>(null);
+  // Una imagen en proceso y, como máximo, la más reciente en espera.
+  const frameInFlightRef = useRef(false);
+  const pendingFrameRef = useRef<PendingPpgFrame | null>(null);
   // Throttle del snapshot UI (lastSignal): ~10 Hz es suficiente para HUD.
   const lastUiPushRef = useRef<number>(0);
   const UI_SNAPSHOT_INTERVAL_MS = 100;
@@ -67,6 +75,39 @@ export const useSignalProcessor = () => {
         { type: 'module' }
       );
 
+      const postFrame = (frame: PendingPpgFrame) => {
+        const worker = workerRef.current;
+        if (
+          !worker ||
+          initializationState.current !== 'READY' ||
+          !isProcessingRef.current
+        ) return;
+
+        frameInFlightRef.current = true;
+        try {
+          const buffer = frame.imageData.data.buffer;
+          worker.postMessage({
+            type: 'processFrame',
+            data: {
+              imageData: frame.imageData,
+              timestamp: frame.timestamp,
+            }
+          }, [buffer]);
+        } catch (error) {
+          frameInFlightRef.current = false;
+          log.error('Could not transfer PPG frame to Worker:', error);
+        }
+      };
+
+      const releaseFrameAndFlushLatest = () => {
+        frameInFlightRef.current = false;
+        const pending = pendingFrameRef.current;
+        pendingFrameRef.current = null;
+        if (pending && isProcessingRef.current) {
+          postFrame(pending);
+        }
+      };
+
       workerRef.current.onmessage = (event: MessageEvent) => {
         const { type, data } = event.data;
 
@@ -76,17 +117,21 @@ export const useSignalProcessor = () => {
           if (initializationState.current !== 'READY') return;
           const { signal, rgbStats, backpressureState } = data;
 
-          // Actualizar las caches de telemetría
+          // Actualizar las caches de telemetría.
           if (rgbStats) rgbStatsRef.current = rgbStats;
           if (backpressureState) {
             backpressureStateRef.current = backpressureState;
-            setCurrentStride((prev) => (prev !== backpressureState.pixelStride ? backpressureState.pixelStride : prev));
+            setCurrentStride((prev) =>
+              prev !== backpressureState.pixelStride ? backpressureState.pixelStride : prev
+            );
           }
 
           // 1) Hot path: callback síncrono (DSP, ringbuffers, refs en Index).
           const cb = realtimeCbRef.current;
           if (cb) {
-            try { cb(signal); } catch {
+            try {
+              cb(signal);
+            } catch {
               log.warn('Realtime callback threw — signal may be stale');
             }
           }
@@ -107,6 +152,9 @@ export const useSignalProcessor = () => {
             lastUiPushRef.current = nowMs;
             setLastSignal(signal);
           }
+        } else if (type === 'frameProcessed') {
+          // ACK separado del payload: libera exactamente una imagen por captura.
+          releaseFrameAndFlushLatest();
         } else if (type === 'backpressureConfigChanged') {
           if (data) {
             backpressureStateRef.current.config = data;
@@ -114,7 +162,17 @@ export const useSignalProcessor = () => {
         } else if (type === 'error') {
           const err = data as ProcessingError;
           console.error(`PPGSignalProcessor Web Worker error: ${err.code} ${err.message}`);
+        } else if (type === 'stopped') {
+          pendingFrameRef.current = null;
+          frameInFlightRef.current = false;
         }
+      };
+
+      workerRef.current.onerror = (event) => {
+        pendingFrameRef.current = null;
+        frameInFlightRef.current = false;
+        initializationState.current = 'ERROR';
+        log.error('PPG Web Worker crashed:', event.message);
       };
 
       // Inicializar el procesador dentro del worker
@@ -130,6 +188,8 @@ export const useSignalProcessor = () => {
     }
 
     return () => {
+      pendingFrameRef.current = null;
+      frameInFlightRef.current = false;
       if (workerRef.current) {
         workerRef.current.terminate();
         workerRef.current = null;
@@ -192,6 +252,7 @@ export const useSignalProcessor = () => {
     if (isProcessing) {
       return;
     }
+    pendingFrameRef.current = null;
     isProcessingRef.current = true;
     setIsProcessing(true);
     workerRef.current.postMessage({ type: 'start' });
@@ -202,6 +263,7 @@ export const useSignalProcessor = () => {
       return;
     }
     isProcessingRef.current = false;
+    pendingFrameRef.current = null;
     workerRef.current.postMessage({ type: 'stop' });
     setIsProcessing(false);
     setLastSignal(null);
@@ -213,16 +275,32 @@ export const useSignalProcessor = () => {
     if (!workerRef.current || initializationState.current !== 'READY' || !isProcessingRef.current) {
       return;
     }
-    
-    // Transferir el buffer de píxeles (Uint8ClampedArray.buffer) de forma eficiente sin copiar
-    const buffer = imageData.data.buffer;
-    workerRef.current.postMessage({
-      type: 'processFrame',
-      data: {
+
+    // Si el Worker está ocupado, reemplazamos el pendiente por el frame más nuevo.
+    // La cola queda acotada a una imagen: la interfaz nunca reproduce señal atrasada.
+    if (frameInFlightRef.current) {
+      pendingFrameRef.current = {
         imageData,
-        timestamp: frameTimestampMs
-      }
-    }, [buffer]);
+        timestamp: frameTimestampMs,
+      };
+      return;
+    }
+
+    frameInFlightRef.current = true;
+    try {
+      // Transferir el ArrayBuffer de píxeles sin copiar.
+      const buffer = imageData.data.buffer;
+      workerRef.current.postMessage({
+        type: 'processFrame',
+        data: {
+          imageData,
+          timestamp: frameTimestampMs,
+        }
+      }, [buffer]);
+    } catch (error) {
+      frameInFlightRef.current = false;
+      log.error('Could not transfer PPG frame to Worker:', error);
+    }
   }, []);
 
   const getRGBStats = useCallback(() => {

@@ -789,7 +789,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     }
   }
 
-  const points = buffer.getPoints();
+  const points = buffer.getRecentPointsSince(state.now - WINDOW_MS - VISUAL_DELAY_MS);
   if (points.length > 30) {
     const recentStart = Math.max(0, points.length - 150);
     let mn = Infinity, mx = -Infinity;
