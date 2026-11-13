@@ -33,6 +33,7 @@ type AdvancedConstraint = MediaTrackConstraintSet & {
   exposureCompensation?: number;
   exposureTime?: number;
   whiteBalanceMode?: string;
+  colorTemperature?: number;
   iso?: number;
   focusMode?: string;
   focusDistance?: number;
@@ -44,6 +45,7 @@ type ExtendedCapabilities = MediaTrackCapabilities & {
   exposureCompensation?: { min?: number; max?: number };
   exposureTime?: { min?: number; max?: number };
   whiteBalanceMode?: string[];
+  colorTemperature?: { min?: number; max?: number };
   iso?: { min?: number; max?: number };
   focusMode?: string[];
   focusDistance?: { min?: number; max?: number };
@@ -53,6 +55,7 @@ type ExtendedSettings = MediaTrackSettings & {
   torch?: boolean;
   exposureMode?: string;
   whiteBalanceMode?: string;
+  colorTemperature?: number;
   focusMode?: string;
   iso?: number;
   exposureCompensation?: number;
@@ -258,12 +261,32 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           if (caps.focusMode?.includes("manual")) {
             const near = typeof caps.focusDistance?.min === "number" ? caps.focusDistance.min : 0;
             await applyStep({ focusMode: "manual", focusDistance: near }, "focus manual");
+          } else {
+            log.warn("focus manual no soportado: el AF del ISP puede derivar sobre el dedo");
           }
           if (caps.whiteBalanceMode?.includes("manual")) {
-            await applyStep({ whiteBalanceMode: "manual" }, "WB manual");
+            if (await applyStep({ whiteBalanceMode: "manual" }, "WB manual")) {
+              // En WB manual, `colorTemperature` es el único valor expuesto por la
+              // API web (W3C Image Capture §9.4.1). Fijarlo al valor que el AWB ya
+              // había convergido sobre el dedo congela las ganancias por canal sin
+              // introducir un salto cromático.
+              const wbSettings = (track.getSettings?.() ?? {}) as ExtendedSettings;
+              if (caps.colorTemperature && typeof wbSettings.colorTemperature === "number") {
+                const kMin = caps.colorTemperature.min ?? wbSettings.colorTemperature;
+                const kMax = caps.colorTemperature.max ?? wbSettings.colorTemperature;
+                await applyStep(
+                  { colorTemperature: clamp(wbSettings.colorTemperature, kMin, kMax) },
+                  "temperatura WB",
+                );
+              }
+            }
+          } else {
+            log.warn("WB manual no soportado: el AWB del ISP puede derivar");
           }
-          if (caps.exposureMode?.includes("manual") && redLevel > 0) {
-            if (await applyStep({ exposureMode: "manual" }, "exposure manual")) {
+          if (caps.exposureMode?.includes("manual")) {
+            if (redLevel <= 0) {
+              log.warn("exposición manual disponible pero aún sin nivel de rojo del dedo");
+            } else if (await applyStep({ exposureMode: "manual" }, "exposure manual")) {
               // El VALOR se negocia en una llamada POSTERIOR al cambio de modo,
               // releyendo settings reales ya en manual.
               const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
@@ -288,14 +311,38 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
               if (Object.keys(value).length > 0) {
                 await applyStep(value, "valor de exposición");
               }
+              // El tiempo de integración también es significativo en exposición
+              // manual (W3C Image Capture §9.4.1). Fijarlo explícitamente evita que
+              // el driver lo reajuste y promedie el pulso en ventanas más largas
+              // (efecto low-pass sobre la AC). Es best-effort y capability-gated.
+              const expSettings = (track.getSettings?.() ?? {}) as ExtendedSettings;
+              if (caps.exposureTime && typeof expSettings.exposureTime === "number") {
+                const etMin = caps.exposureTime.min ?? expSettings.exposureTime;
+                const etMax = caps.exposureTime.max ?? expSettings.exposureTime;
+                await applyStep(
+                  { exposureTime: clamp(expSettings.exposureTime, etMin, etMax) },
+                  "tiempo de exposición",
+                );
+              }
             }
+          } else {
+            log.warn("exposure manual no soportado: el AE del ISP puede modular la AC");
           }
 
           // Verificación real del bloqueo: settings post-aplicación (no la
           // constraint enviada). Queda expuesto también vía getDiagnostics().
           const after = (track.getSettings?.() ?? {}) as ExtendedSettings;
+          if (caps.focusMode?.includes("manual") && after.focusMode !== "manual") {
+            log.warn(`Focus no quedó bloqueado (settings.focusMode=${after.focusMode ?? 'n/a'})`);
+          }
+          if (caps.whiteBalanceMode?.includes("manual") && after.whiteBalanceMode !== "manual") {
+            log.warn(`WB no quedó bloqueado (settings.whiteBalanceMode=${after.whiteBalanceMode ?? 'n/a'})`);
+          }
+          if (caps.exposureMode?.includes("manual") && after.exposureMode !== "manual") {
+            log.warn(`Exposición no quedó bloqueada (settings.exposureMode=${after.exposureMode ?? 'n/a'})`);
+          }
           log.info(
-            `ISP lock: exposure=${after.exposureMode ?? 'n/a'} wb=${after.whiteBalanceMode ?? 'n/a'} focus=${after.focusMode ?? 'n/a'} (red=${redLevel.toFixed(0)}, ${appliedSteps} pasos)`,
+            `ISP lock: exposure=${after.exposureMode ?? 'n/a'} iso=${after.iso ?? 'n/a'} tExp=${after.exposureTime ?? 'n/a'} wb=${after.whiteBalanceMode ?? 'n/a'} k=${after.colorTemperature ?? 'n/a'} focus=${after.focusMode ?? 'n/a'} (red=${redLevel.toFixed(0)}, ${appliedSteps} pasos)`,
           );
         } catch (e) {
           log.warn("optimizeForFinger falló (best-effort)", e);
@@ -328,7 +375,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
       isStartingRef.current = false;
     };
 
-    const activateTorch = async (track: MediaStreamTrack): Promise<boolean> => {
+    const activateTorch = async (track: MediaStreamTrack): Promise<{ active: boolean; verified: boolean }> => {
       const attempts = [
         { advanced: [{ torch: true } as TorchCapableConstraint] },
         { torch: true } as TorchCapableConstraint,
@@ -339,16 +386,16 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         try {
           await track.applyConstraints(constraints);
           const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-          if (settings.torch === true) return true;
+          if (settings.torch === true) return { active: true, verified: true };
         } catch { log.debug('Torch attempt failed — trying next syntax'); }
       }
       // Último intento: sin verificar settings, confiar en que applyConstraints funcionó
       try {
         await track.applyConstraints({ advanced: [{ torch: true } as TorchCapableConstraint] });
-        return true;
+        return { active: true, verified: false };
       } catch { log.debug('Torch not available on this device'); }
       log.warn("Torch no disponible en este dispositivo");
-      return false;
+      return { active: false, verified: false };
     };
 
     const waitForVideo = (video: HTMLVideoElement): Promise<void> => {
@@ -409,14 +456,15 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         const track = stream.getVideoTracks()[0];
         if (track) {
           await stabilizeTrack(track);
-          let torchOn = await activateTorch(track);
-          if (!torchOn) {
+          let torch = await activateTorch(track);
+          if (!torch.active) {
             await new Promise(r => setTimeout(r, 400));
-            torchOn = await activateTorch(track);
+            torch = await activateTorch(track);
           }
-          if (torchOn) log.info("Flash activado");
+          if (torch.active && torch.verified) log.info("Flash activado (confirmado por settings)");
+          else if (torch.active) log.warn("Flash activado sin confirmación de settings — diagnóstico de lente limitado");
           else log.warn("Flash no confirmado — se usará perfil de cámara tolerante");
-          await applyTorchDependentParams(track, torchOn);
+          await applyTorchDependentParams(track, torch.active);
 
           // Profiling de co-ubicación lente↔flash: mide el flujo lumínico de los
           // primeros ~500 ms con torch y alerta si el dedo cubrió una lente SIN
@@ -425,7 +473,10 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           // retrasa onStreamReady y NO toca el pipeline de medición.
           if (videoRef.current) {
             lastLensScanRef.current = null;
-            void startLensCoLocationScan(videoRef.current, { torchOn })
+            void startLensCoLocationScan(videoRef.current, {
+              torchOn: torch.active,
+              torchVerified: torch.verified,
+            })
               .then(result => {
                 lastLensScanRef.current = result;
                 if (result.verdict === 'lens-covered-dark') {

@@ -1,0 +1,33 @@
+{"type":"commit_made","sha":"5d840e9f93f66ac1d5d9642c69f871865077b92e","message_first_line":"LL","files":0,"ts":"2026-11-13T01:21:30.481799600Z"}
+{"type":"commit_made","sha":"aa737241ce2020bf2867d4cb8a9a9d3c9430da42","message_first_line":"Harden repository and persistence paths","files":0,"ts":"2026-11-13T01:21:30.481802600Z"}
+{"type":"commit_made","sha":"dca52d7828d21960a74da18ee46de72fcb87aa36","message_first_line":"feat(ui): enlarge main cardiac monitor area slightly (taller waveform panel and ","files":0,"ts":"2026-11-13T01:21:30.481804Z"}
+{"type":"commit_made","sha":"9b79a6be8e9bf0954adb81f5b7d8fcc372876f8f","message_first_line":"Work in progress","files":0,"ts":"2026-11-13T01:21:30.481804600Z"}
+{"type":"commit_made","sha":"b16a052632cd74efc867026b53f1aa079c6e8210","message_first_line":"Restore Supabase configuration","files":0,"ts":"2026-11-13T01:21:30.481805500Z"}
+{"type":"commit_made","sha":"977856f459914eb81d736ed2c316efc0eaa9f31e","message_first_line":"Reverted to commit c64caf28aba2af2361a76a62d678e76b3d837442","files":0,"ts":"2026-11-13T01:21:30.481807500Z"}
+{"type":"commit_made","sha":"0d3bd458902c76c23e2806bd3be3a978407ae3c0","message_first_line":"Restore Supabase configuration","files":0,"ts":"2026-11-13T01:21:30.481808200Z"}
+{"type":"commit_made","sha":"e5cc526572892398d7e1a7fbb731c98cacb80ad2","message_first_line":"Reverted to commit 422b245499c0184795662fa336632556ba56921f","files":0,"ts":"2026-11-13T01:21:30.481809100Z"}
+{"type":"commit_made","sha":"c7ab9b5fcd5d6eb089d7baad86f24c2c47e483ed","message_first_line":"Restore Supabase configuration","files":0,"ts":"2026-11-13T01:21:30.481809700Z"}
+{"type":"commit_made","sha":"711bfc1e5414d20ba615cc2d2e65c78254e89c26","message_first_line":"Reverted to commit 422b245499c0184795662fa336632556ba56921f","files":0,"ts":"2026-11-13T01:21:30.481810900Z"}
+{"type":"commit_made","sha":"76ab43458526d574a8508a5677cd4c235501ee31","message_first_line":"feat: validacion de contacto anti-falso-positivo + pozo de previsualizacion 3D","files":0,"ts":"2026-11-13T02:06:30.887177700Z"}
+{"type":"commit_made","sha":"874417b5d3dd390a0e663ad99d1cbe2bbb507ae1","message_first_line":"feat: pozo 3D dinamico - ventana crece con la calidad del contacto","files":0,"ts":"2026-11-13T02:11:30.935508800Z"}
+{"type":"commit_made","sha":"592f692a09175780b5bd66948b1959b90d148959","message_first_line":"feat: ventana 3D con evidencia fisica REAL de colocacion del dedo","files":0,"ts":"2026-11-13T02:26:31.070842500Z"}
+{"type":"commit_made","sha":"cd2c501bc423de13f7096045b15663d4d7b49f3b","message_first_line":"feat: campana de presion fisica (PPG real) + gate global anti-aplastamiento","files":0,"ts":"2026-11-13T02:36:31.160496200Z"}
+{"type":"commit_made","sha":"616523456a90d03309d9451b9b393b769a68b7e3","message_first_line":"feat: renovacion visual clinica - cero dialogs nativos + indicador de colocacion","files":0,"ts":"2026-11-13T02:41:31.199034800Z"}
+{"type":"commit_made","sha":"603735343c72a980ee9768eca16ee3e858d81b21","message_first_line":"ÑÑ","files":0,"ts":"2026-11-13T03:11:31.506882400Z"}
+{"type":"commit_made","sha":"7d97f80d48ad883bbd72ed72a76c801045b695b6","message_first_line":"Unificó suavizado en 3 procesadores","files":0,"ts":"2026-11-13T03:21:31.606318700Z"}
+{"type":"commit_made","sha":"ee9082fd27ac4698edc3a89d20d87a12664aef2a","message_first_line":"Work in progress","files":0,"ts":"2026-11-13T03:21:31.606321300Z"}
+{"type":"commit_made","sha":"d2206c57349e0c9707103b602cc96f02dcdeb2f2","message_first_line":"test: A/B settling latency, precision, resets and clinical boundaries for VitalD","files":0,"ts":"2026-11-13T03:31:31.698801400Z"}
+{"type":"commit_made","sha":"cc889910e829aa811a90095dc50a09cab467dd5f","message_first_line":"1","files":0,"ts":"2026-11-13T04:11:32.083499500Z"}
+{"type":"commit_made","sha":"84521958056e1c648ba8c15b14ed101df2cc7c67","message_first_line":"feat(pressure): modelo unico transmural + bucle cerrado haptico/visual","files":0,"ts":"2026-11-13T05:06:32.643935800Z"}
+{"type":"commit_made","sha":"c8689b9241201f6ae0ced7a2ed26c0a0ca43eab7","message_first_line":"fix(pressure): warmup/entrada mas rapidos (15 frames, 6 consecutivos)","files":0,"ts":"2026-11-13T05:11:32.694505800Z"}
+{"type":"commit_made","sha":"9fcc4e2be6815af9b76002cbcded631a669c8d3d","message_first_line":"fix(pressure): deteccion HEAVY por pulso/CV planos + cursor coherente","files":0,"ts":"2026-11-13T05:11:32.694507500Z"}
+{"type":"commit_made","sha":"ffc8047d12fe10b691e71fa141c96f7fddf52aa2","message_first_line":"fix(pressure): pico historico (sin decaimiento) para detectar caida gradual","files":0,"ts":"2026-11-13T05:11:32.694508200Z"}
+{"type":"commit_made","sha":"4384a2a51a672381b142087636126870a110ac4b","message_first_line":"fix(pressure): calibracion transmural (dcMin, dcHigh, peak persistente, umbrales","files":0,"ts":"2026-11-13T05:11:32.694509Z"}
+{"type":"snippet_selected","path":"[REDACTED_PATH] carpeta\\bio-beat-tracker-041707cb\\src\\modules\\sig\n...[truncated]","lines":[1,1],"ts":"2026-11-13T05:50:15.466Z"}
+{"type":"commit_made","sha":"939af740b3d0102c6d02b2a657835df403227ad2","message_first_line":"feat(roi): mascara Beer-Lambert por pixel y anti-jitter adaptativo","files":0,"ts":"2026-11-13T05:56:33.176220500Z"}
+{"type":"snippet_selected","path":"[REDACTED_PATH] carpeta\\bio-beat-tracker-041707cb\\src\\lib\\device\\frameClock.ts","lines":[1,1],"ts":"2026-11-13T06:05:42.251Z"}
+{"type":"file_opened","path":"[REDACTED_PATH] carpeta\\bio-beat-tracker-041707cb\\src\\lib\\device\\frameClock.ts","ts":"2026-11-13T06:05:42.201Z"}
+{"type":"file_opened","path":"[REDACTED_PATH] carpeta\\bio-beat-tracker-041707cb\\src\\components\\CameraView.tsx","ts":"2026-11-13T06:06:09.703Z"}
+{"type":"snippet_selected","path":"[REDACTED_PATH] carpeta\\bio-beat-tracker-041707cb\\src\\components\\CameraView.tsx","lines":[1,1],"ts":"2026-11-13T06:06:09.709Z"}
+{"type":"file_opened","path":"[REDACTED_PATH] carpeta\\bio-beat-tracker-041707cb\\src\\components\\CameraView.tsx","ts":"2026-11-13T06:06:09.742Z"}
+{"type":"snippet_selected","path":"[REDACTED_PATH] carpeta\\bio-beat-tracker-041707cb\\src\\components\\CameraView.tsx","lines":[1,1],"ts":"2026-11-13T06:06:09.747Z"}

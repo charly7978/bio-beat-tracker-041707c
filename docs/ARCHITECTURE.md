@@ -52,6 +52,14 @@ CI ejecuta `npm run check:architecture` para impedir procesadores paralelos y ru
 
 La medición **no asume** torch ni FPS solicitados: baja `confidence` o bloquea con estados técnicos (`TORCH_UNAVAILABLE`, `LOW_FPS`, etc.).
 
+### Fotometría y bloqueo del ISP
+
+- **Lock secuencial**: `stabilizeTrack` deja AE/AWB en `continuous` durante la colocación; al entrar en `STABLE_CONTACT`, `optimizeForFinger` aplica `focusMode`, `whiteBalanceMode` y `exposureMode` en llamadas `advanced` separadas (modo primero, valor después) porque Chrome ignora el valor de exposición enviado junto al cambio de modo y un entry fallido bloquea los siguientes. La verificación se hace leyendo `getSettings()`, no la constraint enviada.
+- **Valores fijados**: foco a distancia mínima, WB manual con `colorTemperature` actual (único valor WB expuesto por la API web) e ISO/tiempo de exposición hacia rojo ≈180 (sin clipping; el ROI rechaza R ≥ 250). El tiempo de integración se fija explícitamente porque en exposición manual es significativo y una ventana larga actúa como low-pass sobre la AC.
+- **Límite conocido del web**: el tone mapping adaptativo de Android (`toneMappingMode` de Camera2) no es accesible desde `getUserMedia`; bloquear AE/AWB y evitar la saturación reduce su variación, pero no se declara linealidad fotométrica ni se usa para cocientes clínicos.
+- **Timestamps**: `resolveFrameClock` usa `captureTime` (captura real del sensor) con `presentationTime` como respaldo y `now` solo como último recurso; `mediaTime` identifica frames pero no es reloj. `captureTime` y `presentationTime` comparten la base de `performance.now()`; una desviación > 250 ms se trata como otra época y se descarta.
+- **Co-ubicación lente↔flash**: escaneo de 500 ms con torch; `lens-covered-dark` solo se emite con torch confirmado por `getSettings()` (diagnóstico de colocación, nunca gate de medición).
+
 ## ROI y contacto con el dedo
 
 `PPGSignalProcessor` + `adaptivePixelRoi` / `fingerSceneClassifier`:

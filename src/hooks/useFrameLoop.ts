@@ -1,5 +1,6 @@
 import { useRef, useCallback } from 'react';
 import type { CameraViewHandle } from '@/components/CameraView';
+import { resolveFrameClock } from '@/lib/device/frameClock';
 import { ppgPerf, logWarn } from '@/utils/logger';
 
 interface UseFrameLoopInput {
@@ -78,20 +79,15 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
       };
       if (typeof vAny.requestVideoFrameCallback === 'function') {
         videoFrameLoopRef.current = vAny.requestVideoFrameCallback((now, metadata) => {
-          // Timestamp de sub-frame por hardware: `presentationTime` es el instante
-          // (misma base monótona que performance.now(), precisión de µs) en que el
-          // compositor recibió ESTE frame; `now` es el despacho del callback en el
-          // event loop y arrastra su jitter a la fs estimada y a los RR. Solo si
-          // el UA no lo informa se cae a `now`.
-          const pts = metadata?.presentationTime;
-          const ts =
-            typeof pts === 'number' && pts > 0
-              ? pts
-              : typeof now === 'number' && Number.isFinite(now)
-                ? now
-                : performance.now();
-          ppgPerf.markFrame(metadata, ts);
-          captureOneFrame(ts);
+          // Timestamp de sub-frame por hardware: `captureTime` es el instante real
+          // de captura del sensor y `presentationTime` el de entrega a composición
+          // (misma base monótona que performance.now(), precisión de µs). `now` es
+          // el despacho del callback en el event loop y arrastra su jitter a la fs
+          // estimada y a los RR. `resolveFrameClock` elige el reloj más fiel con
+          // guarda de base temporal y cae a `now` solo si el UA no informa nada.
+          const clock = resolveFrameClock(metadata, now, performance.now());
+          ppgPerf.markFrame(metadata, clock.timestamp);
+          captureOneFrame(clock.timestamp);
         });
       } else {
         const tick = (ts: number) => {

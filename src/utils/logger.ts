@@ -125,8 +125,9 @@ export class PerfTracker {
   /**
    * Registra un frame de cámara. metadata es el VideoFrameCallbackMetadata si
    * existe. `frameTs` (opcional) debe ser el MISMO timestamp usado para la muestra
-   * (p. ej. `presentationTime`) para que los deltas midan la cadencia real del
-   * compositor y no el ritmo del event loop.
+   * (el reloj resuelto por `resolveFrameClock`: `captureTime` o
+   * `presentationTime`) para que los deltas midan la cadencia real del sensor y
+   * no el ritmo del event loop.
    */
   markFrame(metadata?: { mediaTime?: number; presentationTime?: number }, frameTs?: number) {
     this.frames++;

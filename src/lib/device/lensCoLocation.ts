@@ -47,6 +47,9 @@ export interface LuminousSample {
 export interface LensScanResult {
   verdict: LensVerdict;
   torchOn: boolean;
+  /** El torch fue confirmado vía `getSettings().torch === true`. Sin esto, la
+   *  oscuridad no se puede atribuir a una lente equivocada. */
+  torchVerified: boolean;
   durationMs: number;
   samples: number;
   /** Rojo medio de la parte asentada de la ventana (último 60 %). */
@@ -64,12 +67,15 @@ const SETTLED_FRACTION = 0.4; // el AE/driver se asienta tras encender el torch;
 
 /**
  * Clasificador puro del flujo lumínico. `torchOn` debe reflejar si el torch fue
- * confirmado vía `getSettings()` (no solo "se envió la constraint").
+ * solicitado; `torchVerified` si además `getSettings()` lo confirmó. La alerta
+ * de lente equivocada exige ambas cosas: atribuir la oscuridad a la lente sin
+ * confirmación del LED produciría un falso positivo.
  */
 export function classifyLuminousFlow(
   samples: LuminousSample[],
   torchOn: boolean,
-): Omit<LensScanResult, 'torchOn' | 'durationMs'> {
+  torchVerified: boolean = torchOn,
+): Omit<LensScanResult, 'torchOn' | 'torchVerified' | 'durationMs'> {
   if (samples.length < MIN_SAMPLES) {
     return {
       verdict: 'indeterminate',
@@ -92,11 +98,18 @@ export function classifyLuminousFlow(
   const base = { samples: samples.length, redMean, redDominance, lumaRise };
 
   // Frame casi negro: con torch confirmado es dedo sobre lente SIN aporte del
-  // flash (lente equivocada); sin torch no se puede culpar a la lente.
+  // flash (lente equivocada); sin torch confirmado no se puede culpar a la lente.
   if (redMean + greenMean + blueMean < DARK_TOTAL_SUM) {
-    return torchOn
-      ? { ...base, verdict: 'lens-covered-dark', message: 'lente cubierta a oscuras con torch activo' }
-      : { ...base, verdict: 'indeterminate', message: 'oscuro sin torch: no atribuible a lente equivocada' };
+    if (torchOn && torchVerified) {
+      return { ...base, verdict: 'lens-covered-dark', message: 'lente cubierta a oscuras con torch activo' };
+    }
+    return {
+      ...base,
+      verdict: 'indeterminate',
+      message: torchOn
+        ? 'oscuro con torch sin confirmar: no atribuible a lente equivocada'
+        : 'oscuro sin torch: no atribuible a lente equivocada',
+    };
   }
 
   // Firma de hemoglobina (adquisición suave ya validada en VITAL_THRESHOLDS.FINGER):
@@ -125,13 +138,15 @@ export function classifyLuminousFlow(
  */
 export async function startLensCoLocationScan(
   video: HTMLVideoElement,
-  opts: { torchOn: boolean; durationMs?: number },
+  opts: { torchOn: boolean; torchVerified?: boolean; durationMs?: number },
 ): Promise<LensScanResult> {
   const torchOn = opts.torchOn;
+  const torchVerified = opts.torchVerified ?? torchOn;
   const durationMs = opts.durationMs ?? 500;
   const fail = (message: string): LensScanResult => ({
     verdict: 'indeterminate',
     torchOn,
+    torchVerified,
     durationMs,
     samples: 0,
     redMean: 0,
@@ -208,14 +223,15 @@ export async function startLensCoLocationScan(
   });
   cleanup();
 
-  const classified = classifyLuminousFlow(samples, torchOn);
+  const classified = classifyLuminousFlow(samples, torchOn, torchVerified);
   const result: LensScanResult = {
     ...classified,
     torchOn,
+    torchVerified,
     durationMs,
   };
   log.info(
-    `Co-ubicación lente/flash: ${result.verdict} (rojo=${result.redMean.toFixed(0)}, dom=${result.redDominance.toFixed(0)}, Δluma=${result.lumaRise.toFixed(0)}, muestras=${result.samples})`,
+    `Co-ubicación lente/flash: ${result.verdict} (torch=${torchOn ? (torchVerified ? 'confirmado' : 'sin confirmar') : 'off'}, rojo=${result.redMean.toFixed(0)}, dom=${result.redDominance.toFixed(0)}, Δluma=${result.lumaRise.toFixed(0)}, muestras=${result.samples})`,
   );
   return result;
 }

@@ -28,8 +28,15 @@ describe('classifyLuminousFlow — profiling de co-ubicación lente/flash', () =
   it('oscuridad sin torch confirmado no acusa lente equivocada', () => {
     // Sin torch no se puede atribuir la oscuridad a una lente incorrecta.
     const samples = seq(10, () => [8, 8, 8]);
-    const r = classifyLuminousFlow(samples, false);
+    expect(classifyLuminousFlow(samples, false).verdict).toBe('indeterminate');
+  });
+
+  it('oscuridad con torch solicitado pero sin confirmar tampoco acusa la lente', () => {
+    // Evita el falso positivo cuando applyConstraints no fue verificable.
+    const samples = seq(10, () => [8, 8, 8]);
+    const r = classifyLuminousFlow(samples, true, false);
     expect(r.verdict).toBe('indeterminate');
+    expect(r.message).toContain('sin confirmar');
   });
 
   it('escena visible (sin dedo) no genera alerta', () => {
