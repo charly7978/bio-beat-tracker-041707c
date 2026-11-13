@@ -71,6 +71,7 @@ export const useVitalSignsProcessor = () => {
     },
     accelRespiration?: { rpm: number; quality: number },
     morphologyBatch?: TimedSignalSample[],
+    sampleTimestampMs?: number,
   ): VitalSignsResult => {
     if (!processorRef.current) return createDefaultVitalSignsResult();
 
@@ -88,6 +89,7 @@ export const useVitalSignsProcessor = () => {
       undefined,
       accelRespiration,
       morphologyBatch,
+      sampleTimestampMs,
     );
     
     // Guardar la última ventana realmente válida para cierre/exportación en ref para evitar re-renderizados constantes
@@ -105,6 +107,10 @@ export const useVitalSignsProcessor = () => {
 
   const resetMorphologyWindow = useCallback(() => {
     processorRef.current?.resetMorphologyWindow();
+  }, []);
+
+  const resetRespirationWindow = useCallback(() => {
+    processorRef.current?.resetRespirationWindow();
   }, []);
 
   const reset = useCallback(() => {
@@ -129,6 +135,7 @@ export const useVitalSignsProcessor = () => {
   return {
     processSignal,
     resetMorphologyWindow,
+    resetRespirationWindow,
     setPlacementMode,
     setRGBData,
     reset,
