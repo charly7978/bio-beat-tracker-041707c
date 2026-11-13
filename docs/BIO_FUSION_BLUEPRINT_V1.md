@@ -87,14 +87,26 @@ El repositorio ya contiene una base aprovechable:
 
 Hallazgos de integración comprobados:
 
-1. useSignalRouter procesa signos vitales cada tres frames (ROUTER.VITALS_PROCESS_EVERY_N_FRAMES = 3). A 30 FPS nominales, la señal morfológica que se acumula en VitalSignsProcessor queda en aproximadamente 10 muestras/s.
-2. VitalSignsProcessor declara 10 Hz para la señal de respiración, pero BloodPressureProcessor recibe sampleRate=30. PPGFeatureExtractor utiliza esa frecuencia para calcular duración de ciclos, tiempo de subida, anchura de pulso y derivadas. La escala temporal queda incorrecta.
-3. PPGSignalProcessor entrega accelRespiration en cada ProcessedSignal. useSignalProcessor captura DeviceMotion en el hilo principal y lo envía al Worker. Sin embargo, useSignalRouter no transmite lastSignal.accelRespiration al argumento correspondiente de VitalSignsProcessor. La modalidad ACC está implementada pero no llega al motor de fusión.
-4. VitalSignsProcessor admite parámetros de rostro (faceBvp, faceBpm, faceQuality), pero el flujo de router/hook actual no entrega una observación facial. Es una capacidad futura, no una fuente disponible en la medición actual.
-5. SpO2Calculator usa relaciones RGB y coeficientes polinómicos genéricos, con una linealización de cámara fija. El código calcula un número, pero el repositorio no contiene validación de ese número frente a una referencia independiente.
-6. pwaPhysiologicalBpEngine combina pesos MLP derivados de etiquetas sintéticas y funciones de normalización/ponderación denominadas índices hemodinámicos. Los nombres Windkessel, resistencia, compliancia y stiffness no prueban que esas cantidades físicas estén identificadas a partir de la señal.
-7. training/train_bp_mlp.py genera entradas y etiquetas con fórmulas creadas en el propio script. Su conjunto de validación se genera con la misma familia de fórmulas; no es validación clínica.
-8. Los tests de presión actuales verifican plausibilidad matemática y rangos, usando señales sintéticas. No miden error frente a tensiómetro.
+1. useSignalRouter procesa signos vitales cada tres frames (ROUTER.VITALS_PROCESS_EVERY_N_FRAMES = 3). A 30 FPS nominales, la señal morfológica que se acumula en VitalSignsProcessor quedaba en aproximadamente 10 muestras/s.
+2. VitalSignsProcessor asumía 10 Hz para la señal respiratoria lenta, aunque la cadencia real depende del FPS del teléfono y del stride del router. La serie respiratoria y la señal de pulso no conservaban timestamps, por lo que esa frecuencia fija podía distorsionar la estimación.
+3. BloodPressureProcessor recibía sampleRate=30 aunque la morfología acumulada llegaba a unos 10 samples/s a 30 FPS. PPGFeatureExtractor utiliza sampleRate para ciclos, tiempos de subida, anchuras y derivadas.
+4. PPGSignalProcessor entrega accelRespiration en cada ProcessedSignal. useSignalProcessor captura DeviceMotion en el hilo principal y lo envía al Worker. Sin embargo, useSignalRouter no transmitía lastSignal.accelRespiration al argumento correspondiente de VitalSignsProcessor. La modalidad ACC estaba implementada pero no llegaba al motor de fusión.
+5. VitalSignsProcessor admite parámetros de rostro (faceBvp, faceBpm, faceQuality), pero el flujo de router/hook actual no entrega una observación facial. Es una capacidad futura, no una fuente disponible en la medición actual.
+6. SpO2Calculator usa relaciones RGB y coeficientes polinómicos genéricos, con una linealización de cámara fija. El código calcula un número, pero el repositorio no contiene validación de ese número frente a una referencia independiente.
+7. pwaPhysiologicalBpEngine combina pesos MLP derivados de etiquetas sintéticas y funciones de normalización/ponderación denominadas índices hemodinámicos. Los nombres Windkessel, resistencia, compliancia y stiffness no prueban que esas cantidades físicas estén identificadas a partir de la señal.
+8. training/train_bp_mlp.py genera entradas y etiquetas con fórmulas creadas en el propio script. Su conjunto de validación se genera con la misma familia de fórmulas; no es validación clínica.
+9. Los tests de presión actuales verifican plausibilidad matemática y rangos, usando señales sintéticas. No miden error frente a tensiómetro.
+
+## 4.1 Primera intervención implementada en research/bio-fusion-v1
+
+- La ruta morfológica conserva una muestra con timestamp de cada frame estable, aunque VitalSignsProcessor se ejecute a una cadencia menor.
+- La morfología se resamplea a una serie uniforme sin elevar la frecuencia por encima de la observada. Se rechazan ventanas con frecuencia menor de 20 Hz, jitter excesivo o huecos largos.
+- BloodPressureProcessor recibe la frecuencia resampleada y rechaza tasas inválidas en lugar de asumir 30 Hz.
+- La respiración óptica y la señal de pulso conservan timestamps y se resamplean a un objetivo de 10 Hz; si el teléfono entrega menos, se utiliza la tasa real.
+- El router entrega la modalidad ACC ya generada por PPGSignalProcessor y limpia ventanas temporales al perder estabilidad/contacto o detectar movimiento.
+- Se agregaron pruebas del resampleador para 30, 24 y 8 Hz, jitter, timestamps fuera de orden y huecos largos, además de una prueba de integración que verifica la frecuencia entregada al estimador BP.
+
+Esta primera corrección resuelve errores de sincronización/frecuencia; no valida clínicamente los modelos de SpO₂ ni BP ni convierte sus salidas actuales en mediciones médicas certificadas.
 
 ## 5. Arquitectura objetivo
 
