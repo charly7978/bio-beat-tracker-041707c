@@ -39,13 +39,25 @@ describe('resampleTimedSignal', () => {
     expect(result!.jitterRatio).toBeLessThan(0.35);
   });
 
+  it('admite la cadencia respiratoria observada sin elevar 8 Hz a 10 Hz', () => {
+    const result = resampleTimedSignal(makeSamples(8, 10), {
+      targetRateHz: 10,
+      minRateHz: 4,
+      maxRateHz: 40,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.sampleRateHz).toBeCloseTo(8, 0);
+  });
+
   it('rechaza timestamps fuera de orden y huecos excesivos', () => {
     const outOfOrder = makeSamples(30);
     outOfOrder[20] = { ...outOfOrder[20], timestampMs: outOfOrder[19].timestampMs - 1 };
     expect(resampleTimedSignal(outOfOrder)).toBeNull();
 
     const withGap = makeSamples(30);
-    withGap[60] = { ...withGap[60], timestampMs: withGap[60].timestampMs + 250 };
+    for (let i = 60; i < withGap.length; i++) {
+      withGap[i] = { ...withGap[i], timestampMs: withGap[i].timestampMs + 250 };
+    }
     expect(resampleTimedSignal(withGap)).toBeNull();
   });
 });
