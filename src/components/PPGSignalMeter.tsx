@@ -139,13 +139,21 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const waveGainRef = useRef(4.2);
 
   useImperativeHandle(ref, () => ({
-    pushSignal: (val: number, _ts: number) => {
+    pushSignal: (val: number, timestampMs: number) => {
       if (!dataBufferRef.current) return;
       const scaledValue = val * waveGainRef.current;
       const now = Date.now();
+      const perfNow = typeof performance !== 'undefined' ? performance.now() : 0;
+      // El procesador entrega reloj monotónico de captura; lo convertimos al
+      // dominio de pared usado por el renderer sin volver a fechar al recibirlo.
+      const sampleTime = Number.isFinite(timestampMs)
+        ? (timestampMs > 100_000_000_000 || perfNow === 0
+          ? timestampMs
+          : now - (perfNow - timestampMs))
+        : now;
       const isArrhythmia = now < arrActiveUntilRef.current;
       dataBufferRef.current.push({
-        time: now,
+        time: sampleTime,
         value: scaledValue,
         isArrhythmia
       });
@@ -273,7 +281,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const container = containerRef.current;
     if (!canvas || !container) return;
     const rect = container.getBoundingClientRect();
-    const maxDpr = isNative() ? 1.5 : 2.5;
+    const maxDpr = isNative() ? 1.25 : 2.0;
     const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
     const cssW = Math.max(320, Math.floor(rect.width));
     const cssH = Math.max(480, Math.floor(rect.height));
@@ -323,10 +331,15 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     if (isRunningRef.current) return;
     isRunningRef.current = true;
 
-    const frameTime = 1000 / TARGET_FPS;
+    // En Android, 30 fps de renderizado bastan para una captura PPG de ~30 Hz
+    // y liberan tiempo de CPU para cámara y Worker. Escritorio conserva 60 fps.
+    const targetFps = isNative() ? 30 : TARGET_FPS;
+    const frameTime = 1000 / targetFps;
     let lastRenderTime = 0;
+    let wallClockOffset = Date.now() - performance.now();
+    let lastOffsetRefresh = 0;
 
-    const render = () => {
+    const render = (rafTimestamp: number) => {
       if (!isRunningRef.current) return;
       const canvas = canvasRef.current;
       const buffer = dataBufferRef.current;
@@ -339,12 +352,17 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         animationRef.current = requestAnimationFrame(render);
         return;
       }
-      const now = Date.now();
-      if (now - lastRenderTime < frameTime) {
+      // RAF provee un reloj monotónico para evitar jitter por Date.now().
+      if (rafTimestamp - lastRenderTime < frameTime - 0.25) {
         animationRef.current = requestAnimationFrame(render);
         return;
       }
-      lastRenderTime = now;
+      lastRenderTime = rafTimestamp;
+      if (rafTimestamp - lastOffsetRefresh >= 1000) {
+        wallClockOffset = Date.now() - rafTimestamp;
+        lastOffsetRefresh = rafTimestamp;
+      }
+      const now = rafTimestamp + wallClockOffset;
 
       const p = propsRef.current;
       const fingerOn = p.isFingerDetected;
