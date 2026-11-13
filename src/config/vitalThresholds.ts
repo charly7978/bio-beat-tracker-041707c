@@ -527,9 +527,9 @@ export const VITAL_THRESHOLDS = {
     DC_HIGH_MIN: 0.15,
     DC_RISE_FULL: 0.10,
     /** Frames de contacto antes de diagnosticar presión (AE asentado). */
-    HEAVY_WARMUP_FRAMES: 30,
+    HEAVY_WARMUP_FRAMES: 15,
     /** Frames consecutivos para confirmar HEAVY (anti-parpadeo). */
-    HEAVY_ENTER_FRAMES: 10,
+    HEAVY_ENTER_FRAMES: 6,
     /** Frames consecutivos para confirmar cualquier otro veredicto. */
     VERDICT_CONFIRM_FRAMES: 8,
     /** Decaimiento por frame del mejor PI reciente (~17 s @30 fps). */
