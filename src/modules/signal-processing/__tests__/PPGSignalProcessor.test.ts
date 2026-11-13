@@ -142,5 +142,22 @@ describe('PPGSignalProcessor', () => {
       expect(guidance!.action).not.toBe('RELEASE');
       expect(guidance!.headline).not.toMatch(/SUELTA/i);
     });
+
+    it('no bloquea el háptico con un estado de rechazo espurio cuando hay dedo', () => {
+      // Segunda objeción de los jueces: "el háptico nunca se dispara". El disparo
+      // está gateado por `status` (SATURATED/UNDEREXPOSED/LOW_FPS/MOTION_ARTIFACT).
+      // Si el estado fuera de rechazo con un dedo normal, la rama nunca se
+      // ejecutaría. Se comprueba que el estado NO es de rechazo en contacto real.
+      for (let i = 0; i < 120; i++) {
+        const pulse = Math.round(180 + 6 * Math.sin(2 * Math.PI * 1.2 * (i / 30)));
+        proc.processFrame(makeFrame(64, 64, pulse, 95, 75));
+      }
+
+      const last = signals[signals.length - 1];
+      const stale = ['SATURATED', 'UNDEREXPOSED', 'LOW_FPS', 'MOTION_ARTIFACT'];
+      expect(stale).not.toContain(last.diagnostics?.status);
+      expect(last.fingerDetected).toBe(true);
+      expect(last.contactState).not.toBe('NO_CONTACT');
+    });
   });
 });

@@ -186,4 +186,48 @@ describe('AdaptivePixelRoi — máscara por píxel', () => {
     expect(light.rawRed).toBeGreaterThan(170);
     expect(light.displacementPenalty).toBe(0);
   });
+
+  describe('sellado óptico por tejido (robustez numérica)', () => {
+    it('tissueRatio y perfusionRatio son finitos y están en [0,1] en todo frame', () => {
+      // El sellado se calcula con contadores LOCALES que se reinician en cada
+      // frame: no puede acumularse entre frames ni dividir por cero (hay guarda
+      // explícita de `sampled > 0` y `tissuePixels > 0`).
+      const roi = new AdaptivePixelRoi();
+      const scenes: Array<(x: number, y: number) => [number, number, number]> = [
+        () => [180, 96, 80],   // tejido pleno
+        () => [255, 255, 255], // saturado
+        () => [5, 4, 3],       // oscuridad total
+        () => [128, 128, 128], // pared neutra (sin dominancia roja)
+      ];
+
+      for (const scene of scenes) {
+        const frame = makeFrame(150, 150, scene);
+        for (let i = 0; i < 40; i++) {
+          const out = roi.processFrame(frame, 3);
+          expect(Number.isFinite(out.tissueRatio)).toBe(true);
+          expect(Number.isFinite(out.perfusionRatio)).toBe(true);
+          expect(Number.isFinite(out.tissueRed)).toBe(true);
+          expect(out.tissueRatio).toBeGreaterThanOrEqual(0);
+          expect(out.tissueRatio).toBeLessThanOrEqual(1);
+          expect(out.perfusionRatio).toBeGreaterThanOrEqual(0);
+          expect(out.perfusionRatio).toBeLessThanOrEqual(1);
+        }
+      }
+    });
+
+    it('separa sellado de pulso: la pared neutra no cuenta como tejido', () => {
+      const roi = new AdaptivePixelRoi();
+      const wall = makeFrame(150, 150, () => [128, 128, 128]);
+      let wallOut = roi.processFrame(wall, 3);
+      for (let i = 0; i < 20; i++) wallOut = roi.processFrame(wall, 3);
+      // Sin dominancia roja no hay tejido: el sellado es 0 aunque la escena esté
+      // perfectamente expuesta. Antes "cobertura" se confundía con exposición.
+      expect(wallOut.tissueRatio).toBe(0);
+
+      const finger = makeFrame(150, 150, () => [200, 90, 70]);
+      let fingerOut = roi.processFrame(finger, 3);
+      for (let i = 0; i < 20; i++) fingerOut = roi.processFrame(finger, 3);
+      expect(fingerOut.tissueRatio).toBeGreaterThan(0.9);
+    });
+  });
 });

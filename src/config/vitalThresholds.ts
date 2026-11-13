@@ -642,9 +642,15 @@ export const VITAL_THRESHOLDS = {
      * que decirlo ya. La repetición sí mantiene cadencia para no saturar.
      */
     GUIDANCE_MIN_CONFIDENCE: 0.30,
+    /**
+     * El PRIMER aviso de cada estado es inmediato. Solo la repetición lleva
+     * cadencia, y debe ser lo bastante rápida para que el usuario esté corrigiendo
+     * de verdad: 9 s entre avisos de "presiona más" dejaba al usuario a ciegas
+     * justo mientras ajustaba el dedo.
+     */
     FEEDBACK_SETTLE_MS: 900,
-    HEAVY_REPEAT_MS: 3500,
-    LIGHT_REPEAT_MS: 9000,
+    HEAVY_REPEAT_MS: 2500,
+    LIGHT_REPEAT_MS: 4500,
     HAPTIC_MIN_INTERVAL_MS: 700,
     HAPTIC_SEVERE_FRACTION: 0.75,
     CONTACT_LOST_FRAMES: 6,

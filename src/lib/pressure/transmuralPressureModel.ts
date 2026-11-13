@@ -72,13 +72,6 @@ const MOTION_GOOD_MIN = 0.40;
  *  solo como contexto de guía, nunca para decidir el blanqueo. */
 const PERFUSED_FLOOR = 0.22;
 
-/**
- * PI_GOOD expresado en la MISMA escala que `pulsatility` (normalizada contra
- * PI_REF). Comparar la pulsatilidad normalizada contra el PI absoluto era un
- * error de unidades que hacía que cualquier pulso débil pasara por "óptimo".
- */
-const PULS_GOOD_NORM = P.PI_GOOD / P.PI_REF;
-
 export type TransmuralState = 'NONE' | 'LIGHT' | 'IDEAL' | 'HEAVY';
 export type TransmuralAxis = 'UNKNOWN' | 'UNDER' | 'OPTIMAL' | 'OVER';
 export type TransmuralReason =
@@ -337,6 +330,14 @@ export function observeTransmuralPressure(
     state.peakLearned = true;
   }
 
+  // Endurecimiento: si el episodio arrancó con el dedo ya apoyado y el DC se
+  // registró como 0 (sensor aún sin señal), `dcAtPeak` quedaría en 0 y el eje de
+  // fuerza se apoyaría solo en `dcRef`. Se ancla al DC corriente en cuanto hay
+  // contacto y un DC válido, sin esperar a que se aprenda el máximo.
+  if (state.dcAtPeak <= 0 && hasContact && state.dcFast > 0) {
+    state.dcAtPeak = state.dcFast;
+  }
+
   const hasReference = state.piPeak >= P.AC_PEAK_MIN_PI;
   const coupling = clamp01(state.seal / Math.max(1e-6, P.COVER_GOOD));
   const sealNorm = clamp01(
@@ -386,7 +387,10 @@ export function observeTransmuralPressure(
   // fracción perfundida lo apagaba justo cuando el colapso era completo.
   const couplingFactor = sealNorm;
   const forceEvidence = Math.max(dcRise, dcHigh ? 1 : 0);
-  const blanchEligible = hasContact && forceEvidence > 0;
+  // Acoplamiento suficiente: con sellado pobre la AC baja por fuga de luz, no por
+  // isquemia. Este es el umbral que antes quedaba definido y sin usar.
+  const couplingOk = coupling >= P.BLANCH_COUPLING_MIN;
+  const blanchEligible = hasContact && couplingOk && forceEvidence > 0;
   const blanching = blanchEligible
     ? clamp01(
       couplingFactor * (
@@ -411,7 +415,9 @@ export function observeTransmuralPressure(
         ? 'IDEAL'
         : 'HEAVY';
   } else if (blanchEligible && blanching >= P.BLANCH_ENTER && forceEvidence > 0) {
-    candidate = 'HEAVY';
+    // El colapso requiere que el auto-exposure ya se haya asentado: declararlo
+    // durante el warm-up del AE producía veredictos que el usuario veía cambiar.
+    candidate = state.frame >= P.HEAVY_WARMUP_FRAMES ? 'HEAVY' : 'NONE';
   } else if (blanchEligible && blanching >= P.BLANCH_EXIT) {
     // Banda de transición: hay evidencia de colapso incipiente (DC subiendo,
     // AC cayendo, blanqueo por encima del umbral de salida) pero todavía no
@@ -426,7 +432,7 @@ export function observeTransmuralPressure(
   } else if (!hasReference) {
     // Sin máximo de referencia el pulso no es comparable: solo el sellado
     // autoriza a afirmar que el apoyo es correcto.
-    candidate = pulsatility >= PULS_GOOD_NORM ? 'IDEAL' : 'NONE';
+    candidate = pulsatility >= P.PULSE_OK ? 'IDEAL' : 'NONE';
   } else if (piDeficit >= P.PI_DEFICIT_LIGHT && !dcHigh) {
     candidate = 'LIGHT';
   } else {
@@ -445,7 +451,7 @@ export function observeTransmuralPressure(
   } else if (state.seal < P.COVER_GOOD) {
     axis = 'UNDER';
   } else if (!hasReference) {
-    axis = pulsatility >= PULS_GOOD_NORM ? 'OPTIMAL' : 'UNKNOWN';
+    axis = pulsatility >= P.PULSE_OK ? 'OPTIMAL' : 'UNKNOWN';
   } else if (piDeficit <= P.PI_DEFICIT_OPTIMAL) {
     axis = 'OPTIMAL';
   } else if (blanchEligible && blanching >= P.BLANCH_ENTER) {
@@ -578,7 +584,7 @@ function buildGuidance(input: {
     input.state === 'HEAVY'
       ? 1 - input.blanching
       : input.state === 'LIGHT'
-        ? input.sealNorm * 0.5 + clamp01(input.pulsatility / Math.max(1e-6, PULS_GOOD_NORM)) * 0.5
+        ? input.sealNorm * 0.5 + clamp01(input.pulsatility / Math.max(1e-6, P.PULSE_OK)) * 0.5
         : input.state === 'IDEAL'
           ? 0.85 + 0.15 * clamp01(input.pulsatility)
           : 0.35,
@@ -629,7 +635,9 @@ function buildGuidance(input: {
           ...base,
           action: 'PRESS_MORE',
           headline: 'PRESIONA UN POCO MÁS',
-          detail: 'La yema no cubre toda la lente. Apoya el centro del dedo sobre el cristal.',
+          detail: input.seal < P.COVER_SEALED
+            ? 'La yema no cubre toda la lente: entra luz de la habitación. Apoya el centro del dedo.'
+            : 'La yema no cubre toda la lente. Apoya el centro del dedo sobre el cristal.',
         }
         : {
           ...base,

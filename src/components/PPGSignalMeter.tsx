@@ -493,6 +493,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
             | undefined
         }
         isMonitoring={isMonitoring}
+        status={diagnostics?.status}
       />
       <Ppg3DToggle />
       <ActionButtons
