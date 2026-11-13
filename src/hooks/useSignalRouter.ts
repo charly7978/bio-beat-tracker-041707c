@@ -82,6 +82,7 @@ interface VitalSignsProcessorAPI {
     faceQuality?: number,
     accelRespiration?: { rpm: number; quality: number },
     morphologyBatch?: TimedSignalSample[],
+    sampleTimestampMs?: number,
   ) => VitalSignsResult;
   resetMorphologyWindow: () => void;
   resetRespirationWindow: () => void;
