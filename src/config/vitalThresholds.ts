@@ -72,19 +72,34 @@ export const VITAL_THRESHOLDS = {
        * ventana se pliega a un hilo cuando no hay dedo y el usuario no tiene
        * dónde apuntar: la diana debe verse siempre que haya sensor activo.
        */
-      GUIDE_FLOOR: 0.62,
+      GUIDE_FLOOR: 0.72,
       /** Zona muerta del descentrado (unidades del recorte): dentro no se corrige. */
-      DEADBAND: 0.05,
+      DEADBAND: 0.04,
       /** Descentrado que se dibuja como corrección de longitud completa. */
-      MAX_OFFSET: 0.34,
+      MAX_OFFSET: 0.30,
       /** Periodo del barrido de las crestas de la huella (ms). */
-      SCAN_PERIOD_MS: 1900,
+      SCAN_PERIOD_MS: 2200,
       /** Crestas de la huella guía. */
       RIDGES: 7,
       /** Semieje horizontal de la huella (unidades del recorte). */
       RIDGE_U: 0.240,
       /** Semieje vertical de la huella (unidades del recorte). */
       RIDGE_V: 0.300,
+      /** Grosor de las crestas (px) — la guía tiene que leerse en un móvil. */
+      RIDGE_WIDTH: 2.1,
+      /** Opacidad de la diana: es la referencia, no un adorno. */
+      TARGET_ALPHA: 0.88,
+      /** Opacidad del fantasma (el dedo real). */
+      GHOST_ALPHA: 0.62,
+      /** Radio del anillo de cobertura, en múltiplos del semieje de la huella. */
+      COVERAGE_RING: 1.42,
+      /** Ancho del haz de corrección en el origen (px). */
+      BEAM_WIDTH: 13,
+      /** Desde qué fila del recorte arranca el zócalo de texto (0 = borde lejano). */
+      SCRIM_V: 0.84,
+      /** Línea de instrucción y línea de detalle (px). */
+      TEXT_MAIN: 11,
+      TEXT_SUB: 9,
     },
   },
 

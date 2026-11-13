@@ -528,11 +528,11 @@ function clamp(v: number, lo: number, hi: number): number {
 //
 // Nada de esto altera la medición: sólo cambia la proyección de presentación.
 
-const PREVIEW_D_FAR = 0.60;          // borde lejano (anclado, junto al horizonte)
-const PREVIEW_D_NEAR_OPEN = 0.20;    // borde cercano con colocación óptima
+const PREVIEW_D_FAR = 0.95;          // borde lejano (anclado, junto al horizonte)
+const PREVIEW_D_NEAR_OPEN = 0.19;    // borde cercano con colocación óptima
 const PREVIEW_D_NEAR_CLOSED = 0.56;  // borde cercano sin contacto (plegada)
-const PREVIEW_HALF_W_OPEN = 0.46;    // semiancho vs plot.w con colocación óptima
-const PREVIEW_HALF_W_CLOSED = 0.10;  // semiancho vs plot.w sin contacto
+const PREVIEW_HALF_W_OPEN = 0.72;    // semiancho vs plot.w con colocación óptima
+const PREVIEW_HALF_W_CLOSED = 0.12;  // semiancho vs plot.w sin contacto
 const PREVIEW_EASE_UP = 0.055;       // apertura suave (~1 s a 60 fps)
 const PREVIEW_EASE_DOWN = 0.20;      // cierre rápido y honesto
 
@@ -698,9 +698,9 @@ function drawFloorWarpedVideo(
   const sy = (source.videoHeight - cropSide) / 2;
   const screenH = Math.max(1, nearY - farY);
   // Franjas más finas = menos escalones verticales en el borde del trapecio. El
-  // coste es acotado (72 drawImage por frame) y el vídeo es la única vista real
+  // coste es acotado (88 drawImage por frame) y el vídeo es la única vista real
   // de la cámara: la fidelidad del borde es parte de poder colocar el dedo.
-  const step = Math.max(1.2, screenH / 72);
+  const step = Math.max(1.2, screenH / 88);
 
   ctx.save();
   quadPath(ctx, quad);
@@ -708,12 +708,12 @@ function drawFloorWarpedVideo(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'low';
 
-  // Realce de claridad best-effort: sólo si el navegador expone `ctx.filter`
-  // (Chrome/Android WebView sí; Safari aún no). La ventana es la única vista del
-  // dedo, así que subir saturación/contraste del vídeo mejora el registro sin
-  // tocar ninguna medida (es presentación pura).
+  // CLARIDAD REAL: la yema sobre la lente es rojo oscuro sobre negro; sin
+  // realce, la ventana parece un rectángulo apagado y el dedo no se distingue.
+  // `ctx.filter` es best-effort (Chrome/Android WebView sí; Safari aún no): si no
+  // existe, no se rompe nada. Es presentación pura: no toca ninguna medida.
   const canFilter = typeof ctx.filter === 'string';
-  if (canFilter) ctx.filter = 'saturate(1.12) contrast(1.06)';
+  if (canFilter) ctx.filter = 'brightness(1.22) contrast(1.12) saturate(1.35)';
 
   for (let y = farY; y < nearY; y += step) {
     const y1 = Math.min(nearY, y + step);
@@ -767,7 +767,7 @@ export function drawPreviewWell3D(
 
   // El veredicto de color manda sobre la presión cuando el registro ya está
   // conseguido: "SEÑAL ESTABLE" no puede ir en ámbar.
-  const theme = view.readiness === 'READY'
+  const theme = view.phase === 'LOCKED'
     ? wellThemeFor('STABLE_CONTACT', 'IDEAL', 1)
     : wellThemeFor(contactState, pressureEvidence?.pressure, pressureEvidence?.pressureScore);
 
@@ -781,7 +781,6 @@ export function drawPreviewWell3D(
   previewOpenEma += (target - previewOpenEma) * ease;
   const size = clamp(previewOpenEma, 0, 1);
 
-  const seat = computeFloorPreviewGeometry(state, 1);
   const geo = computeFloorPreviewGeometry(state, size);
   const { proj, quad } = geo;
   const { plot } = state.layout;
@@ -791,21 +790,16 @@ export function drawPreviewWell3D(
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
-  // 1) ASIENTO fijo en la grilla: dónde se apoya la ventana cuando la
-  //    colocación es óptima. Es la referencia espacial del veredicto.
-  quadPath(ctx, seat.quad);
-  ctx.strokeStyle = `rgba(${theme.tint}, 0.30)`;
-  ctx.lineWidth = 1;
-  ctx.setLineDash([4, 5]);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // 2) Base oscura: la pantalla oculta la grilla que queda debajo.
+  // 1) CRISTAL: base oscura (oculta la grilla de debajo) con degradado
+  //    vertical, para que el borde lejano no sea una masa plana.
+  const body = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
+  body.addColorStop(0, 'rgba(4, 9, 16, 0.90)');
+  body.addColorStop(1, 'rgba(2, 5, 9, 0.96)');
   quadPath(ctx, quad);
-  ctx.fillStyle = 'rgba(3,7,12,0.94)';
+  ctx.fillStyle = body;
   ctx.fill();
 
-  // 3) VIDEO real recortado al centro y proyectado sobre el piso.
+  // 2) VIDEO real recortado al centro y proyectado sobre el piso.
   if (hasVideo) {
     drawFloorWarpedVideo(ctx, source as HTMLVideoElement, geo);
   } else {
@@ -813,7 +807,7 @@ export function drawPreviewWell3D(
     ctx.save();
     quadPath(ctx, quad);
     ctx.clip();
-    ctx.strokeStyle = 'rgba(148,163,184,0.16)';
+    ctx.strokeStyle = 'rgba(148,163,184,0.14)';
     ctx.lineWidth = 1;
     for (let i = 1; i <= 3; i++) {
       const y = geo.farY + (geo.nearY - geo.farY) * (i / 4);
@@ -826,59 +820,70 @@ export function drawPreviewWell3D(
     ctx.restore();
   }
 
-  // 4) Tinte del veredicto (mismo lenguaje de color que el gauge de presión).
-  //    Mínimo imprescindible: el dedo se ve a través de él. El contrato de
-  //    transparencia está en `wellVeilAt` (testeado), aquí sólo se aplica.
-  const tintAlpha = wellTintAlpha(size);
+  // 3) TINTE del veredicto: lo justo para leer el estado. El contrato de
+  //    transparencia está en `wellVeilAt` (testeado); aquí sólo se aplica.
   quadPath(ctx, quad);
-  ctx.fillStyle = `rgba(${theme.tint}, ${tintAlpha.toFixed(3)})`;
+  ctx.fillStyle = `rgba(${theme.tint}, ${wellTintAlpha(size).toFixed(3)})`;
   ctx.fill();
 
-  // 5) Sombra de distancia: la pantalla se funde hacia el horizonte.
+  // 4) SOMBRA de distancia: la pantalla se funde hacia el horizonte.
   const depthShade = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
   depthShade.addColorStop(0, `rgba(0,0,0,${WELL_VEIL.DEPTH_FAR})`);
-  depthShade.addColorStop(0.55, `rgba(0,0,0,${WELL_VEIL.DEPTH_MID})`);
+  depthShade.addColorStop(0.6, `rgba(0,0,0,${WELL_VEIL.DEPTH_MID})`);
   depthShade.addColorStop(1, `rgba(0,0,0,${WELL_VEIL.DEPTH_NEAR})`);
   quadPath(ctx, quad);
   ctx.fillStyle = depthShade;
   ctx.fill();
 
-  // 6) Vidrio de la pantalla: reflejo del horizonte en el borde lejano.
+  // 5) CRISTAL: reflejo del horizonte + brillo del canto superior.
   const glass = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
   glass.addColorStop(0, `rgba(255,255,255,${WELL_VEIL.GLASS_FAR})`);
-  glass.addColorStop(0.35, 'rgba(255,255,255,0.012)');
+  glass.addColorStop(0.3, 'rgba(255,255,255,0.012)');
   glass.addColorStop(1, 'rgba(255,255,255,0)');
   quadPath(ctx, quad);
   ctx.fillStyle = glass;
   ctx.fill();
 
-  // 7) Scanline que recorre la pantalla en profundidad (sensor activo).
+  ctx.beginPath();
+  ctx.moveTo(quad.farLeft.x, quad.farLeft.y + 0.6);
+  ctx.lineTo(quad.farRight.x, quad.farRight.y + 0.6);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.stroke();
+
+  // 6) Barrido del sensor (sutil: no compite con la guía).
   ctx.save();
   quadPath(ctx, quad);
   ctx.clip();
-  const phase = (state.now / 2400) % 1;
+  const phase = (state.now / 2600) % 1;
   const scanY = geo.farY + (geo.nearY - geo.farY) * phase;
-  const scanH = Math.max(4, (geo.nearY - geo.farY) * 0.07);
+  const scanH = Math.max(4, (geo.nearY - geo.farY) * 0.06);
   const scan = ctx.createLinearGradient(0, scanY, 0, scanY + scanH);
   scan.addColorStop(0, `rgba(${theme.tint}, 0)`);
-  scan.addColorStop(0.5, `rgba(${theme.tint}, 0.07)`);
+  scan.addColorStop(0.5, `rgba(${theme.tint}, 0.05)`);
   scan.addColorStop(1, `rgba(${theme.tint}, 0)`);
   ctx.fillStyle = scan;
   ctx.fillRect(plot.x, scanY, plot.w, scanH);
   ctx.restore();
 
-  // 7.b) HUELLA DE REGISTRO: diana fija en el centro de la lente + fantasma en
-  //      la posición REAL del tejido. Es un decal sobre el cristal, así que va
-  //      después del vídeo y de los velos, y antes del bisel.
-  if (view.readiness !== 'INACTIVE') {
-    drawWellFingerprintGuide(ctx, geo, view, {
-      tint: theme.tint,
-      accent: view.readiness === 'PRESSURE' ? '251, 146, 60' : '125, 211, 252',
-    });
+  // 7) GUÍA DE COLOCACIÓN: diana + fantasma + haz + zócalo de texto, TODO
+  //    dentro del cristal. Aquí es donde la app le dice al usuario qué hacer.
+  //    Sin evidencia (monitor parado) no se dibuja: no hay nada que alinear.
+  if (view.phase !== 'INACTIVE') {
+    drawWellFingerprintGuide(
+      ctx,
+      geo,
+      view,
+      {
+        tint: theme.tint,
+        accent: view.phase === 'PRESSURE' ? '251, 146, 60' : '125, 211, 252',
+      },
+      FONT,
+    );
   }
 
   // 8) CANTO frontal: grosor físico de la pantalla apoyada en el piso.
-  const lip = clamp(2 + 3 * size, 2, 5);
+  const lip = clamp(2 + 2.5 * size, 2, 5);
   ctx.beginPath();
   ctx.moveTo(quad.nearLeft.x, quad.nearLeft.y);
   ctx.lineTo(quad.nearRight.x, quad.nearRight.y);
@@ -897,7 +902,7 @@ export function drawPreviewWell3D(
   ctx.lineWidth = 1.2 + 0.7 * size;
   ctx.shadowColor = theme.glow;
   ctx.shadowBlur = 5 + 8 * size
-    + (view.readiness === 'READY' ? 10 * Math.max(state.sweepPulse, 0) : 0);
+    + (view.phase === 'LOCKED' ? 10 * Math.max(state.sweepPulse, 0) : 0);
   ctx.stroke();
   ctx.shadowBlur = 0;
 
@@ -926,10 +931,10 @@ export function drawPreviewWell3D(
   ctx.stroke();
 
   // 11) PULSO al latir: anillo proyectado sobre el plano de la pantalla.
-  if (view.readiness === 'READY' && size > 0.35) {
+  if (view.phase === 'LOCKED' && size > 0.35) {
     const pulse = Math.max(state.sweepPulse, 0.04);
     const cz = (quad.zn + quad.zf) / 2;
-    const rPx = quad.halfW * (0.42 + 0.5 * pulse);
+    const rPx = quad.halfW * (0.5 + 0.42 * pulse);
     const rZ = rPx / proj.floorSpanY;
     ctx.save();
     quadPath(ctx, quad);
@@ -947,35 +952,7 @@ export function drawPreviewWell3D(
     ctx.restore();
   }
 
-  // 12) GUÍA exacta sobre el borde lejano + ALINEACIÓN medida.
-  //      El porcentaje ya NO es el tamaño animado de la ventana (eso era una
-  //      lectura inflada): es `alignment`, la evidencia del frame.
-  const guideText = view.label;
-  ctx.textAlign = 'center';
-  ctx.shadowColor = 'rgba(0,0,0,0.85)';
-  ctx.shadowBlur = 4;
-  ctx.font = `bold 9px ${FONT}`;
-  ctx.fillStyle = theme.core;
-  ctx.fillText(guideText, proj.vpX, geo.farY - 20);
-  ctx.font = `bold 11px ${FONT}`;
-  const pct = view.readiness === 'INACTIVE'
-    ? '--'
-    : view.readiness === 'READY'
-      ? 'OK'
-      : `${Math.round(view.alignment * 100)}%`;
-  ctx.fillText(pct, proj.vpX, geo.farY - 8);
-  ctx.shadowBlur = 0;
-
-  // 13) BARRA de progreso pegada al borde cercano (sobre la grilla).
-  const nearW = quad.nearRight.x - quad.nearLeft.x;
-  const barW = Math.max(24, nearW * 0.72);
-  const barH = 2.6;
-  const barX = proj.vpX - barW / 2;
-  const barY = quad.nearLeft.y + 7;
-  ctx.fillStyle = 'rgba(255,255,255,0.10)';
-  ctx.fillRect(barX, barY, barW, barH);
-  ctx.fillStyle = theme.edge;
-  ctx.fillRect(barX, barY, barW * (view.readiness === 'INACTIVE' ? 0 : view.alignment), barH);
-
   ctx.restore();
 }
+
+

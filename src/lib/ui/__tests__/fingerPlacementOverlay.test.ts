@@ -90,24 +90,43 @@ describe('deriveWellGuide — la ventana sólo dice OK si es verdad', () => {
   it('sin evidencia no afirma nada y no dibuja fantasma', () => {
     const v = view({ evidence: undefined });
     expect(v.readiness).toBe('INACTIVE');
+    expect(v.phase).toBe('INACTIVE');
     expect(v.ghostVisible).toBe(false);
-    expect(v.label).toBe('SENSOR EN ESPERA');
+    expect(v.instruction).toBe('SIN SEÑAL');
   });
 
   it('dedo bien colocado + adquisición READY → READY, sin fantasma', () => {
     const v = view();
     expect(v.readiness).toBe('READY');
+    expect(v.phase).toBe('LOCKED');
     expect(v.ghostVisible).toBe(false);
-    expect(v.label).toMatch(/ESTABLE/);
+    expect(v.instruction).toMatch(/ESTABLE/);
     expect(v.alignment).toBe(1);
   });
 
   it('colocación perfecta pero adquisición aún buscando → NO dice READY', () => {
     const v = view({ acquisitionStage: 'SEARCHING' });
     expect(v.readiness).not.toBe('READY');
+    expect(v.phase).not.toBe('LOCKED');
   });
 
-  it('sin tejido sobre la lente → NO_CONTACT y sin corrección', () => {
+  it('READY canónico pero fuera de la zona muerta visual → NO dice OK (sólo endurece)', () => {
+    const v = view({
+      evidence: evidence({
+        readiness: 'READY',
+        placement: 'CENTERED',
+        centroid: { x: 0.68, y: 0.5 },
+        offset: { x: -0.18, y: 0 },
+        alignment: 0.95,
+      }),
+    });
+    expect(v.offset).toBeGreaterThan(VITAL_THRESHOLDS.PLACEMENT.OVERLAY.DEADBAND);
+    expect(v.phase).toBe('ALIGN');
+    expect(v.readiness).not.toBe('READY');
+    expect(v.ghostVisible).toBe(true);
+  });
+
+  it('sin tejido sobre la lente → SEARCH: dice dónde está la lente', () => {
     const v = view({
       evidence: evidence({
         placement: 'NO_FINGER',
@@ -118,10 +137,52 @@ describe('deriveWellGuide — la ventana sólo dice OK si es verdad', () => {
       }),
     });
     expect(v.readiness).toBe('NO_CONTACT');
+    expect(v.phase).toBe('SEARCH');
+    expect(v.ghostVisible).toBe(false);
+    expect(v.instruction).toMatch(/APOYA/);
+    expect(v.detail).toMatch(/CENTRO/);
+  });
+
+  it('la posición manda sobre la presión: fuera de centro + presión baja → ALIGN', () => {
+    const v = view({
+      evidence: evidence({
+        placement: 'EDGE',
+        readiness: 'PRESSURE',
+        pressure: 'LIGHT',
+        alignment: 0.1,
+        centroid: { x: 0.8, y: 0.5 },
+        seal: 0.3,
+      }),
+    });
+    expect(v.phase).toBe('ALIGN');
+    expect(v.instruction).toMatch(/COINCIDIR/);
+  });
+
+  it('centrado y con presión no óptima → PRESSURE con instrucción de presión', () => {
+    const v = view({
+      evidence: evidence({ pressure: 'LIGHT', readiness: 'PRESSURE', pressureScore: 0.2 }),
+    });
+    expect(v.phase).toBe('PRESSURE');
+    expect(v.instruction).toMatch(/PRESIONA/);
     expect(v.ghostVisible).toBe(false);
   });
 
-  it('dedo descentrado → ALIGNING con fantasma y corrección hacia el centro', () => {
+  it('la cobertura se expone como porcentaje real en el detalle', () => {
+    const v = view({
+      evidence: evidence({
+        placement: 'EDGE',
+        readiness: 'ALIGNING',
+        alignment: 0.2,
+        centroid: { x: 0.8, y: 0.5 },
+        seal: 0.28,
+      }),
+    });
+    expect(v.detail).toMatch(/\d+%/);
+    expect(v.coverage).toBeGreaterThan(0.4);
+    expect(v.coverage).toBeLessThan(0.7);
+  });
+
+  it('dedo descentrado → ALIGN con fantasma y corrección hacia el centro', () => {
     const v = view({
       evidence: evidence({
         placement: 'EDGE',
@@ -134,6 +195,7 @@ describe('deriveWellGuide — la ventana sólo dice OK si es verdad', () => {
     });
 
     expect(v.readiness).toBe('ALIGNING');
+    expect(v.phase).toBe('ALIGN');
     expect(v.ghostVisible).toBe(true);
     // El fantasma se dibuja donde el tejido está de verdad (derecha del centro).
     expect(v.ghost.u).toBeGreaterThan(0.7);
