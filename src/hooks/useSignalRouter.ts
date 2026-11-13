@@ -84,6 +84,7 @@ interface VitalSignsProcessorAPI {
     morphologyBatch?: TimedSignalSample[],
   ) => VitalSignsResult;
   resetMorphologyWindow: () => void;
+  resetRespirationWindow: () => void;
   setPlacementMode: (mode: FingerPlacementMode) => void;
   setRGBData: (data: RGBData) => void;
   getRGBStats: () => { redAC: number; redDC: number; greenAC: number; greenDC: number; blueAC?: number; blueDC?: number; rgRatio: number; ratioOfRatios: number };
@@ -251,6 +252,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     morphologyBatchRef.current = [];
     morphologyStreamActiveRef.current = false;
     processVitalSigns.resetMorphologyWindow();
+    processVitalSigns.resetRespirationWindow();
     ppgMeterRef?.current?.clearBuffer();
 
   }, [processHeartBeat, processVitalSigns, ppgMeterRef]);
@@ -280,6 +282,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     morphologyBatchRef.current = [];
     morphologyStreamActiveRef.current = false;
     processVitalSigns.resetMorphologyWindow();
+    processVitalSigns.resetRespirationWindow();
     ppgMeterRef?.current?.clearBuffer();
 
   }, [processVitalSigns, ppgMeterRef]);
@@ -560,6 +563,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       morphologyBatchRef.current = [];
       morphologyStreamActiveRef.current = false;
       processVitalSigns.resetMorphologyWindow();
+      processVitalSigns.resetRespirationWindow();
     }
 
     const showWaveform = hasUsableContact;
@@ -828,7 +832,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         undefined,
         undefined,
         lastSignal.accelRespiration,
-        morphologyBatch
+        morphologyBatch,
+        lastSignal.timestamp
       );
 
       vitalSignsRef.current = vitals;
