@@ -145,6 +145,19 @@ function clamp01(v: number): number {
  */
 const COUPLING_GATE = 0.5;
 
+/**
+ * Centrado mínimo para descartar el descentrado como causa. Por encima de esto
+ * la geometría está bien y no puede explicar una señal débil.
+ */
+const CENTERING_GATE = 0.6;
+
+/**
+ * Quietud mínima para que la lectura óptica describa sangre y no movimiento.
+ * Con movimiento grosero el patrón que cambia entre frames es el dedo, así que
+ * ninguna hipótesis fisiológica es sostenible.
+ */
+const STILLNESS_GATE = 0.35;
+
 interface CauseSpec {
   label: string;
   action: SignalAction;
@@ -182,6 +195,9 @@ const CAUSES: Record<SignalCauseId, CauseSpec> = {
   OFF_CENTER: {
     label: 'Contacto incompleto y descentrado',
     action: 'CENTER',
+    // Precondición geométrica: si la yema está centrada, el descentrado no es
+    // una causa posible de la señal débil, por mucho residuo que quede.
+    eligible: (e) => clamp01(e.centering) < CENTERING_GATE,
     weights: { sealMissing: 1.4, offCenter: 2.6, sealPresent: 0.8, pulseWeak: 0.5 },
   },
   EXCESS_PRESSURE: {
@@ -195,6 +211,10 @@ const CAUSES: Record<SignalCauseId, CauseSpec> = {
       sealPresent: 2.0,
       sealMissing: -2.0,
       pulseWeak: 1.2,
+      // Una hipótesis que predice pulso débil no puede ganar con pulso fuerte.
+      pulseStrong: -1.5,
+      // Si el dedo está descentrado, la geometría ya explica la señal débil.
+      offCenter: -1.0,
       dcAbove: 2.2,
       blanching: 1.8,
       piFalling: 0.8,
@@ -211,6 +231,8 @@ const CAUSES: Record<SignalCauseId, CauseSpec> = {
       sealPresent: 2.2,
       sealMissing: -2.5,
       pulseWeak: 1.4,
+      pulseStrong: -2.0,
+      offCenter: -1.5,
       dcSteady: 1.8,
       piRising: 1.2,
       perfusedLow: 1.0,
@@ -223,7 +245,13 @@ const CAUSES: Record<SignalCauseId, CauseSpec> = {
     label: 'Apoyo insuficiente sobre la lente',
     action: 'PRESS_MORE',
     eligible: (e) => e.seal >= P.COVER_MIN,
-    weights: { sealMissing: 1.6, sealPresent: -2.0, pulseWeak: 0.8, dcSteady: 0.6 },
+    weights: {
+      sealMissing: 1.6,
+      sealPresent: -2.0,
+      pulseWeak: 0.8,
+      pulseStrong: -1.2,
+      dcSteady: 0.6,
+    },
   },
   MOTION: {
     label: 'Artefacto de movimiento',
@@ -250,6 +278,7 @@ const CAUSES: Record<SignalCauseId, CauseSpec> = {
     action: 'HOLD',
     weights: {
       sealPresent: 1.2,
+      sealMissing: -1.2,
       pulseStrong: 2.0,
       pulseWeak: -1.5,
       dcSteady: 1.4,
@@ -274,6 +303,8 @@ function buildFeatures(e: EtiologyEvidence): Record<string, number> {
   return {
     sealMissing: 1 - sealNorm,
     sealPresent: sealNorm,
+    // Cuánto falta para alcanzar el PISO de contacto (0 si ya lo supera).
+    belowContactFloor: clamp01(1 - clamp01(e.seal) / Math.max(1e-6, P.COVER_MIN)),
     pulseWeak: 1 - pulsatility,
     pulseStrong: pulsatility,
     dcAbove,
@@ -369,6 +400,24 @@ export function inferSignalEtiology(e: EtiologyEvidence): SignalEtiology {
       confidence: 1,
       alternatives: [],
       supporting: [{ id: 'capture', value: 1, contribution: 1 }],
+      contradicting: [],
+    };
+  }
+
+  // Movimiento dominante: el patrón óptico que cambia entre frames es el dedo,
+  // no la sangre. Ninguna causa fisiológica es sostenible con esa evidencia, así
+  // que el movimiento no compite: es una precondición.
+  if (clamp01(e.stillness) < STILLNESS_GATE) {
+    const spec = CAUSES.MOTION;
+    return {
+      cause: 'MOTION',
+      label: spec.label,
+      action: spec.action,
+      headline: spec.label.toUpperCase(),
+      explanation: explain('MOTION', e, features),
+      confidence: 1,
+      alternatives: [],
+      supporting: [{ id: 'motion', value: 1 - clamp01(e.stillness), contribution: 1 }],
       contradicting: [],
     };
   }

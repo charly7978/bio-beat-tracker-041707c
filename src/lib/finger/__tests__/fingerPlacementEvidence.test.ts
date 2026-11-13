@@ -57,11 +57,13 @@ describe('fingerPlacementEvidence — evidencia física de colocación', () => {
     expect(evidence.placement).toBe('CENTERED');
   });
 
-  it('sellado bajo → LIGHT y guía de presionar más', () => {
+  it('sellado insuficiente → PRESS_MORE y explicación con la cobertura medida', () => {
     const evidence = feed(45, PRESSING_SOFT);
     expect(evidence.pressure).toBe('LIGHT');
     expect(evidence.guidance.action).toBe('PRESS_MORE');
-    expect(evidence.failing[0]).toMatch(/cubre la lente/i);
+    // La explicación debe citar la cobertura REAL, no una frase genérica.
+    expect(evidence.guidance.detail).toMatch(/1\d%/);
+    expect(evidence.guidance.detail).toMatch(/apoya un poco más/i);
     expect(evidence.pressureScore).toBeLessThan(0.45);
   });
 
@@ -104,22 +106,47 @@ describe('fingerPlacementEvidence — evidencia física de colocación', () => {
     expect(heavy.score).toBeLessThan(good.score);
   });
 
-  it('petición de más presión cuando el pulso es débil sin evidencia de colapso', () => {
-    // Primero se establece un máximo de referencia con pulso pleno; después el
-    // pulso cae sin que el DC suba. Eso es "apoya mejor", no "suelta".
+  it('dedo frío con buena cobertura → WARM, NO "presiona más"', () => {
+    // El núcleo del encargo. El dedo es un órgano termorregulador: con la lente
+    // bien cubierta y el DC estable, un pulso débil es vasoconstricción simpática
+    // (frío/estrés), no falta de presión. Apretar más no lo arregla.
+    // (Sci Rep 2020;10:6741: la vasoconstricción baja la AC con el DC sin cambios.)
     feed(45);
     const evidence = feed(30, {
       sealRatio: 0.62,
-      perfusedFraction: 0.6,
+      perfusedFraction: 0.4,
       perfusionIndex: 0.001,
-      dcLevel: 110,
-      roiRedCv: 0.05,
+      dcLevel: 150,
+      roiRedCv: 0.04,
+      motionScore: 0.05,
+      centroidX: 0.5,
+      centroidY: 0.5,
     });
 
-    expect(evidence.pressure).toBe('LIGHT');
-    expect(evidence.failing.join(' ')).toMatch(/presiona (más|un poco más)/i);
-    expect(evidence.blanching).toBeLessThan(0.5);
-    expect(evidence.failing.join(' ')).not.toMatch(/suelta un poco/i);
+    expect(evidence.etiology.cause).toBe('VASOCONSTRICTION');
+    expect(evidence.guidance.action).toBe('WARM');
+    expect(evidence.guidance.headline).toMatch(/VASOCONSTRICCIÓN/i);
+    expect(evidence.guidance.detail).toMatch(/frío|frótalo/i);
+    // Debe decir explícitamente que NO hay que apretar más.
+    expect(evidence.guidance.detail).toMatch(/no aprietes más/i);
+    expect(evidence.guidance.action).not.toBe('PRESS_MORE');
+    expect(evidence.guidance.action).not.toBe('RELEASE');
+  });
+
+  it('la explicación cita las magnitudes medidas, no frases de tabla', () => {
+    feed(45);
+    const heavy = feed(30, PRESSING_HARD);
+    // Debe nombrar el pulso caído y el DC subido, con sus porcentajes.
+    expect(heavy.guidance.detail).toMatch(/pulso/i);
+    expect(heavy.guidance.detail).toMatch(/\d+%/);
+    expect(heavy.guidance.detail).toMatch(/DC/i);
+  });
+
+  it('un sensor saturado se declara como problema de captura, no de presión', () => {
+    const evidence = feed(30, { ...GOOD, capture: 'SATURATED' });
+    expect(evidence.guidance.action).toBe('WAIT');
+    expect(evidence.etiology.cause).toBe('SATURATED');
+    expect(evidence.guidance.detail).toMatch(/saturado|brillo|flash/i);
   });
 
   it('arranque en frío con pulso débil no se afirma como óptimo', () => {
