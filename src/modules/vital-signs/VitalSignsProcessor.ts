@@ -92,6 +92,9 @@ export class VitalSignsProcessor {
   /** Buffer más largo para modulación respiratoria (~10 Hz efectivos desde Index). */
   private readonly RESPIRATION_BUFFER = 320;
   private respirationHistory: RingF32 = new RingF32(this.RESPIRATION_BUFFER);
+  private signalTimedSamples: TimedSignalSample[] = [];
+  private respirationTimedSamples: TimedSignalSample[] = [];
+  private respirationSampleRateHz = 0;
   private readonly VITAL_SIGNAL_ESTIMATE_HZ = 10;
   private frameCount = 0;  // Contador continuo para logging/diagnóstico
 
@@ -161,9 +164,8 @@ export class VitalSignsProcessor {
       lastArrhythmiaData: null,
       signalQuality: 0
     };
-    this.signalHistory.reset();
+    this.resetRespirationWindow();
     this.resetMorphologyWindow();
-    this.respirationHistory.reset();
     this.lastRrIntervals = [];
     this.lastAccelRespiration = null;
     this.stableFramesCount = 0;
@@ -220,6 +222,8 @@ export class VitalSignsProcessor {
     accelRespiration?: { rpm: number; quality: number },
     /** Muestras morfológicas tomadas en cada frame, con timestamp de captura en ms. */
     morphologyBatch?: TimedSignalSample[],
+    /** Timestamp del frame que alimenta las series lentas (ms, reloj monotónico). */
+    sampleTimestampMs?: number,
   ): VitalSignsResult {
     this.frameCount++;
     // Espeja el estado cacheado del acelerómetro (ya throttled en el procesador).
@@ -246,7 +250,7 @@ export class VitalSignsProcessor {
         ? morphologyValue
         : signalValue;
     })();
-    this.signalHistory.push(signalValue);
+    this.updateRespirationWindow(signalValue, respirationSample, sampleTimestampMs);
     this.updateMorphologyWindow(morphSample, morphologyBatch);
 
     // Canal 4 (LP respiratorio): si disponible, usa señal pre-filtrada a banda respiratoria;
@@ -257,7 +261,7 @@ export class VitalSignsProcessor {
         ? fromSplitter
         : signalValue;
     })();
-    this.respirationHistory.push(respirationSample);
+    // La serie respiratoria ya se actualizó con timestamp y frecuencia observada.
 
     // Guarda los RR para la modalidad RIFV de respiración (getFormattedResult no
     // recibe rrData en su firma).
@@ -403,6 +407,80 @@ export class VitalSignsProcessor {
     this.bpTotalWeight = 0;
   }
 
+  /**
+   * Mantiene uniformes las dos series lentas del motor respiratorio.
+   * processSignal se invoca con una cadencia reducida respecto de la cámara;
+   * por eso no se puede asumir que esa cadencia sea siempre 10 Hz.
+   */
+  private updateRespirationWindow(
+    signalSample: number,
+    respirationSample: number,
+    timestampMs?: number,
+  ): void {
+    // Compatibilidad para consumidores antiguos sin reloj de captura.
+    if (timestampMs === undefined) {
+      this.signalHistory.push(signalSample);
+      this.respirationHistory.push(respirationSample);
+      this.respirationSampleRateHz = this.VITAL_SIGNAL_ESTIMATE_HZ;
+      return;
+    }
+
+    if (!Number.isFinite(timestampMs) || timestampMs <= 0) {
+      this.resetRespirationWindow();
+      return;
+    }
+
+    const previous = this.signalTimedSamples[this.signalTimedSamples.length - 1];
+    if (previous && timestampMs <= previous.timestampMs) return;
+
+    this.signalTimedSamples.push({ value: signalSample, timestampMs });
+    this.respirationTimedSamples.push({ value: respirationSample, timestampMs });
+
+    if (this.signalTimedSamples.length > this.RESPIRATION_BUFFER) {
+      this.signalTimedSamples.splice(0, this.signalTimedSamples.length - this.RESPIRATION_BUFFER);
+      this.respirationTimedSamples.splice(0, this.respirationTimedSamples.length - this.RESPIRATION_BUFFER);
+    }
+
+    const options = {
+      targetRateHz: this.VITAL_SIGNAL_ESTIMATE_HZ,
+      minRateHz: 4,
+      maxRateHz: 40,
+      maxGapMultiple: 2.5,
+      maxJitterRatio: 0.5,
+    };
+    const uniformSignal = resampleTimedSignal(this.signalTimedSamples, options);
+    const uniformRespiration = resampleTimedSignal(this.respirationTimedSamples, options);
+
+    this.signalHistory.reset();
+    this.respirationHistory.reset();
+    if (!uniformSignal || !uniformRespiration) {
+      this.respirationSampleRateHz = 0;
+      return;
+    }
+
+    this.respirationSampleRateHz = Math.min(
+      uniformSignal.sampleRateHz,
+      uniformRespiration.sampleRateHz,
+    );
+    for (const value of uniformSignal.samples.slice(-this.HISTORY_SIZE)) {
+      this.signalHistory.push(value);
+    }
+    for (const value of uniformRespiration.samples.slice(-this.RESPIRATION_BUFFER)) {
+      this.respirationHistory.push(value);
+    }
+  }
+
+  /** Borra las ventanas lentas para no mezclar sesiones o huecos temporales. */
+  resetRespirationWindow(): void {
+    this.signalTimedSamples = [];
+    this.respirationTimedSamples = [];
+    this.signalHistory.reset();
+    this.respirationHistory.reset();
+    this.respirationSampleRateHz = 0;
+    this.lastRrIntervals = [];
+    this.lastAccelRespiration = null;
+  }
+
   private validateRealPulse(rrData?: RRData): boolean {
     if (!rrData || !rrData.intervals || rrData.intervals.length < 2) {
       this.validPulseCount = 0;
@@ -494,6 +572,7 @@ export class VitalSignsProcessor {
     const respBuf = this.respirationHistory.tail(this.RESPIRATION_BUFFER);
     const respReady =
       vitalUiGate &&
+      this.respirationSampleRateHz >= 4 &&
       respBuf.length >= RESPIRATION_DEFAULTS.minBuffer * 0.55 &&
       this.stableFramesCount >= RESPIRATION_DEFAULTS.minStableFrames;
     // Smart Fusion multi-modalidad (Karlen 2013): RIAV (envolvente del pulso) +
@@ -504,7 +583,7 @@ export class VitalSignsProcessor {
       ? estimateRespiratorySmartFusion({
         pulseSeries: this.signalHistory.tail(this.HISTORY_SIZE),
         respBandSeries: respBuf,
-        fsHz: this.VITAL_SIGNAL_ESTIMATE_HZ,
+        fsHz: this.respirationSampleRateHz,
         rrIntervalsMs: this.lastRrIntervals,
         approxBpm: this.lastBPM,
         minRpm: RESPIRATION_DEFAULTS.minRpm,
@@ -849,9 +928,8 @@ export class VitalSignsProcessor {
         result.bloodPressure.value.diastolic = wAvgDia;
       }
     }
-    this.signalHistory.reset();
+    this.resetRespirationWindow();
     this.resetMorphologyWindow();
-    this.respirationHistory.reset();
     this.lastRrIntervals = [];
     this.lastAccelRespiration = null;
     this.validPulseCount = 0;
@@ -868,9 +946,8 @@ export class VitalSignsProcessor {
   }
 
   fullReset(): void {
-    this.signalHistory.reset();
+    this.resetRespirationWindow();
     this.resetMorphologyWindow();
-    this.respirationHistory.reset();
     this.lastRrIntervals = [];
     this.lastAccelRespiration = null;
     this.validPulseCount = 0;
