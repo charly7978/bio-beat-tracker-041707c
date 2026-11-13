@@ -158,6 +158,16 @@ const CENTERING_GATE = 0.6;
  */
 const STILLNESS_GATE = 0.35;
 
+/** El centro geométrico no invalida tejido que ya aporta contacto y pulso útiles. */
+export function hasUsableOpticalContact(
+  e: Pick<EtiologyEvidence, 'seal' | 'pulsatility' | 'stillness' | 'capture'>,
+): boolean {
+  return e.capture === 'OK' &&
+    e.seal >= P.COVER_GOOD &&
+    e.pulsatility >= P.PULSE_OK &&
+    e.stillness >= VITAL_THRESHOLDS.PLACEMENT.STILL_MIN;
+}
+
 interface CauseSpec {
   label: string;
   action: SignalAction;
@@ -197,7 +207,7 @@ const CAUSES: Record<SignalCauseId, CauseSpec> = {
     action: 'CENTER',
     // Precondición geométrica: si la yema está centrada, el descentrado no es
     // una causa posible de la señal débil, por mucho residuo que quede.
-    eligible: (e) => clamp01(e.centering) < CENTERING_GATE,
+    eligible: (e) => clamp01(e.centering) < CENTERING_GATE && !hasUsableOpticalContact(e),
     weights: { sealMissing: 1.4, offCenter: 2.6, sealPresent: 0.8, pulseWeak: 0.5 },
   },
   EXCESS_PRESSURE: {

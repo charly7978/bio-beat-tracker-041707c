@@ -11,7 +11,7 @@ import {
   SESSION_LATCH,
   updateMeasurementSessionLatch,
 } from '@/lib/measurement/measurementSessionLatch';
-import { evaluateMeasurementReadiness } from '@/lib/measurement/measurementReadiness';
+import { canCollectMorphologyFrame, evaluateMeasurementReadiness } from '@/lib/measurement/measurementReadiness';
 import { bpmFromEmittedRr } from '@/lib/measurement/peakEmitPolicy';
 import {
   createStabilizationState,
@@ -541,22 +541,20 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     // Muestreamos morfología a la frecuencia de captura, no a la cadencia
     // reducida de VitalSignsProcessor. Los timestamps provienen del frame real.
     const morphologyValue = lastSignal.morphologyFiltered;
-    const morphologyFrameUsable =
-      vitalsDspReady &&
-      hasUsableContact &&
-      contactState === 'STABLE_CONTACT' &&
-      !lastSignal.motionArtifact &&
-      typeof morphologyValue === 'number' &&
-      Number.isFinite(morphologyValue) &&
-      Math.abs(morphologyValue) > 1e-9 &&
-      typeof lastSignal.timestamp === 'number' &&
-      Number.isFinite(lastSignal.timestamp);
+    const morphologyFrame = {
+      vitalsDspReady,
+      hasUsableContact,
+      contactState,
+      motionArtifact: !!lastSignal.motionArtifact,
+      value: morphologyValue,
+      timestampMs: lastSignal.timestamp,
+    };
 
-    if (morphologyFrameUsable) {
+    if (canCollectMorphologyFrame(morphologyFrame)) {
       morphologyStreamActiveRef.current = true;
       morphologyBatchRef.current.push({
-        value: morphologyValue,
-        timestampMs: lastSignal.timestamp,
+        value: morphologyFrame.value,
+        timestampMs: morphologyFrame.timestampMs,
       });
       // Mantener 6 s como máximo para resampleo y análisis de calidad.
       if (morphologyBatchRef.current.length > 180) {

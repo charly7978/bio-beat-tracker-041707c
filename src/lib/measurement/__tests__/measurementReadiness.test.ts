@@ -1,11 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateMeasurementReadiness } from '../measurementReadiness';
+import { canCollectMorphologyFrame, evaluateMeasurementReadiness, type MorphologyFrameInput } from '../measurementReadiness';
 import {
   createMeasurementSessionLatch,
   updateMeasurementSessionLatch,
 } from '../measurementSessionLatch';
 
 describe('measurementReadiness', () => {
+  const goodFrame: MorphologyFrameInput = {
+    vitalsDspReady: true, hasUsableContact: true, contactState: 'STABLE_CONTACT',
+    motionArtifact: false, value: 0.2, timestampMs: 1000,
+  };
+
+  it('un cruce por cero conserva la ventana morfológica', () => {
+    for (const value of [-0.01, 0, 0.01]) {
+      expect(canCollectMorphologyFrame({ ...goodFrame, value })).toBe(true);
+    }
+  });
+
+  it.each([
+    { motionArtifact: true }, { hasUsableContact: false }, { value: NaN },
+    { value: undefined }, { timestampMs: Infinity }, { timestampMs: 0 },
+    { contactState: 'NO_CONTACT' as const }, { vitalsDspReady: false },
+  ])('conserva el rechazo de artefactos o muestras no utilizables: %o', overrides => {
+    expect(canCollectMorphologyFrame({ ...goodFrame, ...overrides })).toBe(false);
+  });
   it('habilita vitales con dedo, SQI y al menos un pico en latch', () => {
     let latch = createMeasurementSessionLatch();
     latch = updateMeasurementSessionLatch(latch, true, 72, 12, 1000, true);
@@ -50,3 +68,4 @@ describe('measurementReadiness', () => {
     expect(r.hrDisplayReady).toBe(false);
   });
 });
+

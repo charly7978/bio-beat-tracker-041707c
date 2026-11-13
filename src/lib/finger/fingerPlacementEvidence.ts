@@ -23,6 +23,7 @@
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import {
   inferSignalEtiology,
+  hasUsableOpticalContact,
   type CaptureCondition,
   type SignalAction,
   type SignalEtiology,
@@ -43,8 +44,8 @@ export type { SignalEtiology };
 /**
  * Veredicto AGREGADO de colocación. Es el único que la ventana de
  * previsualización puede usar para decir "OK": sólo `READY` significa que la
- * lente está sellada, el dedo centrado, el pulso presente, la mano quieta y la
- * captura limpia. Un `READY` de aquí más un `acquisitionStage === 'READY'` del
+ * contacto aporta pulso útil, sin presión excesiva ni captura degradada. No
+ * exige centrar tejido que ya entrega señal. Un `READY` de aquí más un `acquisitionStage === 'READY'` del
  * estabilizador es lo que la app llama "todo bien".
  */
 export type PlacementReadiness = 'NO_CONTACT' | 'ALIGNING' | 'PRESSURE' | 'READY';
@@ -119,7 +120,6 @@ const {
 const {
   CENTERED_MIN,
   EDGE_MAX,
-  CENTER_HINT_MIN,
   STILL_MIN,
 } = VITAL_THRESHOLDS.PLACEMENT;
 
@@ -253,15 +253,21 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
 
   // ── Veredicto AGREGADO de colocación ────────────────────────────────────────
   // Sólo READY afirma que la colocación está completa. Se apoya en magnitudes
-  // ya medidas (sellado, centrado, pulso, quietud) y en la precondición de
+  // ya medidas (sellado, pulso, quietud) y en la precondición de
   // captura: un sensor saturado, subexpuesto o lento no puede dar READY aunque
   // el dedo esté perfecto (no se ve el lecho capilar).
   const captureOk = (input.capture ?? 'OK') === 'OK';
+  const usablePosition = hasUsableOpticalContact({
+    seal: reading.seal,
+    pulsatility: reading.pulsatility,
+    stillness: reading.motion,
+    capture: input.capture ?? 'OK',
+  });
   let readiness: PlacementReadiness;
   if (placement === 'NO_FINGER') readiness = 'NO_CONTACT';
   else if (
     pressure === 'IDEAL' &&
-    placement === 'CENTERED' &&
+    (placement === 'CENTERED' || usablePosition) &&
     reading.motion >= STILL_MIN &&
     reading.pulsatility >= PULSE_OK &&
     captureOk
@@ -325,9 +331,8 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
   // contiene incidencias REALES: si la causa es óptima no hay nada que corregir.
   const failing: string[] =
     etiology.cause === 'OPTIMAL' ? [] : [etiology.explanation];
-  if (ev.center < CENTER_HINT_MIN && etiology.cause !== 'OFF_CENTER') {
-    failing.push('Centra la yema en la lente');
-  }
+  // La causa dominante ya incluye la corrección útil. No sumar una orden de
+  // centrado a "afloja" o "espera": varias tareas simultáneas inducen movimiento.
   if (reading.motion < 0.55 && etiology.cause !== 'MOTION') {
     failing.push('Sostén el dedo quieto');
   }
@@ -355,3 +360,4 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
     motion: reading.motion,
   };
 }
+

@@ -108,9 +108,46 @@ describe('deriveWellGuide — la ventana sólo dice OK si es verdad', () => {
     const v = view({ acquisitionStage: 'SEARCHING' });
     expect(v.readiness).not.toBe('READY');
     expect(v.phase).not.toBe('LOCKED');
+    expect(v.phase).toBe('SETTLING');
+    expect(v.instruction).toMatch(/CÓMODO/);
+    expect(v.ghostVisible).toBe(false);
   });
 
-  it('READY canónico pero fuera de la zona muerta visual → NO dice OK (sólo endurece)', () => {
+  it('pérdida temporal por movimiento pide apoyar la mano, no perseguir la diana', () => {
+    const v = view({
+      evidence: evidence({
+        readiness: 'ALIGNING', placement: 'OFF_CENTER', centroid: { x: 0.8, y: 0.5 },
+        etiology: { ...evidence().etiology, cause: 'MOTION', action: 'WAIT' },
+      }),
+      acquisitionStage: 'STABILIZING',
+    });
+    expect(v.phase).toBe('SETTLING');
+    expect(v.instruction).toBe('APOYA LA MANO');
+    expect(v.detail).toBe('RECUPERANDO SEÑAL');
+    expect(v.ghostVisible).toBe(false);
+  });
+
+  it('la presión excesiva se corrige antes de pedir un ajuste geométrico', () => {
+    const v = view({ evidence: evidence({
+      readiness: 'PRESSURE', pressure: 'HEAVY', placement: 'EDGE', centroid: { x: 0.9, y: 0.5 },
+    }) });
+    expect(v.phase).toBe('PRESSURE');
+    expect(v.instruction).toBe('SUELTA UN POCO');
+    expect(v.ghostVisible).toBe(false);
+  });
+
+  it('una captura saturada no pide apretar o recentrar para compensarla', () => {
+    const v = view({ evidence: evidence({
+      readiness: 'ALIGNING', pressure: 'LIGHT', placement: 'EDGE',
+      guidance: { ...evidence().guidance, action: 'FIX_SATURATION' },
+      etiology: { ...evidence().etiology, cause: 'SATURATED' },
+    }) });
+    expect(v.phase).toBe('SETTLING');
+    expect(v.instruction).toBe('MUCHO BRILLO');
+    expect(v.ghostVisible).toBe(false);
+  });
+
+  it('READY canónico no exige además coincidir con una diana visual estrecha', () => {
     const v = view({
       evidence: evidence({
         readiness: 'READY',
@@ -121,9 +158,9 @@ describe('deriveWellGuide — la ventana sólo dice OK si es verdad', () => {
       }),
     });
     expect(v.offset).toBeGreaterThan(VITAL_THRESHOLDS.PLACEMENT.OVERLAY.DEADBAND);
-    expect(v.phase).toBe('ALIGN');
-    expect(v.readiness).not.toBe('READY');
-    expect(v.ghostVisible).toBe(true);
+    expect(v.phase).toBe('LOCKED');
+    expect(v.readiness).toBe('READY');
+    expect(v.ghostVisible).toBe(false);
   });
 
   it('sin tejido sobre la lente → SEARCH: dice dónde está la lente', () => {
@@ -140,10 +177,10 @@ describe('deriveWellGuide — la ventana sólo dice OK si es verdad', () => {
     expect(v.phase).toBe('SEARCH');
     expect(v.ghostVisible).toBe(false);
     expect(v.instruction).toMatch(/APOYA/);
-    expect(v.detail).toMatch(/CENTRO/);
+    expect(v.detail).toMatch(/CÁMARA TRASERA/);
   });
 
-  it('la posición manda sobre la presión: fuera de centro + presión baja → ALIGN', () => {
+  it('contacto insuficiente pide cubrir la yema sin exigir precisión geométrica', () => {
     const v = view({
       evidence: evidence({
         placement: 'EDGE',
@@ -154,8 +191,8 @@ describe('deriveWellGuide — la ventana sólo dice OK si es verdad', () => {
         seal: 0.3,
       }),
     });
-    expect(v.phase).toBe('ALIGN');
-    expect(v.instruction).toMatch(/COINCIDIR/);
+    expect(v.phase).toBe('PRESSURE');
+    expect(v.instruction).toMatch(/SIN APRETAR/);
   });
 
   it('centrado y con presión no óptima → PRESSURE con instrucción de presión', () => {
@@ -163,7 +200,7 @@ describe('deriveWellGuide — la ventana sólo dice OK si es verdad', () => {
       evidence: evidence({ pressure: 'LIGHT', readiness: 'PRESSURE', pressureScore: 0.2 }),
     });
     expect(v.phase).toBe('PRESSURE');
-    expect(v.instruction).toMatch(/PRESIONA/);
+    expect(v.instruction).toMatch(/SIN APRETAR/);
     expect(v.ghostVisible).toBe(false);
   });
 
@@ -396,3 +433,4 @@ describe('fingerprintRidges — forma determinista y registrable', () => {
     expect(h).toBeGreaterThan(w);
   });
 });
+

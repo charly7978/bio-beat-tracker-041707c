@@ -1,45 +1,14 @@
 /**
- * GUÍA DE COLOCACIÓN DENTRO DE LA VENTANA DE PREVISUALIZACIÓN.
+ * Guía de contacto dentro de la previsualización.
  *
- * La ventana es la ÚNICA vista que el usuario tiene de la cámara (el resto del
- * monitor es un canvas opaco): si no sirve para colocar el dedo, no sirve. Este
- * módulo traduce la evidencia MEDIDA del pipeline a un dibujo registrado sobre
- * la imagen — una huella "diana" fija en el centro de la lente, una huella
- * "fantasma" en la posición real del tejido y un haz de corrección entre ambas.
+ * Proyecta la evidencia canónica del pipeline; no impone una precisión
+ * geométrica adicional. Si el contacto ya aporta pulso y adquisición READY,
+ * confirma la señal aunque el centroide no coincida con la diana dibujada.
+ * La corrección visual sólo aparece cuando hace falta recuperar cobertura;
+ * reunir señal o recuperarse de movimiento no pide perseguir una huella.
  *
- * EVIDENCIA (nada aquí se inventa):
- *  - `evidence.centroid`    → dónde está el dedo de verdad (medido por frame).
- *  - `evidence.seal`        → cuánta lente cubre (tamaño y arco de cobertura).
- *  - `evidence.pulsatility` → fuerza del pulso (presencia de la guía).
- *  - `evidence.placement`   → si el dedo está centrado (canónico).
- *  - `evidence.readiness`   → veredicto agregado; sólo `READY` enciende el OK.
- *
- * POR QUÉ ESTE DISEÑO (evidencia):
- *  - Nature Sci Rep 2018;8:14123 (oscilométrico con iPhone): la app guía la
- *    colocación mostrando a la vez el área REAL de contacto (óvalo verde) y el
- *    objetivo (óvalo negro), y el usuario hace coincidir ambos. Es registro
- *    visual, no una instrucción de texto.
- *  - UIS / Sensor OLED, PMC11829945 (2025): dar feedback de calidad EN TIEMPO
- *    REAL mientras se captura baja el fallo de medida del 14,5 % al 0 %; los
- *    usuarios corrigen posición y presión al ver el GUI.
- *  - SMARTBEATS, PubMed 38533836 (2024): añadir feedback automático de
- *    manipulación bajó las grabaciones no diagnosticables del 4,4 % al 0,04 %.
- *  - NIST/Choong 2012 y Guan et al. 2011: el overlay de la imagen real mejora el
- *    posicionamiento; las instrucciones correctivas derivadas de magnitudes
- *    objetivas son las que suben la calidad.
- *  - AR / registro (IEEE ISMAR 2023; UCL 2026): el desajuste del cue sólo es
- *    tolerable por debajo de cierto margen — de ahí la zona muerta y el haz, que
- *    hacen explícito el error en vez de dejar que el usuario lo estime.
- *
- * FASES (lo que la app sabe y comunica):
- *  1. SEARCH   — no hay tejido: la diana respira y dice dónde está la lente.
- *  2. ALIGN    — hay tejido descentrado: fantasma + haz + arco de cobertura.
- *  3. PRESSURE — centrado pero la presión no es óptima: instrucción de presión.
- *  4. LOCKED   — todo correcto: la diana se cierra y se queda encendida.
- *
- * Este módulo NO decide: `deriveWellGuide` sólo proyecta el veredicto canónico a
- * una vista. La decisión vive en `fingerPlacementEvidence` (colocación/presión)
- * y en `AcquisitionStabilizer` (adquisición).
+ * El centroide y el sellado medidos se conservan para dibujar y diagnosticar.
+ * Las animaciones nunca avanzan modelos de presión, adquisición o medición.
  */
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import type { FingerPlacementEvidence } from '@/lib/finger/fingerPlacementEvidence';
@@ -101,7 +70,7 @@ export type WellReadiness =
   | 'READY';
 
 /** Fase de la guía: lo que la app sabe y lo que le dice al usuario. */
-export type WellPhase = 'INACTIVE' | 'SEARCH' | 'ALIGN' | 'PRESSURE' | 'LOCKED';
+export type WellPhase = 'INACTIVE' | 'SEARCH' | 'ALIGN' | 'PRESSURE' | 'SETTLING' | 'LOCKED';
 
 export interface WellGuideInput {
   /** Evidencia canónica del frame (undefined si el pipeline no entregó nada). */
@@ -172,8 +141,9 @@ function clamp(v: number, lo: number, hi: number): number {
 const INSTRUCTION: Record<WellPhase, string> = {
   INACTIVE: 'SIN SEÑAL',
   SEARCH: 'APOYA LA YEMA EN LA LENTE',
-  ALIGN: 'HAZ COINCIDIR LAS HUELLAS',
+  ALIGN: 'CUBRE UN POCO MÁS LA LENTE',
   PRESSURE: 'AJUSTA LA PRESIÓN',
+  SETTLING: 'MANTÉN UN APOYO CÓMODO',
   LOCKED: 'SEÑAL ESTABLE',
 };
 
@@ -227,48 +197,65 @@ export function deriveWellGuide(input: WellGuideInput): WellGuideView {
   const canonicalReady =
     evidence.readiness === 'READY' && input.acquisitionStage === 'READY';
 
-  // Tolerancia VISUAL del registro. El veredicto canónico declara CENTERED con un
-  // descentrado de hasta ~0,17 del encuadre; la ventana exige además que el dedo
-  // esté dentro de su zona muerta: si no, la huella dibujada no cuadraría con el
-  // dedo del vídeo y el "OK" sería visiblemente falso (el usuario ve el dedo
-  // corrido y la app diciendo "SEÑAL ESTABLE"). Esta es la única condición que
-  // la ventana añade al veredicto, y sólo puede ENDURECERLO, nunca relajarlo.
-  const aligned = offset <= OV.DEADBAND;
-
   const readiness: WellReadiness =
     evidence.placement === 'NO_FINGER'
       ? 'NO_CONTACT'
-      : canonicalReady && aligned
+      : canonicalReady
         ? 'READY'
         : evidence.readiness === 'PRESSURE'
           ? 'PRESSURE'
           : 'ALIGNING';
 
-  // Orden de prioridad de la guía: primero el dedo, luego la posición, luego la
-  // presión. Pedir "presiona más" a un dedo que aún no está en la lente no
-  // arregla nada; y un dedo centrado y aplastado se corrige con la presión.
+  // La adquisición decide si la posición sirve. El dibujo no añade una segunda
+  // diana más estrecha ni pide recolocar mientras se reúne señal utilizable.
   let phase: WellPhase;
   if (evidence.placement === 'NO_FINGER') phase = 'SEARCH';
   else if (readiness === 'READY') phase = 'LOCKED';
-  else if (evidence.placement !== 'CENTERED' || offset > OV.DEADBAND) phase = 'ALIGN';
+  else if (['MOTION', 'SATURATED', 'UNDEREXPOSED', 'LOW_FPS', 'VASOCONSTRICTION'].includes(evidence.etiology.cause)) phase = 'SETTLING';
   else if (evidence.pressure === 'LIGHT' || evidence.pressure === 'HEAVY') phase = 'PRESSURE';
-  else phase = 'ALIGN';
+  else if (
+    evidence.readiness !== 'READY' &&
+    evidence.placement !== 'CENTERED' &&
+    (evidence.guidance.action === 'CENTER' || evidence.guidance.action === 'REPOSITION' || evidence.seal < COVER_GOOD)
+  ) phase = 'ALIGN';
+  else phase = 'SETTLING';
 
-  const instruction =
+  let instruction =
     phase === 'PRESSURE'
       ? evidence.pressure === 'HEAVY'
         ? 'SUELTA UN POCO'
-        : 'PRESIONA UN POCO MÁS'
+        : 'CUBRE MÁS SIN APRETAR'
       : INSTRUCTION[phase];
 
-  const detail =
+  let detail =
     phase === 'SEARCH'
-      ? 'LA LENTE ESTÁ EN EL CENTRO'
+      ? 'CÁMARA TRASERA · APOYO SUAVE'
       : phase === 'ALIGN'
         ? `LENTE CUBIERTA ${Math.round(coverage * 100)}%`
         : phase === 'PRESSURE'
-          ? 'LA PRESIÓN NO ES ÓPTIMA'
+          ? evidence.pressure === 'HEAVY' ? 'AFLOJA SIN RETIRAR LA YEMA' : 'APOYA MÁS SUPERFICIE DE LA YEMA'
+          : phase === 'SETTLING'
+            ? 'REUNIENDO SEÑAL'
           : 'MANTÉN EL DEDO ASÍ';
+
+  if (phase === 'SETTLING') {
+    if (evidence.etiology.cause === 'MOTION') {
+      instruction = 'APOYA LA MANO';
+      detail = 'RECUPERANDO SEÑAL';
+    } else if (evidence.guidance.action === 'WARM') {
+      instruction = 'PRUEBA OTRO DEDO';
+      detail = 'PULSO DÉBIL · NO APRIETES MÁS';
+    } else if (evidence.guidance.action === 'FIX_SATURATION') {
+      instruction = 'MUCHO BRILLO';
+      detail = 'REVISA LA LUZ DE LA CÁMARA';
+    } else if (evidence.guidance.action === 'FIX_LIGHT') {
+      instruction = 'FALTA LUZ';
+      detail = 'COMPRUEBA EL FLASH';
+    } else if (evidence.guidance.action === 'FIX_FPS') {
+      instruction = 'CÁMARA LENTA';
+      detail = 'CIERRA OTRAS APLICACIONES';
+    }
+  }
 
   return {
     phase,
