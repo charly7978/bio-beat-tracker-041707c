@@ -16,7 +16,7 @@ import {
   type DiagnosticStatusState,
 } from '../signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
-import { DSP_CONSTANTS } from '../../config/signalProcessing';
+import { CAMERA_EXPOSURE_RECOVERY_DEFAULTS, CAPTURE_TIMING_DEFAULTS, DSP_CONSTANTS } from '../../config/signalProcessing';
 import {
   AdaptivePixelRoi,
   redSeriesCoefficientOfVariation,
@@ -95,6 +95,7 @@ interface ROIMetrics {
   perfusedFraction: number;
   /** DC rojo de los píxeles de tejido. */
   tissueRed: number;
+  clippedRatio: number;
   roiX: number;
   roiY: number;
   roiH: number;
@@ -175,6 +176,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private blueBaseline = 0;
   private estimatedSampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
   private lastFrameTimestamp = 0;
+  private lastAcquisitionTimestampMs = 0;
 
   private frameCount = 0;
   private lastLogTime = 0;
@@ -227,8 +229,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private motionListenerActive = false;
   private lastAcceleration = { x: 0, y: 0, z: 0 };
   private readonly MOTION_THRESHOLD = VITAL_THRESHOLDS.QUALITY.MAX_MOTION;
-  /** Cuenta regresiva de supresiÃ³n post-motion para que el ringing del BPF decaiga */
-  private postMotionSuppression = 0;
+  /** Plazo monotónico de recuperación del pasabanda después de movimiento. */
+  private postMotionRecoveryUntilMs = 0;
 
   // La serie IMU conserva tiempos de adquisición de la página, igual que los frames.
   // La presencia de una oscilación en mano/teléfono no demuestra origen respiratorio.
@@ -269,17 +271,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     R: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
     G: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
     RG: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
-    POS: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
   };
   private activeSource: string = 'RG';
-  private sourceScores: { [key: string]: number } = { R: 0, G: 0, RG: 0, POS: 0 };
+  private sourceScores: { [key: string]: number } = { R: 0, G: 0, RG: 0 };
   private lastSourceSwitch = 0;
   private readonly SOURCE_HYSTERESIS_MS = 4000;
-
-  // Buffers deslizantes para la proyecciÃ³n del algoritmo POS (Plane-Orthogonal-to-Skin)
-  private readonly xBuffer = new RingF32(30);
-  private readonly yBuffer = new RingF32(30);
-  private smoothedPosAlpha = 0.5;
 
   constructor(
     public onSignalReady?: (signal: ProcessedSignal) => void,
@@ -319,10 +315,22 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   processFrame(imageData: ImageData, frameTimestampMs?: number): void {
     if (!this.isProcessing || !this.onSignalReady) return;
 
-    this.frameCount++;
     const timestamp = typeof frameTimestampMs === 'number' && Number.isFinite(frameTimestampMs)
       ? frameTimestampMs
       : (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    if (frameTimestampMs !== undefined) {
+      if (!Number.isFinite(frameTimestampMs) || frameTimestampMs <= 0) return;
+      if (this.lastAcquisitionTimestampMs > 0) {
+        if (timestamp <= this.lastAcquisitionTimestampMs) return;
+        if (timestamp - this.lastAcquisitionTimestampMs > CAPTURE_TIMING_DEFAULTS.maxFrameGapMs) {
+          // No concatenar muestras separadas por una pausa como si fueran
+          // una onda uniforme; recuperar con una ventana nueva y verificable.
+          this.reset();
+        }
+      }
+      this.lastAcquisitionTimestampMs = timestamp;
+    }
+    this.frameCount++;
     this.updateSampleRate(timestamp);
     this.maybeAdaptBackpressure(timestamp);
 
@@ -501,7 +509,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const pulseSource = this.extractBestPulseSignal(
       roi.rawRed,
       roi.rawGreen,
-      roi.rawBlue,
       motionArtifact,
       this.placementMode,
     );
@@ -633,9 +640,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     // Post-motion hold-off: despues de que el motion cesa, el BPF 4Â° orden aun
     // tiene ringing (~0.5s). Suprimimos la salida durante ese tiempo.
     if (motionArtifact) {
-      this.postMotionSuppression = 20; // ~670ms a 30fps
-    } else if (this.postMotionSuppression > 0) {
-      this.postMotionSuppression--;
+      this.postMotionRecoveryUntilMs = timestamp + CAPTURE_TIMING_DEFAULTS.motionRecoveryMs;
     }
 
     const signalPathActive =
@@ -644,7 +649,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         (hemoglobinScene || ensembleScene) &&
         this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85)) &&
       !motionArtifact &&
-      this.postMotionSuppression <= 0;
+      timestamp >= this.postMotionRecoveryUntilMs;
     const displayQuality = signalPathActive
       ? fingerUi
         ? this.displaySqiEma
@@ -778,7 +783,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     // Condición de captura: el motor de etiología la usa como precondición. Un
     // sensor saturado o subexpuesto no aporta evidencia fisiológica, así que
     // ninguna causa de presión puede sostenerse con esos datos.
-    const capture = this.captureCondition();
+    const capture = this.captureCondition(roi);
     this.lastPlacementEvidence = computePlacementEvidence({
       sealRatio: roi.sealRatio,
       perfusedFraction: roi.perfusedFraction,
@@ -798,8 +803,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
    * un estado de UI). Un sensor saturado o subexpuesto no entrega evidencia
    * fisiológica: ninguna causa de presión puede sostenerse con esos datos.
    */
-  private captureCondition(): CaptureCondition {
-    if (this.smoothedRed > 250) return 'SATURATED';
+  private captureCondition(roi: ROIMetrics): CaptureCondition {
+    if (roi.clippedRatio >= CAMERA_EXPOSURE_RECOVERY_DEFAULTS.clippedFraction || this.smoothedRed > 250) return 'SATURATED';
     if (this.underexposureEma > 0.5) return 'UNDEREXPOSED';
     if (
       this.estimatedSampleRate > 0 &&
@@ -1124,6 +1129,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       coverageRatio,
       sealRatio: roi.sealRatio,
       perfusedFraction: roi.perfusedFraction,
+      photometry: { sealRatio: roi.sealRatio, tissueRed: roi.tissueRed, clippedRatio: roi.clippedRatio },
       placementMode: extras?.placementMode,
       placementHint: extras?.placementHint,
       status,
@@ -1142,7 +1148,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const delta = timestamp - this.lastFrameTimestamp;
     this.lastFrameTimestamp = timestamp;
 
-    if (delta < 10 || delta > 200) return;
+    if (delta < 1000 / CAPTURE_TIMING_DEFAULTS.maxSampleRateHz || delta > 1000 / CAPTURE_TIMING_DEFAULTS.minSampleRateHz) return;
 
     this.frameIntervalBuffer.push(delta);
 
@@ -1154,7 +1160,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const fiTail = this.frameIntervalBuffer.tail(this.frameIntervalBuffer.length);
     fiTail.sort((a, b) => a - b);
     const median = fiTail[Math.floor(fiTail.length / 2)] ?? 33;
-    const estimatedFps = clamp(1000 / median, 10, 40);
+    const estimatedFps = clamp(1000 / median, CAPTURE_TIMING_DEFAULTS.minSampleRateHz, CAPTURE_TIMING_DEFAULTS.maxSampleRateHz);
 
     if (Math.abs(estimatedFps - this.estimatedSampleRate) > 2) {
       this.estimatedSampleRate = estimatedFps;
@@ -1176,6 +1182,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       sealRatio: frame.tissueRatio,
       perfusedFraction: frame.perfusionRatio,
       tissueRed: frame.tissueRed,
+      clippedRatio: frame.excludedSaturated / Math.max(1, frame.sampledPixels),
       roiX: frame.roiX,
       roiY: frame.roiY,
       roiW: frame.roiW,
@@ -1244,55 +1251,35 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private extractBestPulseSignal(
     rawRed: number,
     rawGreen: number,
-    rawBlue: number,
     motionArtifact: boolean,
     placement: FingerPlacementMode,
   ): { value: number; label: string; strength: number } {
     const rNorm = this.redBaseline > 0 ? (this.redBaseline - rawRed) / this.redBaseline : 0;
     const gNorm = this.greenBaseline > 0 ? (this.greenBaseline - rawGreen) / this.greenBaseline : 0;
-    const bNorm = this.blueBaseline > 0 ? (this.blueBaseline - rawBlue) / this.blueBaseline : 0;
 
     const clampMax = placement === 'pad' ? 0.07 : placement === 'tip' ? 0.05 : 0.06;
     const clampPulse = (v: number) => clamp(v, -clampMax, clampMax);
     const rPulse = clampPulse(rNorm);
     const gPulse = clampPulse(gNorm);
-    const bPulse = clampPulse(bNorm);
     const amp = 4400;
 
-    // Plane-Orthogonal-to-Skin (POS) Projection â€” con alpha adaptativo suavizado.
-    // stdX/stdY estima el Ã¡ngulo del plano piel; se suaviza con EMA y se pondera
-    // por confianza estadÃ­stica (stdY grande â†’ estimaciÃ³n fiable; stdY pequeÃ±o â†’
-    // se blend hacia el prior suavizado para evitar inestabilidad por divisiÃ³n).
-    const X = gPulse - bPulse;
-    const Y = gPulse + bPulse - 2 * rPulse;
-    this.xBuffer.push(X);
-    this.yBuffer.push(Y);
-
-    const stdX = this.calculateStdDev(this.xBuffer);
-    const stdY = this.calculateStdDev(this.yBuffer);
-    const rawAlpha = stdY > 1e-9 ? stdX / stdY : this.smoothedPosAlpha;
-    const reliability = clamp(stdY / Math.max(1, stdX * 0.5 + stdY), 0, 1);
-    const blendedAlpha = rawAlpha * reliability + this.smoothedPosAlpha * (1 - reliability);
-    this.smoothedPosAlpha = this.smoothedPosAlpha * 0.9 + blendedAlpha * 0.1;
-    const posVal = X + this.smoothedPosAlpha * Y;
-
-    // Source candidates (CHROM removed â€” amplifica ruido sin dedo)
+    // Contacto iluminado por flash: R/G conservan la modulación compartida
+    // por la sangre. Una proyección que cancela color común puede cancelar ese
+    // pulso y elevar cuantización; no compite como fuente de PPG de contacto.
     const sources: { [key: string]: number } = {
       R: rPulse * amp,
       G: gPulse * amp,
       RG: this.blendRG(rPulse, gPulse, rawRed, rawGreen, motionArtifact) * amp,
-      POS: posVal * amp,
     };
 
     // Update per-source buffers (ring auto-evicts mÃ¡s viejo)
     this.sourceBuffers.R.push(sources.R);
     this.sourceBuffers.G.push(sources.G);
     this.sourceBuffers.RG.push(sources.RG);
-    this.sourceBuffers.POS.push(sources.POS);
 
-    // Rank sources every ~1 second (30 frames)
-    if (this.frameCount % 30 === 0 && this.redBuffer.length >= 60) {
-      this.rankSources();
+    // La cadencia observada gobierna el ranking y el reloj de histéresis.
+    if (this.frameCount % Math.max(1, Math.round(this.estimatedSampleRate)) === 0 && this.redBuffer.length >= 60) {
+      this.rankSources(this.lastFrameTimestamp);
     }
 
     const value = clamp(sources[this.activeSource] ?? sources['RG'], -95, 95);
@@ -1333,10 +1320,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return rPulse * redWeight + gPulse * greenWeight;
   }
 
-  private rankSources(): void {
-    const now = Date.now();
+  private rankSources(now: number): void {
     // Hysteresis: don't switch too often
-    if (now - this.lastSourceSwitch < this.SOURCE_HYSTERESIS_MS) return;
+    if (this.lastSourceSwitch > 0 && now - this.lastSourceSwitch < this.SOURCE_HYSTERESIS_MS) return;
 
     let bestSource = this.activeSource;
     let bestScore = -1;
@@ -1363,22 +1349,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.activeSource = bestSource;
       this.lastSourceSwitch = now;
     }
-  }
-
-  private calculateStdDev(ring: RingF32): number {
-    const len = ring.length;
-    if (len < 2) return 0;
-    const arr = ring.tail(len);
-    let sum = 0;
-    let sumSq = 0;
-    for (let i = 0; i < len; i++) {
-      const v = arr[i];
-      sum += v;
-      sumSq += v * v;
-    }
-    const mean = sum / len;
-    const variance = (sumSq / len) - (mean * mean);
-    return Math.sqrt(Math.max(0, variance));
   }
 
   private computeSourceScore(buffer: number[]): number {
@@ -1541,10 +1511,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.sourceBuffers.R.reset();
     this.sourceBuffers.G.reset();
     this.sourceBuffers.RG.reset();
-    this.sourceBuffers.POS.reset();
-    this.xBuffer.reset();
-    this.yBuffer.reset();
-    this.smoothedPosAlpha = 0.5;
     this.bandpassFilter.reset();
     this.morphBandpassFilter.reset();
     this.signalSplitter.reset();
@@ -1568,7 +1534,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.displaySqiEma = 0;
     this.signalQuality = 0;
     this.motionScore = 0;
-    this.postMotionSuppression = 0;
+    this.postMotionRecoveryUntilMs = 0;
     this.lastFrameTimestamp = 0;
     this.lastLogTime = 0;
     this.underexposureEma = 0;
@@ -1591,6 +1557,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     resetPlacementEvidence();
     this.lastPlacementEvidence = null;
     this.resetSignalTrackingBuffers();
+    this.lastAcquisitionTimestampMs = 0;
     this.frameIntervalBuffer.reset();
     this.estimatedSampleRate = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
     this.fingerDetected = false;
@@ -1600,7 +1567,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.instantLostStreak = 0;
     this.lastInstantFinger = false;
     this.resetMotionAcquisition();
-    this.sourceScores = { R: 0, G: 0, RG: 0, POS: 0 };
+    this.sourceScores = { R: 0, G: 0, RG: 0 };
     this.activeSource = 'RG';
     this.lastSourceSwitch = 0;
     this.bandpassFilter.setSampleRate(this.estimatedSampleRate);

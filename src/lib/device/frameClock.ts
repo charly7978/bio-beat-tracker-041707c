@@ -26,6 +26,40 @@ export interface FrameClockMetadata {
   mediaTime?: number;
 }
 
+export interface VideoFrameIdentityState {
+  source: 'presented' | 'media' | null;
+  value: number | null;
+}
+
+export function createVideoFrameIdentityState(): VideoFrameIdentityState {
+  return { source: null, value: null };
+}
+
+/** Deduplica la identidad del vídeo, nunca su color ni la suma de píxeles. */
+export function acceptVideoFrame(
+  state: VideoFrameIdentityState,
+  metadata?: { presentedFrames?: number; mediaTime?: number },
+): boolean {
+  const count = metadata?.presentedFrames;
+  const media = metadata?.mediaTime;
+  const source = typeof count === 'number' && Number.isFinite(count) && count > 0
+    ? 'presented'
+    : typeof media === 'number' && Number.isFinite(media) && media > 0
+      ? 'media' : null;
+  if (source === null) {
+    // Un stream vivo puede omitir la identidad o devolver mediaTime=0. No se
+    // inventa que dos adquisiciones son la misma porque tengan igual brillo.
+    state.source = null;
+    state.value = null;
+    return true;
+  }
+  const value = source === 'presented' ? count! : media!;
+  if (state.source === source && state.value === value) return false;
+  state.source = source;
+  state.value = value;
+  return true;
+}
+
 export interface FrameTimestamp {
   timestamp: number;
   source: FrameClockSource;
@@ -77,3 +111,4 @@ export function resolveFrameClock(
   }
   return { timestamp: perf, source: 'perf' };
 }
+

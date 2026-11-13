@@ -5,6 +5,7 @@ import { Camera } from '@capacitor/camera';
 import { isNative } from "@/lib/device/platform";
 import { startLensCoLocationScan, type LensScanResult } from "@/lib/device/lensCoLocation";
 import { toast } from "@/hooks/use-toast";
+import { FingerExposureRecovery, type FingerExposurePhotometry } from '@/lib/device/exposureRecovery';
 
 const log = createLogger("CameraView");
 
@@ -18,6 +19,8 @@ export interface CameraViewHandle {
    * quedar oscuro). Una sola vez en STABLE_CONTACT (timing seguro vs deriva del AE).
    */
   optimizeForFinger: (redLevel: number) => void;
+  /** Compensa recorte sostenido con AE automático, antes de fijar la escena. */
+  recoverFingerExposure: (photometry: FingerExposurePhotometry, timestampMs: number) => void;
 }
 
 interface CameraViewProps {
@@ -187,6 +190,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
   const streamRef = useRef<MediaStream | null>(null);
 
   const isStartingRef = useRef(false);
+  const exposureRecoveryRef = useRef(new FingerExposureRecovery());
 
   // Último resultado del profiling de co-ubicación lente↔flash (solo diagnóstico).
   const lastLensScanRef = useRef<LensScanResult | null>(null);
@@ -228,16 +232,23 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           whiteBalanceMode: settings.whiteBalanceMode,
           focusMode: settings.focusMode,
           lensCoLocation: lastLensScanRef.current,
+          exposureRecovery: exposureRecoveryRef.current.getDiagnostics(),
         };
       } catch {
         log.warn('Camera diagnostics failed');
         return { active: true, error: "caps_unavailable" };
       }
     },
+    recoverFingerExposure: (photometry, timestampMs) => {
+      const track = streamRef.current?.getVideoTracks?.()[0];
+      if (track) void exposureRecoveryRef.current.observe(track, photometry, timestampMs);
+    },
     optimizeForFinger: (redLevel: number) => {
       const track = streamRef.current?.getVideoTracks?.()[0];
       if (!track) return;
       void (async () => {
+        const recovery = exposureRecoveryRef.current;
+        if (!await recovery.beginFinalLock(track)) return;
         try {
           const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
           let appliedSteps = 0;
@@ -248,6 +259,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           // misma llamada que el cambio exposureMode→manual, y un entry que
           // falla impide aplicar los siguientes. Modo primero, valor después.
           const applyStep = async (c: AdvancedConstraint, what: string): Promise<boolean> => {
+            if (!recovery.isCurrentLock(track)) return false;
             try {
               await track.applyConstraints({ advanced: [c] });
               appliedSteps++;
@@ -346,6 +358,8 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           );
         } catch (e) {
           log.warn("optimizeForFinger falló (best-effort)", e);
+        } finally {
+          recovery.finishFinalLock(track);
         }
       })();
     },
@@ -355,6 +369,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
     const mountedRef = { current: true };
 
     const stopCamera = async () => {
+      exposureRecoveryRef.current.clear();
       const stream = streamRef.current;
       if (stream) {
         for (const track of stream.getVideoTracks()) {
@@ -574,3 +589,4 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 CameraView.displayName = "CameraView";
 
 export default CameraView;
+

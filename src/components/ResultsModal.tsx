@@ -63,8 +63,8 @@ export function ResultsModal({
   const strokeClass = statusColor === 'emerald' ? 'stroke-emerald-400' : statusColor === 'yellow' ? 'stroke-yellow-400' : 'stroke-red-400';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 animate-fade-in">
-      <div className="bg-black border border-slate-700/50 rounded-2xl max-w-sm w-[92%] shadow-2xl flex flex-col max-h-[85vh]">
+    <div className="instrument-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/80 animate-fade-in">
+      <div className="instrument-dialog bg-black border border-slate-700/50 rounded-2xl max-w-sm w-[92%] shadow-2xl flex flex-col max-h-[85vh]">
 
         {/* Header con estado */}
         <div className={`flex-none px-4 py-3 ${bgClass} border-b border-zinc-900 rounded-t-2xl`}>
@@ -206,7 +206,7 @@ export function ResultsModal({
           <button
             onClick={onAnalyzeAI}
             disabled={isAnalyzing}
-            className="w-full mt-2 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-sm transition-all disabled:opacity-50"
+            className="instrument-primary-action w-full mt-2 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-sm transition-all disabled:opacity-50"
           >
             {isAnalyzing ? (
               <><Loader2 className="w-4 h-4 animate-spin" /> Analizando...</>
@@ -219,4 +219,5 @@ export function ResultsModal({
     </div>
   );
 }
+
 

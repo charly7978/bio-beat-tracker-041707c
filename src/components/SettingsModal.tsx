@@ -383,11 +383,11 @@ export function SettingsModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in">
-      <div className="bg-black/95 border border-zinc-900/80 rounded-2xl max-w-sm w-[92%] shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
+    <div className="instrument-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in">
+      <div className="instrument-dialog bg-black/95 border border-zinc-900/80 rounded-2xl max-w-sm w-[92%] shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
         
         {/* Header */}
-        <div className="px-4 pt-3 bg-gradient-to-r from-slate-900 to-slate-950 border-b border-zinc-900 flex flex-col">
+        <div className="instrument-dialog-header px-4 pt-3 bg-gradient-to-r from-slate-900 to-slate-950 border-b border-zinc-900 flex flex-col">
           <div className="flex items-center justify-between pb-2">
             <div className="flex items-center gap-2">
               <Sliders className="w-5 h-5 text-emerald-400" />
@@ -775,3 +775,4 @@ export function SettingsModal({
     </div>
   );
 }
+

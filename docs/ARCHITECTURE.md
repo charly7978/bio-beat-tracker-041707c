@@ -55,6 +55,7 @@ La medición **no asume** torch ni FPS solicitados: baja `confidence` o bloquea 
 ### Fotometría y bloqueo del ISP
 
 - **Lock secuencial**: `stabilizeTrack` deja AE/AWB en `continuous` durante la colocación; al entrar en `STABLE_CONTACT`, `optimizeForFinger` aplica `focusMode`, `whiteBalanceMode` y `exposureMode` en llamadas `advanced` separadas (modo primero, valor después) porque Chrome ignora el valor de exposición enviado junto al cambio de modo y un entry fallido bloquea los siguientes. La verificación se hace leyendo `getSettings()`, no la constraint enviada.
+- **Recuperación antes del lock**: la fotometría incluye tejido y fracción recortada incluso cuando el ROI todavía no puede confirmar pulso. Si el recorte de un dedo sellado persiste, se reduce compensación EV sólo con AE automático y controles/rango/valor reales disponibles. Hay dwell, cooldown, límite de intentos y verificación de settings/respuesta de imagen. La operación termina antes de fijar el ISP; no convierte píxeles saturados en señal válida.
 - **Valores fijados**: foco a distancia mínima, WB manual con `colorTemperature` actual (único valor WB expuesto por la API web) e ISO/tiempo de exposición hacia rojo ≈180 (sin clipping; el ROI rechaza R ≥ 250). El tiempo de integración se fija explícitamente porque en exposición manual es significativo y una ventana larga actúa como low-pass sobre la AC.
 - **Límite conocido del web**: el tone mapping adaptativo de Android (`toneMappingMode` de Camera2) no es accesible desde `getUserMedia`; bloquear AE/AWB y evitar la saturación reduce su variación, pero no se declara linealidad fotométrica ni se usa para cocientes clínicos.
 - **Timestamps**: `resolveFrameClock` usa `captureTime` (captura real del sensor) con `presentationTime` como respaldo y `now` solo como último recurso; `mediaTime` identifica frames pero no es reloj. `captureTime` y `presentationTime` comparten la base de `performance.now()`; una desviación > 250 ms se trata como otra época y se descarta.
@@ -68,6 +69,9 @@ La medición **no asume** torch ni FPS solicitados: baja `confidence` o bloquea 
 - Máscara **Beer-Lambert diferencial** por píxel: densidad óptica temporal en verde, AC/DC en [0.1%, 3%], exclusión estricta de saturación (R ≥ 250) y subexposición (R ≤ 15).
 - Agregación ponderada por pulsatilidad OD y actividad |ΔOD| — sin promedio estático ni fusión fija por celdas.
 - **Anti-jitter espacial**: correlación Jaccard de la máscara entre `t` y `t−1` + desplazamiento de centroide; la señal se atenúa antes de entrar al detector de latidos y el movimiento se fusiona con el IMU.
+- La política de contacto es común a todas las marcas. FPS y jitter observados pueden ampliar la tolerancia temporal; el user agent no acredita calidad ni cambia umbrales.
+- Los cuadros se deduplican por identidad de vídeo, nunca por brillo: dos cuadros nuevos pueden contener píxeles iguales. Los timestamps repetidos o invertidos no entran al DSP; pausas mayores de 250 ms abren una ventana nueva en PPG y latidos.
+- Las fuentes de pulso son R, G y R–G ponderadas. La proyección POS no compite en PPG por contacto: en el caso de regresión con modulación RGB común elevaba cuantización y deformaba la onda. La histéresis de selección usa el reloj de captura.
 - **No se acepta dedo solo por color**: hace falta evidencia pulsátil (perfusión, estabilidad temporal).
 - Estados: `NO_CONTACT`, `UNSTABLE_CONTACT`, `VALID_CONTACT`, saturación, movimiento, etc.
 
@@ -136,3 +140,4 @@ Tests relevantes: `Detectors.test.ts`, `PPGSignalProcessor.test.ts`, `adaptivePi
 
 - `docs/repository-cleanup.md` — depuración previa y mapa histórico
 - `docs/no-simulation-audit.md` — política anti-simulación en runtime
+

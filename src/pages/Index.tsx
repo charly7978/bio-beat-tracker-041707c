@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Heart, Sliders, Activity } from "lucide-react";
+import { Sliders, Activity, ArrowUpRight } from "lucide-react";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
 import { useSignalProcessor } from "@/hooks/useSignalProcessor";
 import { useHeartBeatProcessor } from "@/hooks/useHeartBeatProcessor";
@@ -192,6 +192,16 @@ const Index = () => {
     }
   }, [lastSignal?.contactState]);
 
+  // Recuperar recorte sostenido mientras AE sigue automático. También se recibe
+  // fotometría en NO_CONTACT: un ROI recortado aún no puede confirmar pulso.
+  useEffect(() => {
+    if (!session.isMonitoring || exposureLockedRef.current) return;
+    const photometry = lastSignal?.diagnostics?.photometry;
+    if (photometry && lastSignal) {
+      cameraRef.current?.recoverFingerExposure(photometry, lastSignal.timestamp);
+    }
+  }, [lastSignal, session.isMonitoring]);
+
   // Sincronizar resultados post-medición
   useEffect(() => {
     if (lastValidResults && !session.isMonitoring) {
@@ -361,7 +371,7 @@ const Index = () => {
       maxWidth: '100vw',
       maxHeight: '100svh',
       overflow: 'hidden',
-      touchAction: 'pan-y',
+      touchAction: 'pan-y pinch-zoom',
       overscrollBehavior: 'none',
       userSelect: 'none',
       WebkitTouchCallout: 'none',
@@ -369,45 +379,20 @@ const Index = () => {
     }}>
       {/* SPLASH / BOOT SCREEN — Portada de inicio limpia y profesional */}
       {!session.isFullscreen && (
-        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black animate-in fade-in duration-500 p-6">
-          <div className="relative flex flex-col items-center max-w-sm text-center space-y-8">
-            
-            {/* Logo Pulsante con aura esmeralda suave */}
-            <div className="relative">
-              <div className="absolute inset-0 bg-emerald-500/20 blur-2xl rounded-full animate-pulse scale-150" />
-              <div className="relative w-20 h-20 rounded-full border border-emerald-500/40 bg-emerald-950/20 flex items-center justify-center shadow-lg shadow-emerald-950/50">
-                <Heart className="w-9 h-9 text-emerald-400 animate-pulse" fill="currentColor" />
-              </div>
+        <div className="welcome-screen fixed inset-0 z-[100]">
+          <div className="welcome-content">
+            <div className="welcome-brand"><span className="brand-mark" aria-hidden="true"><i/><i/><i/><i/></span>BIO / BEAT<span className="welcome-edition">OPTICAL MONITOR</span></div>
+            <div className="welcome-instrument" aria-hidden="true"><div/><div/><div/><span>PPG</span></div>
+            <p className="welcome-kicker">UNA NUEVA PERSPECTIVA DE TU PULSO</p>
+            <h1>Una buena señal.<br/><span>Una visión más clara.</span></h1>
+            <p className="welcome-description">Explora tu señal óptica en tiempo real, con control táctil y una guía que te acompaña en cada medición.</p>
+            <div className="welcome-steps">
+              <p><b>01</b><span>Apoya el teléfono y la mano en una superficie cómoda.</span></p>
+              <p><b>02</b><span>Cubre suavemente la cámara trasera y el flash con la yema, sin apretar.</span></p>
+              <p><b>03</b><span>Cuando aparezca señal, conserva ese apoyo. No necesitas alinear el dedo con una diana.</span></p>
             </div>
-
-            {/* Títulos limpios */}
-            <div className="space-y-2">
-              <h1 className="text-white text-xl font-bold tracking-[0.2em] uppercase">
-                Bio-Beat Tracker
-              </h1>
-              <p className="text-emerald-400/80 text-xs font-medium tracking-wider">
-                Monitor Fotopletismográfico de Pulso
-              </p>
-            </div>
-
-            {/* Instrucción de uso rápida */}
-            <div className="bg-zinc-950/80 border border-zinc-900 rounded-xl p-3.5 text-zinc-400 text-xs leading-relaxed max-w-xs">
-              <p>
-                Apoya el teléfono y la mano en una superficie cómoda. Cubre suavemente la <span className="text-white font-medium">cámara trasera y el flash</span> con la yema, sin apretar. Cuando aparezca señal, conserva ese apoyo: no necesitas hacer coincidir el dedo con una diana.
-              </p>
-            </div>
-
-            {/* Botón de Entrada */}
-            <button 
-              onClick={session.enterFullScreen}
-              className="w-full py-3.5 px-8 rounded-full bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-bold tracking-[0.2em] transition-all shadow-lg shadow-emerald-950/60"
-            >
-              INICIAR MONITOR
-            </button>
-
-            <p className="text-zinc-600 text-[9px] tracking-widest uppercase">
-              Sensor Óptico PPG • Uso No Clínico
-            </p>
+            <button onClick={session.enterFullScreen} className="welcome-start">Abrir monitor <ArrowUpRight size={18} aria-hidden="true" /></button>
+            <p className="welcome-note">Estimaciones orientativas · Sin validación clínica</p>
           </div>
         </div>
       )}
@@ -428,7 +413,7 @@ const Index = () => {
           type="button"
           onClick={() => setShowSettings(true)}
           aria-label="Ajustes y Calibración"
-          className="absolute top-3 right-3 z-30 p-2.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-zinc-300 hover:text-white hover:bg-black/80 hover:scale-105 active:scale-95 transition-all shadow-md"
+          className="app-top-action absolute top-1.5 right-3 z-30"
         >
           <Sliders className="h-4 w-4" />
         </button>
@@ -438,7 +423,7 @@ const Index = () => {
           type="button"
           onClick={() => setShowTelemedicine(true)}
           aria-label="Telemedicina WebRTC"
-          className="absolute top-3 right-14 z-30 p-2.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-emerald-400/90 hover:text-emerald-300 hover:bg-black/80 hover:scale-105 active:scale-95 transition-all shadow-md"
+          className="app-top-action absolute top-1.5 right-14 z-30"
         >
           <Activity className="h-4 w-4" />
         </button>
@@ -463,6 +448,8 @@ const Index = () => {
               isPeak={router.beatMarker === 1}
               bpm={router.vitalSigns.heartRate.value ?? null}
               spo2={router.vitalSigns.spo2.value || 0}
+              respirationRate={router.vitalSigns.respiration.value ?? 0}
+              respirationStatus={router.vitalSigns.respiration.status}
               arrhythmiaCount={router.vitalSigns.arrhythmia.value?.count ?? 0}
               rrIntervals={router.rrIntervals}
               elapsedTime={session.elapsedTime}

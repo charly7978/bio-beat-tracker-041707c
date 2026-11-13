@@ -63,3 +63,19 @@ describe('BandpassFilter', () => {
     expect(Number.isFinite(f.filter(120))).toBe(true);
   });
 });
+
+describe('pasabanda con cadencia de cámara observada', () => {
+  it.each([5, 15, 24, 30, 60, 120])('mantiene un pulso de 1.2 Hz acotado con morfología de 8 Hz a %i fps', hz => {
+    const filter = new BandpassFilter(hz, 8);
+    const tail: number[] = [];
+    for (let i = 0; i < hz * 12; i++) {
+      const output = filter.filter(Math.sin(2 * Math.PI * 1.2 * i / hz));
+      expect(Number.isFinite(output)).toBe(true);
+      expect(Math.abs(output)).toBeLessThan(2);
+      if (i > hz * 6) tail.push(output);
+    }
+    const rms = Math.sqrt(tail.reduce((sum, x) => sum + x * x, 0) / tail.length);
+    expect(rms).toBeGreaterThan(0.4);
+    expect(rms).toBeLessThan(0.9);
+  });
+});

@@ -72,7 +72,7 @@ export class BandpassFilter {
     this.computeHPF(fcHp, fs);
 
     // === PASA-BAJOS configurable ===
-    this.computeLPF(this.highCutFreq, fs);
+    this.computeLPF(Math.min(this.highCutFreq, fs * 0.45), fs);
 
     this.initialized = true;
   }
@@ -188,3 +188,4 @@ export class BandpassFilter {
     this.reset();
   }
 }
+

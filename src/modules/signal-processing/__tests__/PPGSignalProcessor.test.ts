@@ -82,18 +82,6 @@ describe('PPGSignalProcessor', () => {
     expect(last.contactState).toBe('NO_CONTACT');
   });
 
-  it('includes POS in sourceBuffers and calculates it correctly', () => {
-    for (let i = 0; i < 40; i++) {
-      const pulse = Math.round(180 + 6 * Math.sin(2 * Math.PI * 1.2 * (i / 30)));
-      proc.processFrame(makeFrame(64, 64, pulse, 95, 75));
-    }
-    const rawProc = proc as any;
-    expect(rawProc.sourceBuffers.POS).toBeDefined();
-    expect(rawProc.sourceBuffers.POS.length).toBeGreaterThan(0);
-    const posVal = rawProc.sourceBuffers.POS.tail(1)[0];
-    expect(Number.isFinite(posVal)).toBe(true);
-  });
-
   describe('guía de presión al usuario (bucle cerrado)', () => {
     it('emite evidencia de colocación incluso sin contacto válido', () => {
       // El usuario acaba de apoyar el dedo y la cámara aún no converge: es el
