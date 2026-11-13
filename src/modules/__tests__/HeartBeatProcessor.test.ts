@@ -81,6 +81,35 @@ describe('HeartBeatProcessor', () => {
     expect(final.bpm).toBeLessThan(90);
   });
 
+  it('preserves genuine zero crossings and never inserts held synthetic samples', () => {
+    hbp.setFingerContactConfirmed(true);
+    const samples = (hbp as unknown as { signalBuffer: number[] }).signalBuffer;
+    const baseTime = performance.now();
+    hbp.processSignal(5, baseTime, true);
+    hbp.processSignal(0, baseTime + 33, true);
+    hbp.processSignal(-5, baseTime + 66, true);
+
+    expect(samples).toEqual([5, 0, -5]);
+    const before = samples.length;
+
+    // Invalid captures, including a numeric zero, are not physiological observations.
+    hbp.processSignal(0, baseTime + 99, false);
+    hbp.processSignal(Number.NaN, baseTime + 132, true);
+    expect(samples).toHaveLength(before);
+  });
+
+  it('does not emit beats from a flat frame stream even with confirmed contact', () => {
+    hbp.setFingerContactConfirmed(true);
+    let peaks = 0;
+    const start = performance.now();
+    for (let i = 0; i < 150; i++) {
+      const r = hbp.processSignal(0, start + i * (1000 / 30), true);
+      if (r.isPeak) peaks++;
+      expect(r.bpm).toBe(0);
+    }
+    expect(peaks).toBe(0);
+  });
+
   it('computes internal SQI over time', () => {
     const { filtered, times } = makeSignal(72, 30, 8, 0, 300);
     hbp.setFingerContactConfirmed(true);
