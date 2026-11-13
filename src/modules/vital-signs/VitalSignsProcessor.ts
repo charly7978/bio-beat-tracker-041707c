@@ -95,6 +95,7 @@ export class VitalSignsProcessor {
   private signalTimedSamples: TimedSignalSample[] = [];
   private respirationTimedSamples: TimedSignalSample[] = [];
   private respirationSampleRateHz = 0;
+  /** Frecuencia objetivo de las series respiratorias; la tasa real puede ser menor. */
   private readonly VITAL_SIGNAL_ESTIMATE_HZ = 10;
   private frameCount = 0;  // Contador continuo para logging/diagnóstico
 
