@@ -485,6 +485,71 @@ export const VITAL_THRESHOLDS = {
   },
 
   /**
+   * PRESIÓN TRANSMURAL (microvascular blanching) — MODELO ÚNICO de presión.
+   *
+   * La cámara no mide fuerza ni mmHg: solo se clasifica el estado RELATIVO del
+   * lecho capilar con señales ya medidas por el pipeline. La literatura muestra
+   * que al aumentar la fuerza de contacto el DC sube, mientras que la amplitud
+   * pulsátil (AC y AC/DC) sube hasta un óptimo y después se colapsa cuando la
+   * presión externa supera la arteriolar (Teng & Zhang, Physiol. Meas. 2004;
+   * Sensors 2020/2024; revisiones 2023 sobre presión transmural).
+   *
+   * PROHIBIDO crear otro clasificador de presión: este bloque y
+   * `src/lib/finger/fingerPlacementEvidence.ts` son la fuente única.
+   */
+  PRESSURE: {
+    /** Cobertura mínima del ROI para considerar que hay apoyo del dedo. */
+    COVER_MIN: 0.12,
+    /** Cobertura buena: la yema cubre la lente. */
+    COVER_GOOD: 0.62,
+    /** Cobertura sellada: descarta fuga de luz como causa del pulso débil. */
+    COVER_SEALED: 0.80,
+    /** PI normalizado (0..1) que representa pulso pleno. */
+    PI_REF: 0.004,
+    /** Mejor PI reciente mínimo para diagnosticar colapso relativo. */
+    AC_PEAK_MIN_PI: 0.0018,
+    AC_PEAK_MIN: 0.30,
+    /** Caída de PI frente al mejor reciente que indica colapso capilar. */
+    AC_COLLAPSE_HEAVY: 0.50,
+    /** Caída por debajo de la cual el pulso se considera pleno (no excesivo). */
+    AC_COLLAPSE_CLEAR: 0.30,
+    AC_COLLAPSE_RECOVER: 0.15,
+    /** PI normalizado por debajo del cual el pulso está plano. */
+    PULSE_FLAT: 0.18,
+    /** PI normalizado mínimo para considerar apoyo óptimo. */
+    PULSE_OK: 0.32,
+    /** CV temporal del rojo que marca el piso de pulsatilidad (ROI_RED_CV_MIN). */
+    CV_FLAT_REF: 0.015,
+    /** Fracción de planitud (0..1) para la firma de colapso con lente sellada. */
+    FLAT_HEAVY: 0.45,
+    /** Subida relativa de DC (fracción del DC lento) que satura la evidencia. */
+    DC_RISE_MIN: 0.20,
+    DC_RISE_FULL: 0.10,
+    /** Frames de contacto antes de diagnosticar presión (AE asentado). */
+    HEAVY_WARMUP_FRAMES: 30,
+    /** Frames consecutivos para confirmar HEAVY (anti-parpadeo). */
+    HEAVY_ENTER_FRAMES: 10,
+    /** Frames consecutivos para confirmar cualquier otro veredicto. */
+    VERDICT_CONFIRM_FRAMES: 8,
+    /** Decaimiento por frame del mejor PI reciente (~17 s @30 fps). */
+    PEAK_DECAY: 0.998,
+    /** EMA lenta del DC para medir la tendencia de fuerza de contacto. */
+    DC_SLOW_ALPHA: 0.012,
+    /** EMA del score continuo de presión (cursor del gauge). */
+    SCORE_ALPHA: 0.18,
+    /** Contacto mínimo antes de habilitar el háptico de presión (AE asentado). */
+    FEEDBACK_SETTLE_MS: 2000,
+    /** Repetición del aviso háptico mientras persiste presión alta. */
+    HEAVY_REPEAT_MS: 5000,
+    /** Repetición del aviso háptico mientras persiste presión baja. */
+    LIGHT_REPEAT_MS: 12000,
+    /** Intervalo mínimo entre avisos hápticos de presión (anti-rebote global). */
+    HAPTIC_MIN_INTERVAL_MS: 900,
+    /** Frames de contacto perdido antes de considerar salida real (anti-parpadeo). */
+    CONTACT_LOST_FRAMES: 6,
+  },
+
+  /**
    * REINICIO POR PÉRDIDA/REGANANCIA DE CONTACTO (frame-gates @ ~30 fps).
    * Fuente única consumida por useHeartBeatProcessor y useSignalRouter — antes
    * estaban hardcodeados y desalineados en cada hook. Tolerantes a parpadeos

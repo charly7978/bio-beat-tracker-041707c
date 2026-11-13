@@ -529,7 +529,30 @@ const WELL_EASE_DOWN = 0.20;    // encogimiento rÃ¡pido y honesto
 let wellSizeEma = 0;
 
 interface WellTheme { edge: string; core: string; glow: string; tint: string; label: string; }
-function wellThemeFor(contactState?: string): WellTheme {
+function wellThemeFor(contactState?: string, pressure?: string): WellTheme {
+  // El color/etiqueta del pozo siguen el veredicto de presión cuando existe,
+  // para no mostrar verde "CONTACTO ÓPTIMO" mientras hay colapso capilar.
+  if (pressure === 'HEAVY') {
+    return {
+      edge: 'rgba(239,68,68,0.95)', core: 'rgba(252,165,165,0.9)',
+      glow: 'rgba(239,68,68,0.40)', tint: '239,68,68',
+      label: 'PRESIÓN ALTA · SUELTA',
+    };
+  }
+  if (pressure === 'LIGHT') {
+    return {
+      edge: 'rgba(245,158,11,0.95)', core: 'rgba(253,230,138,0.9)',
+      glow: 'rgba(245,158,11,0.35)', tint: '245,158,11',
+      label: 'PRESIÓN BAJA · APOYA MÁS',
+    };
+  }
+  if (pressure === 'IDEAL') {
+    return {
+      edge: 'rgba(34,197,94,0.95)', core: 'rgba(134,239,172,0.9)',
+      glow: 'rgba(34,197,94,0.40)', tint: '34,197,94',
+      label: 'CONTACTO ÓPTIMO',
+    };
+  }
   switch (contactState) {
     case 'STABLE_CONTACT':
       return {
@@ -595,7 +618,8 @@ export function drawPreviewWell3D(
 ): void {
   const proj = makeProjector(state);
   const { plot } = state.layout;
-  const theme = wellThemeFor(contactState);
+  const pressure = state.props.diagnostics?.placementEvidence?.pressure;
+  const theme = wellThemeFor(contactState, pressure);
 
   // AnimaciÃ³n del tamaÃ±o: sube suave, baja rÃ¡pido (feedback honesto).
   const target = wellScoreOf(state, contactState);

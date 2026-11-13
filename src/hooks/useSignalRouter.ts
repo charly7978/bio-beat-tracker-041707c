@@ -27,7 +27,8 @@ import {
 } from '@/lib/sanity/sanityProfiles';
 import { recordVerdict as recordAuditVerdict } from '@/lib/sanity/sanityAuditLog';
 import { toast } from '@/hooks/use-toast';
-import { triggerArrhythmiaHaptic } from '@/utils/haptics';
+import { triggerArrhythmiaHaptic, triggerPressureHaptic } from '@/utils/haptics';
+import type { PressureVerdict } from '@/lib/finger/fingerPlacementEvidence';
 
 interface HeartBeatProcessorAPI {
   processSignal: (
@@ -107,6 +108,13 @@ const {
   DIAG_PUSH_THROTTLE_MS,
   VITALS_PROCESS_EVERY_N_FRAMES,
 } = VITAL_THRESHOLDS.ROUTER;
+const {
+  FEEDBACK_SETTLE_MS: PRESSURE_FEEDBACK_SETTLE_MS,
+  HEAVY_REPEAT_MS: PRESSURE_HEAVY_REPEAT_MS,
+  LIGHT_REPEAT_MS: PRESSURE_LIGHT_REPEAT_MS,
+  HAPTIC_MIN_INTERVAL_MS: PRESSURE_HAPTIC_MIN_INTERVAL_MS,
+  CONTACT_LOST_FRAMES: PRESSURE_CONTACT_LOST_FRAMES,
+} = VITAL_THRESHOLDS.PRESSURE;
 
 export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHintsRef, ppgMeterRef }: UseSignalRouterInput) {
   // Estados de salida
@@ -138,6 +146,12 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const lastGoodBpmRef = useRef(0);
   const lastBpmSeenAtRef = useRef(0);
   const prevHasUsableContactRef = useRef(false);
+  const contactStartedAtRef = useRef(0);
+  // Bucle cerrado de presión: veredicto canónico + anti-rebote del háptico.
+  const pressureVerdictRef = useRef<PressureVerdict>('NONE');
+  const pressureNoneSinceRef = useRef(0);
+  const lastPressureHapticAtRef = useRef(0);
+  const lastContactSeenAtRef = useRef(0);
   const noContactSessionFramesRef = useRef(0);
   const lastHbInputRef = useRef(0);
   const displayFilterRef = useRef(new VitalDisplayFilter());
@@ -202,6 +216,11 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastBpmSeenAtRef.current = 0;
     lastRrSnapshotRef.current = null;
     unstableFrameCounter.current = 0;
+    contactStartedAtRef.current = 0;
+    lastContactSeenAtRef.current = 0;
+    pressureVerdictRef.current = 'NONE';
+    pressureNoneSinceRef.current = 0;
+    lastPressureHapticAtRef.current = 0;
     acqReadyLatchRef.current = false;
     stabilizationRef.current = createStabilizationState();
     setRRIntervals([]);
@@ -278,6 +297,14 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       noContactSessionFramesRef.current >= CONTACT_REGAIN_RESET_MIN_FRAMES
     ) {
       resetFingerContactSession();
+    }
+    if (hasUsableContact) {
+      lastContactSeenAtRef.current = nowT;
+      if (!prevHasUsableContactRef.current || contactStartedAtRef.current === 0) {
+        contactStartedAtRef.current = nowT;
+      }
+    } else if (noContactSessionFramesRef.current >= PRESSURE_CONTACT_LOST_FRAMES) {
+      contactStartedAtRef.current = 0;
     }
     prevHasUsableContactRef.current = hasUsableContact;
 
@@ -418,6 +445,54 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     if (nowT - lastDiagPushRef.current >= DIAG_PUSH_THROTTLE_MS) {
       lastDiagPushRef.current = nowT;
       setCurrentDiagnostics(mergedDiag);
+    }
+
+    // Bucle cerrado de presión (modelo transmural único). La evidencia se
+    // actualiza por frame y el diagnóstico va throttled: se lee aquí para que
+    // el háptico reaccione con la cadencia real de la señal, no con la UI.
+    const pressureEvidence = diag?.placementEvidence;
+    // Gate por estado: no disparar hápticos con evidencia stale (saturación,
+    // subexposición, fps bajo, artefacto de movimiento).
+    const status = typeof diag?.status === 'string' ? diag.status : '';
+    const staleStatus = status === 'SATURATED' || status === 'UNDEREXPOSED' ||
+      status === 'LOW_FPS' || status === 'MOTION_ARTIFACT';
+    if (pressureEvidence && !staleStatus) {
+      const verdict = pressureEvidence.pressure;
+      if (verdict === 'NONE' || !hasUsableContact) {
+        // No resetear el veredicto con un solo frame NONE: mantener el
+        // anterior hasta salida real de contacto (anti-parpadeo).
+        if (!hasUsableContact && noContactSessionFramesRef.current >= PRESSURE_CONTACT_LOST_FRAMES) {
+          pressureVerdictRef.current = 'NONE';
+        }
+      } else {
+        const prev = pressureVerdictRef.current;
+        const settled = contactStartedAtRef.current > 0 &&
+          nowT - contactStartedAtRef.current >= PRESSURE_FEEDBACK_SETTLE_MS;
+        const sinceHaptic = nowT - lastPressureHapticAtRef.current;
+        const globalOk = sinceHaptic >= PRESSURE_HAPTIC_MIN_INTERVAL_MS;
+        let fire = false;
+        if (verdict === 'HEAVY') {
+          fire = settled && globalOk &&
+            (prev !== 'HEAVY' || sinceHaptic >= PRESSURE_HEAVY_REPEAT_MS);
+        } else if (verdict === 'LIGHT') {
+          fire = settled && globalOk &&
+            (prev !== 'LIGHT' || sinceHaptic >= PRESSURE_LIGHT_REPEAT_MS);
+        } else {
+          // IDEAL solo confirma la transición desde un estado corregible.
+          fire = settled && globalOk && (prev === 'LIGHT' || prev === 'HEAVY');
+        }
+        if (fire) {
+          lastPressureHapticAtRef.current = nowT;
+          triggerPressureHaptic(verdict).catch(() => undefined);
+        }
+        pressureVerdictRef.current = verdict;
+      }
+    } else {
+      // Sin evidencia fresca: no afirmar presión; mantener veredicto anterior
+      // hasta salida real de contacto.
+      if (!hasUsableContact && noContactSessionFramesRef.current >= PRESSURE_CONTACT_LOST_FRAMES) {
+        pressureVerdictRef.current = 'NONE';
+      }
     }
 
     const piMin = Q.MIN_PI * Math.max(

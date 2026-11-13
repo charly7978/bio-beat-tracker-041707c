@@ -89,10 +89,9 @@ export function passesUnifiedFingerAcquire(
   );
 }
 
-export function placementHintText(mode: FingerPlacementMode, perfusionIndex?: number): string {
-  if (perfusionIndex !== undefined && perfusionIndex > 0 && perfusionIndex < 0.00025) {
-    return 'Presione más suave (flujo sanguíneo limitado)';
-  }
+export function placementHintText(mode: FingerPlacementMode): string {
+  // La presión se diagnostica ÚNICAMENTE en fingerPlacementEvidence (modelo
+  // transmural). Aquí solo se orienta sobre la colocación (punta/almohadilla).
   switch (mode) {
     case 'tip':
       return 'Cubra la yema con presión media (no solo la punta)';

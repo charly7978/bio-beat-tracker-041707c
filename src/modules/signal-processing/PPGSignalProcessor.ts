@@ -411,6 +411,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.consecutiveNoContactFrames++;
       this.signalQuality = 0;
       this.displaySqiEma = 0;
+      // Sin dedo no hay evidencia vigente: nunca dejar un veredicto de presión
+      // viejo alimentando el gauge ni los hápticos.
+      this.lastPlacementEvidence = null;
       Object.assign(this.diagStatusState, createDiagnosticStatusState());
       this.stepAcquisition(false);
       this.onSignalReady({
@@ -452,6 +455,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     else if (this.frameCount < 28) rejectionStatus = "WARMUP";
 
     if (rejectionStatus && rejectionStatus !== "WARMUP" && rejectionStatus !== "MOTION_ARTIFACT") {
+      this.lastPlacementEvidence = null;
       this.onSignalReady({
         timestamp,
         rawValue: 0, filteredValue: 0, quality: 0,
@@ -497,10 +501,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       coverageRatio: this.smoothedCoverage || roi.coverageRatio,
       centroidX: this.trackedCentroid.x,
       centroidY: this.trackedCentroid.y,
-      centroidMotion: this.centroidMotionEma,
       motionScore: Math.max(this.motionScore, this.signalMotionScore),
       perfusionIndex: this.cachedPI,
-      frameCount: this.frameCount,
+      dcLevel: this.redDC > 0 ? this.redDC : this.smoothedRed,
+      roiRedCv: this.lastRoiRedCv,
     });
 
     const placementInstant = classifyFingerPlacement({
@@ -725,7 +729,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
             `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
             `C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.placementMode} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
           placementMode: this.placementMode,
-          placementHint: placementHintText(this.placementMode, perfusionIndex),
+          placementHint: placementHintText(this.placementMode),
           hasPulsatility:
             fingerUi &&
             (SignalQualityIndex.isClinicallyValid(rawSqiOut, perfusionIndex) ||
@@ -812,6 +816,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         } else if (this.instantLostStreak <= hints.instantLostToNoContact) {
           this.contactState = 'NO_CONTACT';
           this.noContactHardStreak++;
+           this.lastPlacementEvidence = null;
           if (this.noContactHardStreak >= hints.bufferResetAfterNoContact) {
             this.setNoContact(true);
           }
@@ -822,6 +827,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         this.contactState = 'UNSTABLE_CONTACT';
       } else if (this.instantLostStreak <= hints.instantLostToNoContact) {
         this.contactState = 'NO_CONTACT';
+        this.lastPlacementEvidence = null;
       } else {
         this.setNoContact(true);
       }
@@ -1074,27 +1080,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return { x: roi.roiX, y: roi.roiY, width: roi.roiW, height: roi.roiH };
   }
 
-  private estimateFingerPressure(roi: ROIMetrics): 'LIGHT' | 'IDEAL' | 'HEAVY' {
-    if (this.contactState === 'NO_CONTACT') return 'LIGHT';
-    
-    const pi = this.cachedPI;
-    const coverage = this.smoothedCoverage || roi.coverageRatio;
-    
-    if (coverage < 0.70) {
-      return 'LIGHT';
-    }
-    
-    if (coverage > 0.88 && pi < 0.0006 && this.frameCount > 60) {
-      return 'HEAVY';
-    }
-    
-    if (coverage >= 0.70 && coverage < 0.82) {
-      return 'LIGHT';
-    }
-    
-    return 'IDEAL';
-  }
-
   private buildFingerDiagnostics(
     roi: ROIMetrics,
     motionArtifact: boolean,
@@ -1108,19 +1093,16 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     },
   ) {
     const coverageRatio = roi.coverageRatio;
-    const fingerPressure = this.estimateFingerPressure(roi);
-    const placementEvidence = this.lastPlacementEvidence ?? undefined;
     return {
-      placementEvidence,
+      placementEvidence: this.lastPlacementEvidence ?? undefined,
       message:
         extras?.message ??
-        `BUSCANDO DEDO Â· cobertura ${(coverageRatio * 100).toFixed(0)}%`,
+        `BUSCANDO DEDO · cobertura ${(coverageRatio * 100).toFixed(0)}%`,
       hasPulsatility: extras?.hasPulsatility ?? false,
       pulsatilityValue: extras?.pulsatilityValue ?? 0,
       coverageRatio,
       placementMode: extras?.placementMode,
       placementHint: extras?.placementHint,
-      fingerPressure,
       status,
       acquisitionStage: this.acquisitionState.stage,
       acquisitionConfidence: this.acquisitionState.confidence,
@@ -1792,6 +1774,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   reset(): void {
+    resetPlacementEvidence();
+    this.lastPlacementEvidence = null;
     this.resetSignalTrackingBuffers();
     this.tileConfidence = new Array(25).fill(0);
     this.frameIntervalBuffer.reset();

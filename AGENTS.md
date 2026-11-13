@@ -11,11 +11,12 @@ PPG por contacto (dedo sobre cámara trasera + flash) en Vite + React 18 + TS, c
 ## Guardarraíles que impone CI (romperlos = build rojo)
 - `check:architecture` exige módulos canónicos únicos: prohibido crear procesadores "V2/Final/Advanced/New", la carpeta `src/lib/ppg/` o `CameraPreview.tsx`. Ante una mejora, REEMPLAZA el módulo canónico; nunca dupliques uno paralelo.
 - `check:no-sim`: prohibido `Math.random` y las palabras mock/fake/dummy/synthetic/simulate en `src/**` (tests excluidos). Filosofía: "priorizar 'no reading' sobre false reading" — si la señal no alcanza, `0` / `--` / `INSUFFICIENT`, nunca un número inventado (`docs/no-simulation-audit.md`).
-- Fuentes de verdad únicas: umbrales fisiológicos y firma de dedo → `src/config/vitalThresholds.ts`; DSP/ventanas → `src/config/signalProcessing.ts`; contrato de medición → `src/types/measurements.ts`.
+- Fuentes de verdad únicas: umbrales fisiológicos, firma de dedo y modelo de presión (`VITAL_THRESHOLDS.PRESSURE`) → `src/config/vitalThresholds.ts`; DSP/ventanas → `src/config/signalProcessing.ts`; contrato de medición → `src/types/measurements.ts`.
 
 ## Arquitectura (lo que no se deduce de los nombres)
 - Cadena: `CameraView` → `useFrameLoop` (rVFC) → `useSignalProcessor` → Worker `src/workers/ppgSignal.worker.ts` (`PPGSignalProcessor`) → `ProcessedSignal` → `useSignalRouter` → `useHeartBeatProcessor` (BPM/RR) y `useVitalSignsProcessor` (SpO₂/PA/respiración/arritmias). El DSP corre en Worker; React solo enruta y muestra.
 - `Index.tsx` llama `cameraRef.optimizeForFinger(redLevel)` UNA vez al entrar en `STABLE_CONTACT`; el pipeline de colocación de dedo vive en `PPGSignalProcessor` (firma RGB + pulsátil), no en la cámara.
+- Presión: `src/lib/finger/fingerPlacementEvidence.ts` es el **ÚNICO** clasificador (modelo transmural). `DC` sube / `AC` se colapsa / varianza plana → `HEAVY`; cobertura baja o pulso débil sin colapso → `LIGHT`; PI cerca del mejor reciente → `IDEAL`. UI y hápticos leen `diagnostics.placementEvidence.pressure` y `pressureScore`. `check:architecture` prohíbe `estimateFingerPressure` y el campo `fingerPressure`.
 
 ## Fotometría de cámara (reglas duras)
 - **ISP lock diferido**: AE/AWB van en `continuous` mientras se coloca el dedo y se fijan en `manual` una sola vez en `STABLE_CONTACT` (`CameraView.optimizeForFinger`). No "arregles" esto bloqueando manual al abrir la cámara: congelar la escena vacía retrasaba la convergencia ~25–30 s.
@@ -28,6 +29,8 @@ PPG por contacto (dedo sobre cámara trasera + flash) en Vite + React 18 + TS, c
 - Mantén estimadores y publicación de RR libres de EMAs de presentación: un solo filtro de display, dueño por ref, vive en el signal router y suaviza las muestras aceptadas, para que la latencia de display nunca se apile.
 - Mantén snapshots crudos de vitales separados de los valores renderizados; nunca avances un filtro con estado dentro de un updater de React ni en un loop de animación de canvas (la cadencia de replay/render no debe afectar las mediciones).
 - Preserva los gates de señal, la aceptación fisiológica de RR y las funciones de límites clínicos al cambiar el suavizado de display; los tests A/B deterministas miden retardo de software, no exactitud clínica.
+- Presión = bucle cerrado: el veredicto canónico alimenta el gauge (2D y 3D) y los hápticos. El háptico se dispara solo en `useSignalRouter`, con settle + cooldown; todos los patrones viven en `src/utils/haptics.ts` (nunca llames `navigator.vibrate` fuera de ahí).
+- No inventes presión absoluta (mmHg/N): la cámara no mide fuerza. `HEAVY` exige lente sellada + AC colapsada/plana; en la zona intermedia se mantiene el veredicto (histéresis) para no pedir "aprieta más" cuando la AC ya cayó.
 
 ## Riesgos y limitaciones
 - SpO₂ y PA no tienen validación clínica: la PA usa un MLP con etiquetas sintéticas generadas en `training/` (Python); nunca presentes estados `VALID` como exactitud clínica.

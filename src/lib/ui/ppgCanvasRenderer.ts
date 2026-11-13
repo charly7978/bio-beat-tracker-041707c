@@ -332,7 +332,7 @@ export interface PpgRenderProps {
     status?: string;
     message?: string;
     placementHint?: string;
-    fingerPressure?: 'LIGHT' | 'IDEAL' | 'HEAVY';
+    /** Modelo único de presión (presión transmural): gauge, guía y hápticos. */
     placementEvidence?: import('../finger/fingerPlacementEvidence').FingerPlacementEvidence;
     hasPulsatility?: boolean;
     acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY';
@@ -786,7 +786,6 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillText('25 mm/s · 0.5â€“12 Hz · HIGH-FIDELITY PPG', plot.x + 8, plot.y - 8);
 
-  drawPressureGauge(ctx, state);
 }
 
 export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
@@ -794,34 +793,47 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
   if (!p.isFingerDetected) return;
 
   const { plot } = state.layout;
-  const diag = p.diagnostics;
-  const pressure = diag?.fingerPressure || 'LIGHT';
+  const evidence = p.diagnostics?.placementEvidence;
+  const pressure = evidence?.pressure ?? 'NONE';
+  const pressureScore = typeof evidence?.pressureScore === 'number'
+    ? Math.max(0, Math.min(1, evidence.pressureScore))
+    : 0.5;
+  const targetPct = Math.max(0.04, Math.min(0.96, pressureScore));
 
-  const gaugeW = 120;
+  // Posición libre: arriba del tachograma, a la izquierda, para no solapar la
+  // onda ni el panel rítmico (que ocupa plot.y+8..+64).
+  const gaugeW = Math.min(150, Math.max(110, plot.w * 0.32));
   const gaugeH = 8;
-  const gaugeX = plot.x + plot.w - gaugeW - 16;
-  const gaugeY = plot.y + 24;
+  const gaugeX = plot.x + 12;
+  const gaugeY = plot.y + plot.h - RR_TACHO_H - 16;
 
   ctx.save();
   ctx.font = `bold 9px ${FONT_MONO}`;
   ctx.textAlign = 'left';
-  
-  let labelText = 'PRESIÃ“N: IDEAL';
-  let labelColor = COLORS.SIGNAL;
-  let targetPct = 0.5;
+
+  let labelText = 'PRESIÓN · MIDIENDO';
+  let labelColor = COLORS.TEXT_INFO;
 
   if (pressure === 'LIGHT') {
-    labelText = 'PRESIÃ“N: SUAVE';
+    labelText = 'PRESIÓN BAJA · APOYA MÁS';
     labelColor = COLORS.TEXT_WARN;
-    targetPct = 0.2;
+  } else if (pressure === 'IDEAL') {
+    labelText = 'PRESIÓN ÓPTIMA';
+    labelColor = COLORS.SIGNAL;
   } else if (pressure === 'HEAVY') {
-    labelText = 'PRESIÃ“N: EXCESIVA';
+    labelText = 'PRESIÓN ALTA · SUELTA';
     labelColor = COLORS.TEXT_DANGER;
-    targetPct = 0.8;
+  } else if (pressure === 'NONE') {
+    labelText = 'PRESIÓN · SIN EVALUAR';
+    labelColor = COLORS.TEXT_DIM;
   }
 
+  // Fondo translúcido para legibilidad sobre la onda.
+  ctx.fillStyle = 'rgba(2, 6, 23, 0.72)';
+  ctx.fillRect(gaugeX - 4, gaugeY - 14, gaugeW + 8, gaugeH + 20);
+
   ctx.fillStyle = labelColor;
-  ctx.fillText(labelText, gaugeX, gaugeY - 8);
+  ctx.fillText(labelText, gaugeX, gaugeY - 4);
 
   const grad = ctx.createLinearGradient(gaugeX, 0, gaugeX + gaugeW, 0);
   grad.addColorStop(0, '#f59e0b');
@@ -832,8 +844,8 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
   grad.addColorStop(1, '#ef4444');
 
   ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
-  ctx.fillRect(gaugeX - 4, gaugeY - 4, gaugeW + 8, gaugeH + 8);
-  
+  ctx.fillRect(gaugeX - 1, gaugeY - 1, gaugeW + 2, gaugeH + 2);
+
   ctx.fillStyle = grad;
   ctx.fillRect(gaugeX, gaugeY, gaugeW, gaugeH);
 

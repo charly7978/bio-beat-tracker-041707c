@@ -52,8 +52,11 @@ export interface ProcessedSignal {
     coverageRatio?: number;
     placementMode?: FingerPlacementMode;
     placementHint?: string;
-    fingerPressure?: 'LIGHT' | 'IDEAL' | 'HEAVY';
-    /** Evidencia fisica de colocacion (presion/ubicacion/movimiento/pulso). */
+    /**
+     * Evidencia física de colocación (presión/ubicación/movimiento/pulso).
+     * Es la ÚNICA fuente de presión: el modelo canónico vive en
+     * fingerPlacementEvidence y no se admite un campo de presión paralelo.
+     */
     placementEvidence?: import('../lib/finger/fingerPlacementEvidence').FingerPlacementEvidence;
     status?: import('./measurements').MeasurementStatus;
     sqm?: Partial<import('./measurements').SignalQualityMetrics>;

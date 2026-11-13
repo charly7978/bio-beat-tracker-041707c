@@ -103,6 +103,20 @@ for (const file of files) {
   }
 }
 
+// Modelo de presión transmural: un solo clasificador canónico. Cualquier
+// reapareición de un campo/clasificador paralelo rompe el build.
+const PRESSURE_DUPLICATE = /\b(estimateFingerPressure|fingerPressure)\b/;
+for (const file of files) {
+  const rel = relative(ROOT, file).replace(/\\/g, '/');
+  if (rel.includes('__tests__')) continue;
+  if (rel === 'src/lib/finger/fingerPlacementEvidence.ts') continue;
+  if (PRESSURE_DUPLICATE.test(readFileSync(file, 'utf8'))) {
+    errors.push(
+      `DUPLICATE_PRESSURE  ${rel} (usar placementEvidence.pressure del modelo canónico)`,
+    );
+  }
+}
+
 // Umbrales RR dispersos (solo config debe definir la pareja canónica)
 const rrLiteral = /PHYSIOLOGICAL_RR_MIN_MS\s*[:=]\s*270/;
 let rrDefCount = 0;

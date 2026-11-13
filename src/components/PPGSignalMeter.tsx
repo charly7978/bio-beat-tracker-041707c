@@ -8,6 +8,7 @@ import {
   TREND_WINDOW_MS,
   TREND_MAX_POINTS,
   PpgLayout,
+  PpgRenderProps,
   PpgRenderState,
   drawBackground,
   drawHeader,
@@ -51,27 +52,8 @@ export interface PPGSignalMeterProps {
   arrhythmiaCount?: number;
   contactState?: string;
   acquisitionStatus?: string;
-  diagnostics?: {
-    status?: string;
-    message?: string;
-    placementHint?: string;
-    hasPulsatility?: boolean;
-    acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY';
-    acquisitionProgress?: number;
-    sqm?: {
-      fpsEffective?: number;
-      timestampJitterMs?: number;
-      underexposureRatio?: number;
-    };
-    peakDetection?: {
-      confidence?: number;
-      agreement?: { elgendi?: number };
-      fusedPeakTimes?: number[];
-      elgendiPeakTimes?: number[];
-      fusedPeakCount?: number;
-      rejectedPeaks?: Array<{ index: number; reason: string; detector: string }>;
-    };
-  };
+  /** Contrato único del renderer (evita duplicar el tipo de diagnósticos). */
+  diagnostics?: PpgRenderProps['diagnostics'];
 }
 
 export interface PPGSignalMeterHandle {
@@ -444,10 +426,12 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
           videoWellRef.current = document.querySelector('video');
         }
         drawPreviewWell3D(ctx, renderState, videoWellRef.current, p.contactState);
-        drawPressureGauge(ctx, renderState);
       } else {
         drawECGGrid(ctx, renderState);
       }
+      // Guía de presión SIEMPRE visible (2D y 3D): bucle visual cerrado con el
+      // háptico. Lee el modelo único `placementEvidence`, no un campo paralelo.
+      drawPressureGauge(ctx, renderState);
       drawSignal(ctx, renderState);
       drawAcquisitionOverlay(ctx, renderState);
       drawTrendStrip(ctx, renderState);
