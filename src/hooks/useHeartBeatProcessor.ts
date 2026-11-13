@@ -66,6 +66,7 @@ export const useHeartBeatProcessor = () => {
     timestamp?: number,
     fingerConfirmed = true,
     ppgQuality?: { sqi: number; perfusionIndex?: number; motionScore?: number },
+    sampleValid = true,
   ): HeartBeatResult => {
     if (!processorRef.current || processingStateRef.current !== 'ACTIVE') {
       return {
@@ -129,7 +130,7 @@ export const useHeartBeatProcessor = () => {
     noContactFramesRef.current = 0;
     processedSignalsRef.current++;
 
-    const result = processorRef.current.processSignal(value, timestamp);
+    const result = processorRef.current.processSignal(value, currentTime, sampleValid);
     const rrIntervals = processorRef.current.getRRIntervals();
     const lastPeakTime = processorRef.current.getLastPeakTime();
     const roundedSQI = Math.round(result.sqi);
