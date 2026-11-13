@@ -73,6 +73,10 @@ export class BloodPressureProcessor {
       confidence: 'INSUFFICIENT', cyclesUsed: 0, featureQuality: 0,
     };
 
+    if (!Number.isFinite(sampleRate) || sampleRate < 20 || sampleRate > 60) {
+      return this.staleOrInsufficient(insufficient);
+    }
+
     if (signalBuffer.length < VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES || rrIntervals.length < 2) {
       return this.staleOrInsufficient(insufficient);
     }
