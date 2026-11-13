@@ -1,4 +1,4 @@
-﻿import { CircularBuffer } from '../../utils/CircularBuffer';
+import { CircularBuffer } from '../../utils/CircularBuffer';
 import { isPhysiologicalRR } from '../../utils/physio';
 import {
   buildRhythmPanel,
@@ -469,12 +469,12 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.textAlign = 'center';
     if (placementHint) {
       ctx.font = `bold 9px ${FONT_MONO}`;
-      ctx.fillText(`ESTABILIZANDO SEÃ‘AL Â· ${pct}%`, header.w / 2, header.y + 8);
+      ctx.fillText(`ESTABILIZANDO SEÃ‘AL · ${pct}%`, header.w / 2, header.y + 8);
       ctx.font = `9px ${FONT_MONO}`;
       ctx.fillText(placementHint, header.w / 2, header.y + 18);
     } else {
       ctx.font = `bold 10px ${FONT_MONO}`;
-      ctx.fillText(`ESTABILIZANDO SEÃ‘AL Â· ${pct}%`, header.w / 2, header.y + 12);
+      ctx.fillText(`ESTABILIZANDO SEÃ‘AL · ${pct}%`, header.w / 2, header.y + 12);
     }
   } else if (placementHint && detected && stage === 'READY') {
     ctx.fillStyle = COLORS.TEXT_INFO;
@@ -490,7 +490,7 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.fillStyle = COLORS.TEXT_DANGER;
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.textAlign = 'center';
-    ctx.fillText(`âš  ${diag.status}`, header.w / 2, header.y + 12);
+    ctx.fillText(`⚠ ${diag.status}`, header.w / 2, header.y + 12);
   }
 }
 
@@ -634,7 +634,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
       state.props.bpStatus === 'NO_VALID_SIGNAL' ||
       state.props.bpStatus === 'WARMUP');
   ctx.fillText(
-    sys > 0 ? `${sys}/${dia}` : bpPending ? 'Â·Â·Â·' : '--/--',
+    sys > 0 ? `${sys}/${dia}` : bpPending ? '···' : '--/--',
     bpX,
     metrics.y + 68,
   );
@@ -647,7 +647,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.font = `9px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
     ctx.textAlign = 'right';
-    ctx.fillText(`MAP ${map} Â· PP ${pp}`, metrics.w - 12, metrics.y + 68);
+    ctx.fillText(`MAP ${map} · PP ${pp}`, metrics.w - 12, metrics.y + 68);
 
     let bpLabel = '';
     if (sys >= 140 || dia >= 90) bpLabel = 'HIPERTENSIÃ“N';
@@ -684,7 +684,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.font = `8px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'right';
-    ctx.fillText(`${fps.toFixed(1)} FPS Â· Î”${jitter.toFixed(1)}ms`, metrics.w - 12, metrics.y + 12);
+    ctx.fillText(`${fps.toFixed(1)} FPS · Î”${jitter.toFixed(1)}ms`, metrics.w - 12, metrics.y + 12);
   }
   if (pd && typeof pd.confidence === 'number' && pd.confidence > 0) {
     const ae = pd.agreement?.elgendi ?? 0;
@@ -692,7 +692,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.fillStyle = COLORS.TEXT_INFO;
     ctx.textAlign = 'right';
     ctx.fillText(
-      `Picos ensemble ${(pd.confidence * 100).toFixed(0)}% Â· E${(ae * 100).toFixed(0)}`,
+      `Picos ensemble ${(pd.confidence * 100).toFixed(0)}% · E${(ae * 100).toFixed(0)}`,
       metrics.w - 12,
       metrics.y + (fps > 0 ? 24 : 12)
     );
@@ -784,7 +784,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.textAlign = 'left';
   ctx.fillStyle = COLORS.TEXT_DIM;
   ctx.font = `bold 10px ${FONT_MONO}`;
-  ctx.fillText('25 mm/s Â· 0.5â€“12 Hz Â· HIGH-FIDELITY PPG', plot.x + 8, plot.y - 8);
+  ctx.fillText('25 mm/s · 0.5â€“12 Hz · HIGH-FIDELITY PPG', plot.x + 8, plot.y - 8);
 
   drawPressureGauge(ctx, state);
 }
@@ -1284,7 +1284,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.fillStyle = COLORS.TEXT_PRIMARY;
   ctx.textAlign = 'left';
   ctx.fillText(
-    compact ? 'TENDENCIA BPM Â· 60s' : 'TENDENCIA FRECUENCIA CARDÃACA Â· 60 s',
+    compact ? 'TENDENCIA BPM · 60s' : 'TENDENCIA FRECUENCIA CARDÃACA · 60 s',
     trend.x + 8,
     trend.y + (compact ? 12 : 14),
   );
@@ -1296,10 +1296,10 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   if (hrv.rmssd > 0) hrvBits.push(`RMSSD ${hrv.rmssd}`);
   if (arrCnt > 0) hrvBits.push(`${arrCnt} arr`);
   if (hrvBits.length > 0 && !compact) {
-    ctx.fillText(hrvBits.join(' Â· '), trend.x + 8, trend.y + 26);
+    ctx.fillText(hrvBits.join(' · '), trend.x + 8, trend.y + 26);
   } else if (hrvBits.length > 0) {
     ctx.textAlign = 'right';
-    ctx.fillText(hrvBits.join(' Â· '), trend.x + trend.w - 8, trend.y + 12);
+    ctx.fillText(hrvBits.join(' · '), trend.x + trend.w - 8, trend.y + 12);
     ctx.textAlign = 'left';
   }
 
@@ -1473,7 +1473,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.fillStyle = COLORS.TEXT_DIM;
   ctx.textAlign = 'left';
   ctx.fillText(
-    `min ${Math.round(mn)} Â· max ${Math.round(mx)}`,
+    `min ${Math.round(mn)} · max ${Math.round(mx)}`,
     innerX,
     trend.y + trend.h - 4,
   );
@@ -1536,7 +1536,7 @@ export function drawFooter(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   if (alarms.length > 0) {
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DANGER;
-    ctx.fillText(`âš  ALARMA: ${alarms.join(' Â· ')}`, footer.x + footer.w - 12, footer.y + 16);
+    ctx.fillText(`⚠ ALARMA: ${alarms.join(' · ')}`, footer.x + footer.w - 12, footer.y + 16);
   } else if (bpm != null && bpm > 0) {
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_PRIMARY;
@@ -1563,6 +1563,6 @@ export function drawFooter(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'right';
     const arrCount = beats.filter(b => b.isArrhythmia).length;
-    ctx.fillText(`Ãšltimos ${showN} Â· N:${beats.length - arrCount} A:${arrCount}`, footer.x + footer.w - 12, dy + 14);
+    ctx.fillText(`Ãšltimos ${showN} · N:${beats.length - arrCount} A:${arrCount}`, footer.x + footer.w - 12, dy + 14);
   }
 }

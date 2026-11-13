@@ -3,6 +3,8 @@ import { createLogger } from "@/utils/logger";
 import { clamp } from "@/utils/math";
 import { Camera } from '@capacitor/camera';
 import { isNative } from "@/lib/device/platform";
+import { startLensCoLocationScan, type LensScanResult } from "@/lib/device/lensCoLocation";
+import { toast } from "@/hooks/use-toast";
 
 const log = createLogger("CameraView");
 
@@ -183,6 +185,9 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
   const isStartingRef = useRef(false);
 
+  // Último resultado del profiling de co-ubicación lente↔flash (solo diagnóstico).
+  const lastLensScanRef = useRef<LensScanResult | null>(null);
+
 
   useImperativeHandle(ref, () => ({
     getVideoElement: () => videoRef.current,
@@ -219,6 +224,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           exposureMode: settings.exposureMode,
           whiteBalanceMode: settings.whiteBalanceMode,
           focusMode: settings.focusMode,
+          lensCoLocation: lastLensScanRef.current,
         };
       } catch {
         log.warn('Camera diagnostics failed');
@@ -231,43 +237,66 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
       void (async () => {
         try {
           const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
-          const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-          const constraints: AdvancedConstraint[] = [];
+          let appliedSteps = 0;
+
+          // Bloqueo SECUENCIAL de controles analógicos (ISP): cada constraint va
+          // en su propia llamada y EN ORDEN. En un mismo array `advanced`, Chrome
+          // ignora el valor de exposición (iso/exposureTime/EC) enviado en la
+          // misma llamada que el cambio exposureMode→manual, y un entry que
+          // falla impide aplicar los siguientes. Modo primero, valor después.
+          const applyStep = async (c: AdvancedConstraint, what: string): Promise<boolean> => {
+            try {
+              await track.applyConstraints({ advanced: [c] });
+              appliedSteps++;
+              return true;
+            } catch (e) {
+              log.warn(`${what} no aceptado (best-effort)`, e);
+              return false;
+            }
+          };
 
           if (caps.focusMode?.includes("manual")) {
             const near = typeof caps.focusDistance?.min === "number" ? caps.focusDistance.min : 0;
-            constraints.push({ focusMode: "manual", focusDistance: near });
+            await applyStep({ focusMode: "manual", focusDistance: near }, "focus manual");
           }
           if (caps.whiteBalanceMode?.includes("manual")) {
-            constraints.push({ whiteBalanceMode: "manual" });
+            await applyStep({ whiteBalanceMode: "manual" }, "WB manual");
           }
           if (caps.exposureMode?.includes("manual") && redLevel > 0) {
-            constraints.push({ exposureMode: "manual" });
-            const TARGET = 180;
-            const ratio = clamp(TARGET / redLevel, 0.45, 2.2);
-            if (caps.iso && typeof caps.iso.max === "number") {
-              const isoMin = caps.iso.min ?? 25;
-              const isoMax = caps.iso.max ?? 800;
-              const curIso = settings.iso ?? (isoMin + isoMax) / 2;
-              constraints.push({ iso: clamp(Math.round(curIso * ratio), isoMin, isoMax) });
-            } else if (caps.exposureCompensation) {
-              const evMin = caps.exposureCompensation.min ?? -2;
-              const evMax = caps.exposureCompensation.max ?? 2;
-              const curEv = settings.exposureCompensation ?? 0;
-              constraints.push({
-                exposureCompensation: clamp(curEv + clamp(Math.log2(ratio), -1, 1), evMin, evMax),
-              });
-            } else if (caps.exposureTime && typeof settings.exposureTime === "number") {
-              const etMin = caps.exposureTime.min ?? settings.exposureTime;
-              const etMax = caps.exposureTime.max ?? settings.exposureTime;
-              constraints.push({ exposureTime: clamp(settings.exposureTime * ratio, etMin, etMax) });
+            if (await applyStep({ exposureMode: "manual" }, "exposure manual")) {
+              // El VALOR se negocia en una llamada POSTERIOR al cambio de modo,
+              // releyendo settings reales ya en manual.
+              const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
+              const TARGET = 180;
+              const ratio = clamp(TARGET / redLevel, 0.45, 2.2);
+              const value: AdvancedConstraint = {};
+              if (caps.iso && typeof caps.iso.max === "number") {
+                const isoMin = caps.iso.min ?? 25;
+                const isoMax = caps.iso.max ?? 800;
+                const curIso = settings.iso ?? (isoMin + isoMax) / 2;
+                value.iso = clamp(Math.round(curIso * ratio), isoMin, isoMax);
+              } else if (caps.exposureCompensation) {
+                const evMin = caps.exposureCompensation.min ?? -2;
+                const evMax = caps.exposureCompensation.max ?? 2;
+                const curEv = settings.exposureCompensation ?? 0;
+                value.exposureCompensation = clamp(curEv + clamp(Math.log2(ratio), -1, 1), evMin, evMax);
+              } else if (caps.exposureTime && typeof settings.exposureTime === "number") {
+                const etMin = caps.exposureTime.min ?? settings.exposureTime;
+                const etMax = caps.exposureTime.max ?? settings.exposureTime;
+                value.exposureTime = clamp(settings.exposureTime * ratio, etMin, etMax);
+              }
+              if (Object.keys(value).length > 0) {
+                await applyStep(value, "valor de exposición");
+              }
             }
           }
 
-          if (constraints.length > 0) {
-            await track.applyConstraints({ advanced: constraints });
-            log.info(`Cámara optimizada al dedo (red=${redLevel.toFixed(0)}, ${constraints.length} ajustes)`);
-          }
+          // Verificación real del bloqueo: settings post-aplicación (no la
+          // constraint enviada). Queda expuesto también vía getDiagnostics().
+          const after = (track.getSettings?.() ?? {}) as ExtendedSettings;
+          log.info(
+            `ISP lock: exposure=${after.exposureMode ?? 'n/a'} wb=${after.whiteBalanceMode ?? 'n/a'} focus=${after.focusMode ?? 'n/a'} (red=${redLevel.toFixed(0)}, ${appliedSteps} pasos)`,
+          );
         } catch (e) {
           log.warn("optimizeForFinger falló (best-effort)", e);
         }
@@ -388,6 +417,29 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           if (torchOn) log.info("Flash activado");
           else log.warn("Flash no confirmado — se usará perfil de cámara tolerante");
           await applyTorchDependentParams(track, torchOn);
+
+          // Profiling de co-ubicación lente↔flash: mide el flujo lumínico de los
+          // primeros ~500 ms con torch y alerta si el dedo cubrió una lente SIN
+          // flash (gran angular/tele en equipos multi-lente: `facingMode:
+          // environment` no garantiza la lente principal). Fire-and-forget: no
+          // retrasa onStreamReady y NO toca el pipeline de medición.
+          if (videoRef.current) {
+            lastLensScanRef.current = null;
+            void startLensCoLocationScan(videoRef.current, { torchOn })
+              .then(result => {
+                lastLensScanRef.current = result;
+                if (result.verdict === 'lens-covered-dark') {
+                  toast({
+                    variant: "destructive",
+                    title: "Lente equivocada detectada",
+                    description:
+                      "El flash está activo pero la lente activa queda oscura. Apoya el dedo sobre la lente principal, junto al flash.",
+                    duration: 6000,
+                  });
+                }
+              })
+              .catch(e => log.debug("Escaneo lente/flash no disponible", e));
+          }
         }
 
         log.info(`Cámara trasera lista ${videoRef.current?.videoWidth ?? "?"}x${videoRef.current?.videoHeight ?? "?"}`);

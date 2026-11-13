@@ -5,7 +5,7 @@ tags:
 - git
 - lesson
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-13
 filenames:
 - .Codex/skills/bio-beat-audit-guard/SKILL.md
 - .Codex/skills/bio-beat-audit-guard/references/project-context.md
@@ -24,7 +24,7 @@ kind: lesson
 status: proposed
 superseded_by: null
 deprecated_at: null
-review_after: 2026-11-12
+review_after: 2026-11-13
 source_chat_id: null
 created_at: 2026-11-12T17:48:02.791295100+00:00
 summary: null

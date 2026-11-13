@@ -556,7 +556,7 @@ function wellThemeFor(contactState?: string): WellTheme {
  * Score de colocaciÃ³n [0..1] SOLO con seÃ±ales ya presentes en el render state
  * (cero cÃ³mputo nuevo del pipeline). El tamaÃ±o de la ventana es su feedback.
  */
-function wellScoreOf(state: PpgRenderState, contactState?: string): number {
+function wellScoreOf(state: PpgRenderState, _contactState?: string): number {
   // EVIDENCIA FISICA REAL: score directo del modulo fingerPlacementEvidence
   // (presion/ubicacion/movimiento/pulso medidos por frame en el pipeline).
   // Sin evidencia (pipeline parado, sin monitoreo, senal stale) -> 0:

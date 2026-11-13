@@ -6,7 +6,7 @@ tags:
 - git
 - pattern
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-13
 filenames:
 - src/hooks/useSignalRouter.ts
 - src/pages/Index.tsx
@@ -15,7 +15,7 @@ kind: pattern
 status: proposed
 superseded_by: null
 deprecated_at: null
-review_after: 2026-11-12
+review_after: 2026-11-13
 source_chat_id: null
 created_at: 2026-11-12T17:48:02.876437300+00:00
 summary: null
@@ -36,7 +36,8 @@ last_injected_at: null
 dismissed_count: 0
 source_content_hash: 44b6acae98cff8293dc2cab7791f0b2d7ea55efcd29e7413c59fd5dc8cc5c3b2
 review_needed: true
-occurrences: 0
+occurrences: 2
+last_observed: 2026-11-13T03:18:19.208558300+00:00
 ---
 
 Git co-change pattern: src/hooks/useSignalRouter.ts + src/pages/Index.tsx

@@ -78,11 +78,19 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
       };
       if (typeof vAny.requestVideoFrameCallback === 'function') {
         videoFrameLoopRef.current = vAny.requestVideoFrameCallback((now, metadata) => {
-          ppgPerf.markFrame(metadata);
+          // Timestamp de sub-frame por hardware: `presentationTime` es el instante
+          // (misma base monótona que performance.now(), precisión de µs) en que el
+          // compositor recibió ESTE frame; `now` es el despacho del callback en el
+          // event loop y arrastra su jitter a la fs estimada y a los RR. Solo si
+          // el UA no lo informa se cae a `now`.
+          const pts = metadata?.presentationTime;
           const ts =
-            typeof now === 'number' && Number.isFinite(now)
-              ? now
-              : performance.now();
+            typeof pts === 'number' && pts > 0
+              ? pts
+              : typeof now === 'number' && Number.isFinite(now)
+                ? now
+                : performance.now();
+          ppgPerf.markFrame(metadata, ts);
           captureOneFrame(ts);
         });
       } else {
@@ -93,7 +101,7 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
             return;
           }
           lastRafTsRef.current = ts;
-          ppgPerf.markFrame();
+          ppgPerf.markFrame(undefined, ts);
           captureOneFrame(ts);
         };
         frameLoopRef.current = requestAnimationFrame(tick);

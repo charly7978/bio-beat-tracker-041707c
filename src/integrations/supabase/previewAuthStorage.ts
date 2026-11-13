@@ -69,7 +69,16 @@ export function brokeredPreviewStorage(): PreviewAuthStorage | undefined {
     ? [ancestor]
     : (dev ? ['https://lovable.dev', 'http://localhost:3000'] : ['https://lovable.dev']);
   const TIMEOUT = 2000;
-  const newId = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+  // ID de solicitud: CSPRNG (crypto) en lugar de Math.random — el guardrail
+  // anti-simulación prohíbe Math.random en src/ y un ID predecible es peor para
+  // un broker de auth.
+  const newId = (): string => {
+    const c = globalThis.crypto;
+    if (typeof c?.randomUUID === 'function') return c.randomUUID();
+    const buf = new Uint8Array(16);
+    if (c) c.getRandomValues(buf);
+    return Array.from(buf, b => b.toString(16).padStart(2, '0')).join('');
+  };
 
   const request = (type: BrokerRequestType, key: string, value?: string): Promise<BrokerReply | null> =>
     new Promise((resolve) => {
@@ -138,7 +147,7 @@ export function brokeredPreviewStorage(): PreviewAuthStorage | undefined {
     removeItem: (key) => {
       const local = readLocal(key);
       localStorage.removeItem(key);
-      return request('lovable-preview-auth:remove', key, local ?? undefined).then(() => {});
+      return request('lovable-preview-auth:remove', key, local ?? undefined).then(() => undefined);
     },
   };
 }

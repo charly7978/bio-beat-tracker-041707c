@@ -122,10 +122,15 @@ export class PerfTracker {
     };
   }
 
-  /** Registra un frame de cámara. metadata es el VideoFrameCallbackMetadata si existe. */
-  markFrame(metadata?: { mediaTime?: number; presentationTime?: number }) {
+  /**
+   * Registra un frame de cámara. metadata es el VideoFrameCallbackMetadata si
+   * existe. `frameTs` (opcional) debe ser el MISMO timestamp usado para la muestra
+   * (p. ej. `presentationTime`) para que los deltas midan la cadencia real del
+   * compositor y no el ritmo del event loop.
+   */
+  markFrame(metadata?: { mediaTime?: number; presentationTime?: number }, frameTs?: number) {
     this.frames++;
-    const t = now();
+    const t = typeof frameTs === 'number' && frameTs > 0 ? frameTs : now();
     if (this.lastFrameT > 0) {
       this.frameDeltas.push(t - this.lastFrameT);
     }
