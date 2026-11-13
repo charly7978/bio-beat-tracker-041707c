@@ -69,6 +69,7 @@ const {
   CV_FLAT_REF,
   FLAT_HEAVY,
   DC_RISE_MIN,
+  DC_HIGH_MIN,
   DC_RISE_FULL,
   HEAVY_WARMUP_FRAMES,
   HEAVY_ENTER_FRAMES,
@@ -94,6 +95,7 @@ const ev = {
   frame: 0,
   dc: 0,
   dcSlow: 0,
+  dcMin: 0,
   cv: 0,
   peak: 0,        // mejor PI normalizado reciente
   peakRaw: 0,     // mejor PI RAW reciente (congelado en HEAVY)
@@ -112,6 +114,7 @@ export function resetPlacementEvidence(): void {
   ev.frame = 0;
   ev.dc = 0;
   ev.dcSlow = 0;
+  ev.dcMin = 0;
   ev.cv = 0;
   ev.peak = 0;
   ev.peakRaw = 0;
@@ -184,10 +187,12 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
   if (ev.frame === 1) {
     ev.dc = dc;
     ev.dcSlow = dc;
+    ev.dcMin = dc;
     ev.cv = cv;
   } else {
     ev.dc = ev.dc * (1 - EMA_A) + dc * EMA_A;
     ev.dcSlow = ev.dcSlow * (1 - DC_SLOW_ALPHA) + dc * DC_SLOW_ALPHA;
+    if (dc < ev.dcMin || ev.dcMin === 0) ev.dcMin = dc;
     ev.cv = ev.cv * d + cv * EMA_A;
   }
 
@@ -211,6 +216,10 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
   const dcRise = ev.dcSlow > 4
     ? clamp(((ev.dc - ev.dcSlow) / ev.dcSlow) / DC_RISE_FULL, 0, 1)
     : 0;
+  // DC por encima del minimo del episodio: presion sostenida (DC alto y estable).
+  const dcHigh = ev.dcMin > 0
+    ? (ev.dc - ev.dcMin) / Math.max(ev.dcMin, 1) >= DC_HIGH_MIN
+    : false;
 
   // Planitud: 1 = CV en cero (sin pulsación), 0 = CV en el piso de pulsatilidad.
   const flat = 1 - clamp(ev.cv / CV_FLAT_REF, 0, 1);
@@ -237,13 +246,14 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
   } else if (
     settled && (
       (hasPeak && acCollapse >= AC_COLLAPSE_CLEAR && ev.cover >= COVER_GOOD) ||
+      (dcHigh && ev.pulse <= PULSE_FLAT && flat >= FLAT_HEAVY && ev.cover >= COVER_GOOD) ||
       sealedFlat
     )
   ) {
     candidate = 'HEAVY';
   } else if (prevVerdict === 'HEAVY') {
     // Salida de HEAVY solo con recuperación real del pulso; nunca LIGHT directo.
-    if (hasPeak && acCollapse < AC_COLLAPSE_RECOVER && ev.pulse >= PULSE_OK * 0.8) {
+    if ((hasPeak && acCollapse < AC_COLLAPSE_RECOVER && ev.pulse >= PULSE_OK * 0.7) || (!dcHigh && ev.pulse >= PULSE_OK)) {
       candidate = 'IDEAL';
     } else if (ev.cover < COVER_MIN) {
       candidate = 'NONE';

@@ -512,8 +512,8 @@ export const VITAL_THRESHOLDS = {
     /** Caída de PI frente al mejor reciente que indica colapso capilar. */
     AC_COLLAPSE_HEAVY: 0.50,
     /** Caída por debajo de la cual el pulso se considera pleno (no excesivo). */
-    AC_COLLAPSE_CLEAR: 0.30,
-    AC_COLLAPSE_RECOVER: 0.15,
+    AC_COLLAPSE_CLEAR: 0.20,
+    AC_COLLAPSE_RECOVER: 0.10,
     /** PI normalizado por debajo del cual el pulso está plano. */
     PULSE_FLAT: 0.18,
     /** PI normalizado mínimo para considerar apoyo óptimo. */
@@ -524,6 +524,7 @@ export const VITAL_THRESHOLDS = {
     FLAT_HEAVY: 0.45,
     /** Subida relativa de DC (fracción del DC lento) que satura la evidencia. */
     DC_RISE_MIN: 0.20,
+    DC_HIGH_MIN: 0.15,
     DC_RISE_FULL: 0.10,
     /** Frames de contacto antes de diagnosticar presión (AE asentado). */
     HEAVY_WARMUP_FRAMES: 30,
@@ -532,7 +533,7 @@ export const VITAL_THRESHOLDS = {
     /** Frames consecutivos para confirmar cualquier otro veredicto. */
     VERDICT_CONFIRM_FRAMES: 8,
     /** Decaimiento por frame del mejor PI reciente (~17 s @30 fps). */
-    PEAK_DECAY: 0.998,
+    PEAK_DECAY: 0.9995,
     /** EMA lenta del DC para medir la tendencia de fuerza de contacto. */
     DC_SLOW_ALPHA: 0.012,
     /** EMA del score continuo de presión (cursor del gauge). */
