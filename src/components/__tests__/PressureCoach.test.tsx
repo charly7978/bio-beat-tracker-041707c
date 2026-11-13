@@ -102,6 +102,45 @@ describe('PressureCoach — la guía llega al usuario', () => {
     expect(html).toContain('DEMOSTRE LA IMAGEN');
   });
 
+  it('muestra el aviso secundario de centrado aunque el titular sea de presión', () => {
+    // El coach solo mostraba la instrucción de PRESIÓN: "centra la yema" o
+    // "sostén el dedo quieto" nunca llegaban al usuario en 2D.
+    const html = renderToStaticMarkup(
+      <PressureCoach
+        evidence={{
+          ...evidenceWith({
+            action: 'PRESS_MORE',
+            headline: 'PRESIONA UN POCO MÁS',
+          }),
+          failing: ['Centra la yema en la lente', 'Sostén el dedo quieto'],
+        }}
+        isMonitoring
+      />,
+    );
+
+    expect(html).toContain('PRESIONA UN POCO MÁS');
+    expect(html).toContain('Centra la yema en la lente');
+  });
+
+  it('no duplica el titular dentro del aviso secundario', () => {
+    const html = renderToStaticMarkup(
+      <PressureCoach
+        evidence={{
+          ...evidenceWith({
+            action: 'RELEASE',
+            headline: 'SUELTA UN POCO EL DEDO',
+            pressure: 'HEAVY',
+          }),
+          failing: ['Presión excesiva: suelta un poco el dedo'],
+        }}
+        isMonitoring
+      />,
+    );
+
+    // El secundario es redundante con el titular: no debe repetirse.
+    expect(html.match(/SUELTA UN POCO EL DEDO/gi)?.length).toBe(1);
+  });
+
   it('no renderiza nada si la monitorización no está activa', () => {
     const html = renderToStaticMarkup(
       <PressureCoach evidence={evidenceWith()} isMonitoring={false} />,

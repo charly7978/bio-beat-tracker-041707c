@@ -235,23 +235,38 @@ export function resetTransmuralState(state: TransmuralModelState): void {
   state.candidateRun = 0;
 }
 
-function settle(state: TransmuralModelState, candidate: TransmuralState): void {
+function settle(
+  state: TransmuralModelState,
+  candidate: TransmuralState,
+  /** Reinicio inmediato solo para pérdida REAL de contacto (dedo fuera). */
+  immediateReset = false,
+): void {
   if (candidate === state.state) {
     state.candidateRun = 0;
     return;
   }
-  if (candidate === 'NONE') {
+  if (candidate === 'NONE' && immediateReset) {
     state.state = 'NONE';
+    state.candidate = 'NONE';
     state.candidateRun = 0;
     return;
   }
   // La racha solo cuenta si el candidato INSISTE. Sin este reinicio, una
   // secuencia LIGHT → IDEAL → HEAVY acumulaba racha mezclando candidatos y
   // confirmaba un estado que nunca se sostuvo.
+  //
+  // `NONE` también exige racha (salvo pérdida real de contacto). Antes salía
+  // inmediato: con evidencia alterna en el límite el estado caía a NONE en el
+  // primer frame y ya no volvía, porque salir de NONE exige racha completa.
+  // Resultado: el modelo se quedaba CLAVADO en "no evaluable" de forma indefinida.
   if (candidate !== state.candidate) state.candidateRun = 0;
   state.candidate = candidate;
   state.candidateRun += 1;
-  const needed = candidate === 'HEAVY' ? P.HEAVY_ENTER_FRAMES : P.VERDICT_CONFIRM_FRAMES;
+  const needed = candidate === 'HEAVY'
+    ? P.HEAVY_ENTER_FRAMES
+    : candidate === 'NONE'
+      ? P.CONTACT_LOST_FRAMES
+      : P.VERDICT_CONFIRM_FRAMES;
   if (state.candidateRun >= needed) {
     state.state = candidate;
     state.candidateRun = 0;
@@ -438,7 +453,9 @@ export function observeTransmuralPressure(
   } else {
     candidate = 'IDEAL';
   }
-  settle(state, candidate);
+  // Pérdida REAL de contacto: el dedo ya no cubre la lente. Solo este caso
+  // reinicia de inmediato; "no confirmable" exige racha como cualquier estado.
+  settle(state, candidate, state.seal < P.COVER_MIN);
 
   // ── Eje: lado del óptimo ──────────────────────────────────────────────────
   let axis: TransmuralAxis;
@@ -490,11 +507,17 @@ export function observeTransmuralPressure(
   } else {
     fraction = 0.5;
   }
-  if (state.state === 'HEAVY') fraction = Math.max(fraction, 0.70);
-  if (state.state === 'LIGHT') fraction = Math.min(fraction, 0.42);
-  // NONE ya no se fuerza a 0.5: con el eje conocido (OVER/UNDER) el cursor debe
-  // moverse aunque el veredicto aún no esté confirmado; solo el eje UNKNOWN
-  // (sin contacto o sin referencia) deja el cursor en el centro.
+  // Sin contacto no se afirma grado: el cursor vuelve al centro en lugar de
+  // quedarse clavado donde lo dejó el último veredicto (p. ej. 0,70 de HEAVY).
+  if (state.seal < P.COVER_MIN || state.frame < P.MIN_EVIDENCE_FRAMES) {
+    fraction = 0.5;
+  } else {
+    if (state.state === 'HEAVY') fraction = Math.max(fraction, 0.70);
+    if (state.state === 'LIGHT') fraction = Math.min(fraction, 0.42);
+    // NONE conserva el grado del eje conocido (OVER/UNDER) para que el cursor se
+    // mueva aunque el veredicto aún no esté confirmado; solo el eje UNKNOWN deja
+    // el cursor en el centro.
+  }
 
   // Durante movimiento se mantiene el último grado válido: la interfaz no debe
   // interpretar un artefacto como un cambio de presión.
@@ -643,7 +666,9 @@ function buildGuidance(input: {
           ...base,
           action: 'PRESS_MORE',
           headline: 'PRESIONA UN POCO MÁS',
-          detail: 'El contacto es correcto pero el pulso es débil. Aumenta la presión despacio.',
+          detail: !input.perfusedOk
+            ? 'El tejido apenas tiene riego. Puede ser un dedo frío: caliéntalo o apoya un poco más.'
+            : 'El contacto es correcto pero el pulso es débil. Aumenta la presión despacio.',
         };
     case 'OVER':
       return {

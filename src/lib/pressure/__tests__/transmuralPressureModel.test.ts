@@ -435,6 +435,75 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
     expect(reading.hasReference).toBe(false);
   });
 
+  it('no se queda clavado en NONE con evidencia alterna y luego se recupera', () => {
+    // Defecto real encontrado: `settle` salía a NONE de forma inmediata, así que
+    // con evidencia alterna en el límite el estado caía a NONE en el primer frame
+    // y ya no volvía (salir de NONE exige racha completa). Si la racha se
+    // rompía siempre, el modelo quedaba ciego de forma indefinida.
+    feed(state, 45);
+    expect(state.state).toBe('IDEAL');
+
+    let changes = 0;
+    let prev = state.state;
+    for (let i = 0; i < 60; i++) {
+      const r = observeTransmuralPressure(state, i % 2 === 0 ? HEALTHY : {
+        sealRatio: 0.9,
+        perfusedFraction: 0.7,
+        perfusionIndex: 0.0005,
+        dcLevel: 215,
+        roiRedCv: 0.006,
+        motionScore: 0.05,
+      });
+      if (r.state !== prev) changes++;
+      prev = r.state;
+    }
+    // No debe cambiar de veredicto a cadencia de frame.
+    expect(changes).toBeLessThanOrEqual(2);
+
+    // Y debe recuperarse con señal sostenida (no quedarse clavado).
+    const recovered = feed(state, 40, HEALTHY);
+    expect(recovered.state).toBe('IDEAL');
+
+    const pressing = feed(state, 40, {
+      sealRatio: 0.9,
+      perfusedFraction: 0.7,
+      perfusionIndex: 0.0005,
+      dcLevel: 215,
+      roiRedCv: 0.006,
+    });
+    expect(pressing.state).toBe('HEAVY');
+    expect(pressing.fraction).toBeGreaterThan(0.85);
+
+    const released = feed(state, 40, HEALTHY);
+    expect(released.state).toBe('IDEAL');
+    expect(released.fraction).toBeLessThan(0.6);
+  });
+
+  it('sin contacto el cursor vuelve al centro aunque el último veredicto fuera HEAVY', () => {
+    feed(state, 45);
+    const heavy = feed(state, 30, {
+      sealRatio: 0.9,
+      perfusedFraction: 0.7,
+      perfusionIndex: 0.0005,
+      dcLevel: 215,
+      roiRedCv: 0.006,
+    });
+    expect(heavy.state).toBe('HEAVY');
+    expect(heavy.fraction).toBeGreaterThan(0.7);
+
+    // El dedo se retira: no se afirma grado, el cursor se centra.
+    const gone = feed(state, 10, {
+      sealRatio: 0.02,
+      perfusedFraction: 0,
+      perfusionIndex: 0,
+      dcLevel: 0,
+      roiRedCv: 0,
+    });
+    expect(gone.state).toBe('NONE');
+    expect(gone.fraction).toBe(0.5);
+    expect(gone.guidance.action).toBe('REPOSITION');
+  });
+
   it('congela el aprendizaje del pico durante el movimiento', () => {
     feed(state, 45);
     const moving = feed(state, 20, {

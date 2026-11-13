@@ -244,6 +244,14 @@ export class AdaptivePixelRoi {
     let tissuePixels = 0;
     let tissueRedSum = 0;
     let tissuePerfused = 0;
+    /**
+     * Tejido que además llegó a evaluarse (pasó saturación y subexposición).
+     * Es el denominador correcto de `perfusionRatio`: usar `tissuePixels` mezclaba
+     * píxeles evaluados con píxeles descartados por saturación y el cociente
+     * quedaba sesgado a la baja (parecía "sin riego" un dedo bien perfundido
+     * pero saturado por el flash).
+     */
+    let tissueEvaluated = 0;
 
     let rExp = 0;
     let gExp = 0;
@@ -296,6 +304,7 @@ export class AdaptivePixelRoi {
         const od = opticalDensity(g);
         const n = this.samples[idx];
         if (isTissue) this.maskLevel[idx] |= 4;
+        if (isTissue) tissueEvaluated++;
         let mean = this.meanOd[idx];
         let variance = this.varOd[idx];
         if (n === 0) {
@@ -379,8 +388,10 @@ export class AdaptivePixelRoi {
     // Sellado óptico: "¿cuánta lente cubre el dedo?" sin exigir pulso.
     const tissueRatio = sampled > 0 ? tissuePixels / sampled : 0;
     const tissueRed = tissuePixels > 0 ? tissueRedSum / tissuePixels : 0;
-    // De los píxeles de tejido, cuántos además están perfundidos (pulso real).
-    const perfusionRatio = tissuePixels > 0 ? tissuePerfused / tissuePixels : 0;
+    // De los píxeles de tejido EVALUADOS, cuántos están perfundidos (pulso real).
+    // Denominador consistente con el numerador: ambos cuentan solo tejido que
+    // llegó a evaluarse.
+    const perfusionRatio = tissueEvaluated > 0 ? tissuePerfused / tissueEvaluated : 0;
     const fingerRegionCount =
       sampled > 0
         ? Math.min(25, Math.floor((effectivePixels * 25) / sampled))

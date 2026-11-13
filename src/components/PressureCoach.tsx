@@ -144,6 +144,13 @@ export function PressureCoach({ evidence, isMonitoring, status }: PressureCoachP
   const progressPct = Math.round(Math.max(0, Math.min(1, guidance.progress)) * 100);
   const isCritical = guidance.action === 'RELEASE';
 
+  // Aviso secundario: centrado, quietud o cobertura. El coach solo mostraba la
+  // instrucción de PRESIÓN, así que "centra la yema" o "sostén el dedo quieto"
+  // (que ya calcula el modelo en `failing`) no llegaban nunca al usuario en 2D.
+  const secondary = (evidence.failing ?? []).find(
+    (hint) => hint && !hint.toLowerCase().includes(guidance.headline.toLowerCase()),
+  );
+
   return (
     <div
       className="pointer-events-none absolute left-2 right-2 z-20"
@@ -170,6 +177,12 @@ export function PressureCoach({ evidence, isMonitoring, status }: PressureCoachP
             <p className="mt-0.5 text-[10px] leading-snug text-zinc-300">
               {guidance.detail}
             </p>
+
+            {secondary ? (
+              <p className={`mt-1 text-[10px] font-semibold leading-snug ${accent.text} opacity-90`}>
+                → {secondary}
+              </p>
+            ) : null}
 
             <div className="mt-1.5 flex items-center gap-2">
               <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/60">
