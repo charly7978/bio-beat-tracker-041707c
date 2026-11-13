@@ -1,4 +1,4 @@
-import type { ProcessedSignal, ProcessingError, SignalProcessor as SignalProcessorInterface, ContactState } from '../../types/signal';
+﻿import type { ProcessedSignal, ProcessingError, SignalProcessor as SignalProcessorInterface, ContactState } from '../../types/signal';
 import { BandpassFilter } from './BandpassFilter';
 import { PPGSignalSplitter } from './PPGSignalSplitter';
 import { createLogger, ppgPerf } from '../../utils/logger';
@@ -24,6 +24,11 @@ import {
   getZlo,
   resetZlo,
 } from '../../lib/finger/fingerContactSignature';
+import {
+  computePlacementEvidence,
+  resetPlacementEvidence,
+  type FingerPlacementEvidence,
+} from '../../lib/finger/fingerPlacementEvidence';
 import {
   isExposureFlickerNotFingerPulse,
   isOpenFlashWithoutContact,
@@ -85,9 +90,9 @@ interface ROIMetrics {
  * 
  * Mejoras clave:
  * 1. Estado de contacto 3-niveles (NO_CONTACT / UNSTABLE / STABLE)
- * 2. Selección competitiva de canal (R, G, R-G; sin CHROM — ruido con dedo+flash)
- * 3. SQI unificado — única fuente de verdad
- * 4. Histéresis fuerte para tolerancia a temblores
+ * 2. SelecciÃ³n competitiva de canal (R, G, R-G; sin CHROM â€” ruido con dedo+flash)
+ * 3. SQI unificado â€” Ãºnica fuente de verdad
+ * 4. HistÃ©resis fuerte para tolerancia a temblores
  */
 export class PPGSignalProcessor implements SignalProcessorInterface {
   public isProcessing = false;
@@ -106,9 +111,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly TILE_ROWS = 5;
 
   // === BACKPRESSURE / ADAPTIVE STRIDE ===
-  // Stride de muestreo de píxeles dentro del ROI. 3 = baseline (cada 3 píxeles).
+  // Stride de muestreo de pÃ­xeles dentro del ROI. 3 = baseline (cada 3 pÃ­xeles).
   // Sube a 4 si fps < 20 sostenido > 3s, baja a 3 cuando fps >= 25.
-  // Evita reescribir el pipeline cuando el dispositivo es lento; sólo reduce el
+  // Evita reescribir el pipeline cuando el dispositivo es lento; sÃ³lo reduce el
   // muestreo espacial preservando la temporal (que es lo que importa para BPM).
   private pixelStride = 3;
   private lastBackpressureCheck = 0;
@@ -135,15 +140,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     valid: false, isFinger: false,
   }));
 
-  // Buffers (ring buffers Float32 — sin Array.shift O(n) por frame)
+  // Buffers (ring buffers Float32 â€” sin Array.shift O(n) por frame)
   private readonly rawBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
   private readonly filteredBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
   private readonly redBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
   private readonly greenBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
   private readonly blueBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
   private tileConfidence: number[] = new Array(25).fill(0);
-  // Fusión multi-celda por pulsatilidad: señal de verde por celda + cache de
-  // pulsatilidad (AC/DC) recalculada con throttle, y su máximo para normalizar.
+  // FusiÃ³n multi-celda por pulsatilidad: seÃ±al de verde por celda + cache de
+  // pulsatilidad (AC/DC) recalculada con throttle, y su mÃ¡ximo para normalizar.
   private readonly tileGreenBuffers: RingF32[] = Array.from(
     { length: this.TILE_COLUMNS * this.TILE_ROWS },
     () => new RingF32(VITAL_THRESHOLDS.TILE_FUSION.BUFFER_SIZE),
@@ -153,8 +158,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private tilePulseThrottle = 0;
   private readonly frameIntervalBuffer = new RingF32(DSP_CONSTANTS.MAX_RR_INTERVALS);
 
-  // Scratch buffers reusables para stats (ACDC, SQI, source-score) — evita
-  // `[...arr].sort()` por frame. Tamaño máximo = ACDC_WINDOW.
+  // Scratch buffers reusables para stats (ACDC, SQI, source-score) â€” evita
+  // `[...arr].sort()` por frame. TamaÃ±o mÃ¡ximo = ACDC_WINDOW.
   private readonly statScratch = new Float32Array(this.ACDC_WINDOW);
   private readonly sortedScratch = new Float32Array(this.ACDC_WINDOW);
   private readonly periodicityScratch = new Float32Array(DSP_CONSTANTS.BUFFER_SIZE);
@@ -164,8 +169,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly acdcGreenScratch = new Float32Array(this.ACDC_WINDOW);
   private readonly acdcBlueScratch = new Float32Array(this.ACDC_WINDOW);
 
-  // LUTs de teselado: cachean Math.floor((px / roiSize) * cols) por píxel
-  // del ROI. Se reconstruyen sólo cuando cambia el tamaño del ROI.
+  // LUTs de teselado: cachean Math.floor((px / roiSize) * cols) por pÃ­xel
+  // del ROI. Se reconstruyen sÃ³lo cuando cambia el tamaÃ±o del ROI.
   private tileXLut: Int8Array | null = null;
   private tileYLut: Int8Array | null = null;
   private tileLutKey = '';
@@ -178,7 +183,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private blueDC = 0;
   private blueAC = 0;
 
-  // Baselines dinámicas
+  // Baselines dinÃ¡micas
   private redBaseline = 0;
   private greenBaseline = 0;
   private blueBaseline = 0;
@@ -195,7 +200,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private fingerConfidenceCount = 0;
   private fingerLostCount = 0;
   private stableContactCount = 0;
-  /** Frames consecutivos en STABLE sin pulso evidenciado — reversión continua. */
+  /** Ultima evidencia fisica de colocacion (presion/ubicacion/movimiento). */
+  private lastPlacementEvidence: FingerPlacementEvidence | null = null;
+  /** Frames consecutivos en STABLE sin pulso evidenciado â€” reversiÃ³n continua. */
   private stableNoPulseStreak = 0;
   private instantLostStreak = 0;
   private liveFingerMissStreak = 0;
@@ -204,13 +211,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private lastInstantFinger = false;
   private readonly FINGER_CONFIRM_FRAMES = VITAL_THRESHOLDS.FINGER.FINGER_CONFIRM_FRAMES;
 
-  // Ensemble de detección universal: gray buffer + temporal variance + ZLO
+  // Ensemble de detecciÃ³n universal: gray buffer + temporal variance + ZLO
   private grayBuffer: Uint8ClampedArray | null = null;
   private lastEnsembleScore = 0;
   private zloFrameCount = 0;
   private readonly ZLO_CALIBRATION_FRAMES = 10;
 
-  // Suavizado temporal — más lentos = más estable
+  // Suavizado temporal â€” mÃ¡s lentos = mÃ¡s estable
   private smoothedRed = 0;
   private smoothedGreen = 0;
   private smoothedBlue = 0;
@@ -219,11 +226,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly RGB_SMOOTH_ALPHA = 0.08;
   private readonly COVERAGE_SMOOTH_ALPHA = 0.10;
 
-  /** Ventana corta de R medio en ROI — CV temporal para distinguir tejido pulsátil vs. rojo estático */
+  /** Ventana corta de R medio en ROI â€” CV temporal para distinguir tejido pulsÃ¡til vs. rojo estÃ¡tico */
   private readonly roiRedPulseRing = new RingF32(VITAL_THRESHOLDS.FINGER.ROI_PULSE_BUFFER);
   private lastRoiRedCv = 0;
 
-  /** Skewness y relative power cacheados para SQI (recalculados periódicamente) */
+  /** Skewness y relative power cacheados para SQI (recalculados periÃ³dicamente) */
   private cachedSkewness = 0;
   private cachedKurtosis = 0;
   private cachedRelativePower = 0;
@@ -234,23 +241,23 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private motionListenerActive = false;
   private lastAcceleration = { x: 0, y: 0, z: 0 };
   private readonly MOTION_THRESHOLD = VITAL_THRESHOLDS.QUALITY.MAX_MOTION;
-  /** Cuenta regresiva de supresión post-motion para que el ringing del BPF decaiga */
+  /** Cuenta regresiva de supresiÃ³n post-motion para que el ringing del BPF decaiga */
   private postMotionSuppression = 0;
 
-  // IMU → RESPIRACIÓN (modalidad ACC, no-óptica). La respiración mece levemente
-  // la mano/teléfono → el acelerómetro oscila en banda respiratoria. Se sigue la
-  // gravedad con un EMA lento (≈DC) y se guarda la proyección AC del vector sobre
-  // la dirección de gravedad, muestreada a ACCEL_RESP_HZ. El periodograma sobre
-  // ese buffer da una estimación de FR independiente de la cámara.
+  // IMU â†’ RESPIRACIÃ“N (modalidad ACC, no-Ã³ptica). La respiraciÃ³n mece levemente
+  // la mano/telÃ©fono â†’ el acelerÃ³metro oscila en banda respiratoria. Se sigue la
+  // gravedad con un EMA lento (â‰ˆDC) y se guarda la proyecciÃ³n AC del vector sobre
+  // la direcciÃ³n de gravedad, muestreada a ACCEL_RESP_HZ. El periodograma sobre
+  // ese buffer da una estimaciÃ³n de FR independiente de la cÃ¡mara.
   private readonly ACCEL_RESP_HZ = 20;
-  private readonly accelRespRing = new RingF32(512); // ≈25 s a 20 Hz
+  private readonly accelRespRing = new RingF32(512); // â‰ˆ25 s a 20 Hz
   private gravityEma = { x: 0, y: 0, z: 0 };
   private gravityEmaInit = false;
   private lastAccelRespPushMs = 0;
   private lastAccelRespComputeMs = 0;
   private accelRespEstimate: { rpm: number; quality: number } | null = null;
 
-  // Micro-movimiento del dedo DESDE LA SEÑAL (complementa al IMU; ver QUALITY.MOTION_*)
+  // Micro-movimiento del dedo DESDE LA SEÃ‘AL (complementa al IMU; ver QUALITY.MOTION_*)
   private signalMotionScore = 0;
   private lastRawRedForMotion = 0;
 
@@ -260,14 +267,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private lastLocalCentroidY = 0.5;
   private centroidMotionEma = 0;
 
-  // Acondicionador ACTIVO de señal (denoise edge-preserving + estabilización baseline).
+  // Acondicionador ACTIVO de seÃ±al (denoise edge-preserving + estabilizaciÃ³n baseline).
   private readonly activeStabilizer = createActiveStabilizer();
 
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
   private underexposureEma = 0;
   // Cache de stats lentas (recomputadas cada N frames): evita slice+sort por frame
-  // sobre ventanas estadísticas de 30-90 muestras que cambian lentamente.
+  // sobre ventanas estadÃ­sticas de 30-90 muestras que cambian lentamente.
   private cachedSqi = 0;
   private cachedPeriodicity = 0;
   private periodicityEma = 0;
@@ -276,11 +283,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private periodicitySkip = 0;
   private readonly diagStatusState: DiagnosticStatusState = createDiagnosticStatusState();
 
-  // Estabilización de adquisición (fase inicial de colocación del dedo):
+  // EstabilizaciÃ³n de adquisiciÃ³n (fase inicial de colocaciÃ³n del dedo):
   // fusiona PI/periodicidad/SQI/cobertura/movimiento en una confianza firme.
   private readonly acquisitionState: AcquisitionState = createAcquisitionState();
 
-  // === MULTI-SOURCE RANKING (CHROM eliminado — amplifica ruido sin dedo) ===
+  // === MULTI-SOURCE RANKING (CHROM eliminado â€” amplifica ruido sin dedo) ===
   private readonly sourceBuffers: { [key: string]: RingF32 } = {
     R: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
     G: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
@@ -292,7 +299,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private lastSourceSwitch = 0;
   private readonly SOURCE_HYSTERESIS_MS = 4000;
 
-  // Buffers deslizantes para la proyección del algoritmo POS (Plane-Orthogonal-to-Skin)
+  // Buffers deslizantes para la proyecciÃ³n del algoritmo POS (Plane-Orthogonal-to-Skin)
   private readonly xBuffer = new RingF32(30);
   private readonly yBuffer = new RingF32(30);
   private smoothedPosAlpha = 0.5;
@@ -301,9 +308,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     public onSignalReady?: (signal: ProcessedSignal) => void,
     public onError?: (error: ProcessingError) => void
   ) {
-    // Pulso (HR): 0.5-4.5Hz — rango cardíaco estándar, 4º orden para mejor rechazo
+    // Pulso (HR): 0.5-4.5Hz â€” rango cardÃ­aco estÃ¡ndar, 4Âº orden para mejor rechazo
     this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, 4.5);
-    // Morfología (BP): 0.5-8Hz — preserva escotadura dicrótica y forma completa del pulso
+    // MorfologÃ­a (BP): 0.5-8Hz â€” preserva escotadura dicrÃ³tica y forma completa del pulso
     this.morphBandpassFilter = new BandpassFilter(this.estimatedSampleRate, 8.0);
   }
 
@@ -327,7 +334,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return true;
   }
 
-  /** Actualizar perfil según diagnóstico de CameraView (torch/FPS/jitter). */
+  /** Actualizar perfil segÃºn diagnÃ³stico de CameraView (torch/FPS/jitter). */
   setCameraRuntimeHints(diag: Record<string, unknown> | null | undefined): void {
     this.cameraHints = inferCameraRuntimeHints(diag);
   }
@@ -459,7 +466,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           message: `RECHAZADO: ${rejectionStatus}`,
         }),
       });
-      // No retornamos aquí para permitir que los buffers sigan llenándose, pero la UI sabrá que no es válido
+      // No retornamos aquÃ­ para permitir que los buffers sigan llenÃ¡ndose, pero la UI sabrÃ¡ que no es vÃ¡lido
       return;
     }
 
@@ -476,13 +483,25 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     this.updateSignalMotion(roi.rawRed, roi.centroidMotion);
 
-    // ACDC: más frecuente con dedo para que PI/SQI no queden en 0 varios segundos
+    // ACDC: mÃ¡s frecuente con dedo para que PI/SQI no queden en 0 varios segundos
     if (this.redBuffer.length >= 36 && this.frameCount % 2 === 0) {
       this.calculateACDCPrecise();
     }
     const acPi = this.calculatePerfusionIndex();
     const pulsePi = this.estimatePulsePiFromRoi();
     this.cachedPI = Math.max(acPi, pulsePi);
+
+    // Evidencia de colocacion fisica REAL (presion, ubicacion, movimiento,
+    // pulso) — alimenta la ventana 3D y la guia de UI. Cada frame con dedo.
+    this.lastPlacementEvidence = computePlacementEvidence({
+      coverageRatio: this.smoothedCoverage || roi.coverageRatio,
+      centroidX: this.trackedCentroid.x,
+      centroidY: this.trackedCentroid.y,
+      centroidMotion: this.centroidMotionEma,
+      motionScore: Math.max(this.motionScore, this.signalMotionScore),
+      perfusionIndex: this.cachedPI,
+      frameCount: this.frameCount,
+    });
 
     const placementInstant = classifyFingerPlacement({
       coverageRatio: this.smoothedCoverage || roi.coverageRatio,
@@ -517,9 +536,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.rawBuffer.push(pulseSource.value);
 
     const endFilt = ppgPerf.start('bandpass');
-    // ACONDICIONAMIENTO ACTIVO en vivo: estabiliza la línea base (quita deriva) y
-    // hace denoise que PRESERVA los picos sistólicos, ANTES del bandpass → la señal
-    // que se mide y se muestra es genuinamente más limpia y firme (no recorta el pulso).
+    // ACONDICIONAMIENTO ACTIVO en vivo: estabiliza la lÃ­nea base (quita deriva) y
+    // hace denoise que PRESERVA los picos sistÃ³licos, ANTES del bandpass â†’ la seÃ±al
+    // que se mide y se muestra es genuinamente mÃ¡s limpia y firme (no recorta el pulso).
     const stabilizedInput = stabilizeSample(this.activeStabilizer, pulseSource.value);
     const filtered = this.bandpassFilter.filter(stabilizedInput);
     const morphFiltered = this.morphBandpassFilter.filter(morphSource);
@@ -535,7 +554,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.filteredBuffer.push(enhanced);
 
     // === BANCO DE FILTROS POR CANAL VITAL (PPGSignalSplitter) ===
-    // Cada signo vital recibe la señal pre-procesada con los requisitos DSP de su canal.
+    // Cada signo vital recibe la seÃ±al pre-procesada con los requisitos DSP de su canal.
     const splitOut = this.signalSplitter.process(
       roi.rawRed,
       roi.rawGreen,
@@ -625,7 +644,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       (hemoglobinScene || ensembleScene) &&
       (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT');
 
-    // Post-motion hold-off: despues de que el motion cesa, el BPF 4° orden aun
+    // Post-motion hold-off: despues de que el motion cesa, el BPF 4Â° orden aun
     // tiene ringing (~0.5s). Suprimimos la salida durante ese tiempo.
     if (motionArtifact) {
       this.postMotionSuppression = 20; // ~670ms a 30fps
@@ -675,7 +694,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       },
     );
 
-    // Refresca (throttled) la estimación respiratoria del acelerómetro antes de emitir.
+    // Refresca (throttled) la estimaciÃ³n respiratoria del acelerÃ³metro antes de emitir.
     this.updateAccelRespEstimate(timestamp);
 
     this.onSignalReady({
@@ -721,7 +740,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           perfusionIndex: perfusionIndex,
           snr: pulseSource.strength,
           periodicity: this.cachedPeriodicity,
-          // Movimiento efectivo = max(IMU, micro-movimiento del dedo desde la señal).
+          // Movimiento efectivo = max(IMU, micro-movimiento del dedo desde la seÃ±al).
           motionScore: Math.max(this.motionScore, this.signalMotionScore),
           saturationRatio: (roi.rawRed > 250 ? 1 : 0),
           underexposureRatio: this.underexposureEma,
@@ -738,7 +757,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   /**
-   * Avanza la estabilización de adquisición un frame con las métricas ya
+   * Avanza la estabilizaciÃ³n de adquisiciÃ³n un frame con las mÃ©tricas ya
    * calculadas. Cuando no hay contacto usable, la confianza decae sola.
    */
   private stepAcquisition(fingerDetected: boolean): void {
@@ -827,10 +846,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
  *
  * ANTI FALSO-POSITIVO "posicion perfecta":
  *  - Se exige PI >= STABLE_MIN_PI (0.0020) Y evidencia de pulso (firma de
- *    hemoglobina + CV del rojo) — ambos, no el OR destructivo anterior: con
+ *    hemoglobina + CV del rojo) â€” ambos, no el OR destructivo anterior: con
  *    flash encendido el ruido del AE superaba MIN_PI*0.75 solo y bastaba para
  *    declarar STABLE sin pulso real.
- *  - Se exige cobertura >= STABLE_MIN_COVERAGE (0.35) — un dedo rozando el lente
+ *  - Se exige cobertura >= STABLE_MIN_COVERAGE (0.35) â€” un dedo rozando el lente
  *    cubria el 9% (MIN_COVERAGE) y pasaba como "perfecto".
  *  - Sin pulso evidenciado durante STABLE_MAX_NO_PULSE_FRAMES consecutivos (~1 s)
  *    el estado degrada a UNSTABLE: la validacion es CONTINUA, no solo al adquirir.
@@ -883,7 +902,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
   }
 
-  /** Pérdida de contacto; en modo tolerante evita reset de buffers hasta racha larga. */
+  /** PÃ©rdida de contacto; en modo tolerante evita reset de buffers hasta racha larga. */
   private setNoContact(hardReset: boolean): void {
     this.contactState = 'NO_CONTACT';
     this.fingerDetected = false;
@@ -893,6 +912,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.lastInstantFinger = false;
     this.liveFingerMissStreak = 0;
     this.stableNoPulseStreak = 0;
+    resetPlacementEvidence();
 
     if (hardReset) {
       this.decaySmoothedRgbFast();
@@ -1000,8 +1020,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       roiRedCv: this.lastRoiRedCv,
       perfusionIndex: this.cachedPI,
     });
-    // Vía UNIVERSAL por pulsatilidad: un pulso real del rojo confirma dedo aunque
-    // la firma de color estricta falle (cámara con otro balance de blancos/flash).
+    // VÃ­a UNIVERSAL por pulsatilidad: un pulso real del rojo confirma dedo aunque
+    // la firma de color estricta falle (cÃ¡mara con otro balance de blancos/flash).
     const pulsatileContact = passesPulsatileAcquire(
       raw, smoothed, spatial, this.lastRoiRedCv, this.lastEnsembleScore,
     );
@@ -1010,8 +1030,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       !this.fingerDetected &&
       !this.cameraHints.constrained &&
       placementInstant !== 'pad' &&
-      // El guard de flicker usa el umbral R/B LAXO de la vía pulsátil (no el estricto):
-      // así no descarta un dedo que pulsa pero con rojo moderado en otra cámara.
+      // El guard de flicker usa el umbral R/B LAXO de la vÃ­a pulsÃ¡til (no el estricto):
+      // asÃ­ no descarta un dedo que pulsa pero con rojo moderado en otra cÃ¡mara.
       isExposureFlickerNotFingerPulse(this.lastRoiRedCv, smoothed, F.PULSATILE_ACQUIRE_RB) &&
       !pulsatileContact &&
       this.lastEnsembleScore < F.ENSEMBLE_FINGER_THRESHOLD * 0.7
@@ -1019,9 +1039,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       return false;
     }
 
-    // Contacto: vía COLOR (hemoglobina) o vía PULSATILIDAD (universal).
-    // La vía pulsátil es prioritaria: un pulso claro + brillo mínimo = dedo, incluso
-    // si la firma de color falla por balance de blancos/presión/colocación.
+    // Contacto: vÃ­a COLOR (hemoglobina) o vÃ­a PULSATILIDAD (universal).
+    // La vÃ­a pulsÃ¡til es prioritaria: un pulso claro + brillo mÃ­nimo = dedo, incluso
+    // si la firma de color falla por balance de blancos/presiÃ³n/colocaciÃ³n.
     const fingerByPulse =
       (pulsatileContact || this.lastEnsembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.7) &&
       spatial.coverageRatio >= F.MIN_COVERAGE * 0.5;
@@ -1089,10 +1109,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   ) {
     const coverageRatio = roi.coverageRatio;
     const fingerPressure = this.estimateFingerPressure(roi);
+    const placementEvidence = this.lastPlacementEvidence ?? undefined;
     return {
+      placementEvidence,
       message:
         extras?.message ??
-        `BUSCANDO DEDO · cobertura ${(coverageRatio * 100).toFixed(0)}%`,
+        `BUSCANDO DEDO Â· cobertura ${(coverageRatio * 100).toFixed(0)}%`,
       hasPulsatility: extras?.hasPulsatility ?? false,
       pulsatilityValue: extras?.pulsatilityValue ?? 0,
       coverageRatio,
@@ -1121,7 +1143,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     if (this.frameIntervalBuffer.length < 8) return;
 
-    // Median FPS drifts slowly — recompute every 10 frames.
+    // Median FPS drifts slowly â€” recompute every 10 frames.
     if (this.frameCount % 10 !== 0) return;
 
     const fiTail = this.frameIntervalBuffer.tail(this.frameIntervalBuffer.length);
@@ -1154,7 +1176,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const roiWidth = Math.max(1, endX - startX);
     const roiHeight = Math.max(1, endY - startY);
 
-    // Sample every Nth pixel — N adaptativo (3 normal, 4 bajo backpressure)
+    // Sample every Nth pixel â€” N adaptativo (3 normal, 4 bajo backpressure)
     const stride = this.pixelStride;
     for (let y = startY; y < endY; y += stride) {
       for (let x = startX; x < endX; x += stride) {
@@ -1170,7 +1192,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       }
     }
 
-    // Reducir tiles a métricas en buffer pre-asignado — sin allocs por frame.
+    // Reducir tiles a mÃ©tricas en buffer pre-asignado â€” sin allocs por frame.
     const F = VITAL_THRESHOLDS.FINGER;
     const metrics = this.tileMetrics;
     const N = tiles.length;
@@ -1192,7 +1214,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const red = t.red / t.count;
       const green = t.green / t.count;
       const blue = t.blue / t.count;
-      // Señal temporal de verde por celda → pulsatilidad (fusión multi-celda).
+      // SeÃ±al temporal de verde por celda â†’ pulsatilidad (fusiÃ³n multi-celda).
       this.tileGreenBuffers[i]!.push(green);
       const total = red + green + blue;
       const redDominance = red - (green + blue) / 2;
@@ -1241,9 +1263,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       }
     }
 
-    // Recálculo throttled de la PULSATILIDAD por celda (AC/DC en banda cardíaca) y
-    // su máximo, para ponderar la fusión hacia las celdas con pulso más fuerte
-    // (Tiling & Aggregation, estado del arte). Entre recálculos se usa la cache.
+    // RecÃ¡lculo throttled de la PULSATILIDAD por celda (AC/DC en banda cardÃ­aca) y
+    // su mÃ¡ximo, para ponderar la fusiÃ³n hacia las celdas con pulso mÃ¡s fuerte
+    // (Tiling & Aggregation, estado del arte). Entre recÃ¡lculos se usa la cache.
     const TF = VITAL_THRESHOLDS.TILE_FUSION;
     this.tilePulseThrottle++;
     if (this.tilePulseThrottle >= TF.THROTTLE_FRAMES) {
@@ -1281,9 +1303,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
       centroidMotion = clamp(displacement * 30, 0, 1);
 
-      // Alpha adaptativo por velocidad instantánea + outlier rejection:
-      // movimiento rápido → α alto (sigue); quieto → α bajo (suaviza).
-      // Saltos > 3× la media reciente se limitan para ignorar outliers.
+      // Alpha adaptativo por velocidad instantÃ¡nea + outlier rejection:
+      // movimiento rÃ¡pido â†’ Î± alto (sigue); quieto â†’ Î± bajo (suaviza).
+      // Saltos > 3Ã— la media reciente se limitan para ignorar outliers.
       this.centroidMotionEma = this.centroidMotionEma * 0.85 + displacement * 0.15;
       const outlierLimit = Math.max(0.005, this.centroidMotionEma * 3);
       const clampedDisp = Math.min(displacement, outlierLimit);
@@ -1319,9 +1341,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const useFingerOnly = fingerCount >= F.MIN_FINGER_TILES_FOR_WEIGHTING;
     let rWs = 0, gWs = 0, bWs = 0, tw = 0;
     
-    // Ponderación por PRESENCIA de dedo (rojez/dominancia/centro) × REALCE por
+    // PonderaciÃ³n por PRESENCIA de dedo (rojez/dominancia/centro) Ã— REALCE por
     // PULSATILIDAD real de la celda (Tiling & Aggregation). Las celdas con pulso
-    // fuerte dominan la señal compuesta → robusto a colocación imperfecta y mejor
+    // fuerte dominan la seÃ±al compuesta â†’ robusto a colocaciÃ³n imperfecta y mejor
     // SNR. Fallback seguro: sin info de pulsatilidad el realce es 1 (= antes).
     for (let i = 0; i < N; i++) {
       const m = metrics[i];
@@ -1330,7 +1352,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
       // Presencia de dedo (confianza combinada incluye centerBias y estabilidad).
       const presence = 0.2 + m.combinedScore * 2.5 + m.centerBias * 0.5;
-      // Realce por pulsatilidad relativa a la mejor celda (la del mejor pulso pesa más).
+      // Realce por pulsatilidad relativa a la mejor celda (la del mejor pulso pesa mÃ¡s).
       const boost = pulsatilityBoost(
         this.tilePulsatilityCache[i] ?? 0,
         this.tileMaxPulsatility,
@@ -1371,7 +1393,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       return;
     }
 
-    // Durante motion el DC salta — aceleramos el tracking para evitar que el
+    // Durante motion el DC salta â€” aceleramos el tracking para evitar que el
     // bandpass reciba una senal mal normalizada que genera ringing post-motion.
     // Ademas, si salimos de motion saltamos la baseline al valor actual (el DC
     // ya cambio y no tiene sentido converger lentamente).
@@ -1434,10 +1456,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const bPulse = clampPulse(bNorm);
     const amp = 4400;
 
-    // Plane-Orthogonal-to-Skin (POS) Projection — con alpha adaptativo suavizado.
-    // stdX/stdY estima el ángulo del plano piel; se suaviza con EMA y se pondera
-    // por confianza estadística (stdY grande → estimación fiable; stdY pequeño →
-    // se blend hacia el prior suavizado para evitar inestabilidad por división).
+    // Plane-Orthogonal-to-Skin (POS) Projection â€” con alpha adaptativo suavizado.
+    // stdX/stdY estima el Ã¡ngulo del plano piel; se suaviza con EMA y se pondera
+    // por confianza estadÃ­stica (stdY grande â†’ estimaciÃ³n fiable; stdY pequeÃ±o â†’
+    // se blend hacia el prior suavizado para evitar inestabilidad por divisiÃ³n).
     const X = gPulse - bPulse;
     const Y = gPulse + bPulse - 2 * rPulse;
     this.xBuffer.push(X);
@@ -1451,7 +1473,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.smoothedPosAlpha = this.smoothedPosAlpha * 0.9 + blendedAlpha * 0.1;
     const posVal = X + this.smoothedPosAlpha * Y;
 
-    // Source candidates (CHROM removed — amplifica ruido sin dedo)
+    // Source candidates (CHROM removed â€” amplifica ruido sin dedo)
     const sources: { [key: string]: number } = {
       R: rPulse * amp,
       G: gPulse * amp,
@@ -1459,7 +1481,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       POS: posVal * amp,
     };
 
-    // Update per-source buffers (ring auto-evicts más viejo)
+    // Update per-source buffers (ring auto-evicts mÃ¡s viejo)
     this.sourceBuffers.R.push(sources.R);
     this.sourceBuffers.G.push(sources.G);
     this.sourceBuffers.RG.push(sources.RG);
@@ -1481,7 +1503,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const greenPI = this.greenDC > 0 ? this.greenAC / this.greenDC : 0;
     const piSum = redPI + greenPI;
 
-    // Verde tiene mejor SNR para HR en PPG por cámara (Tyapochkin 2019, OpenPPG 2025)
+    // Verde tiene mejor SNR para HR en PPG por cÃ¡mara (Tyapochkin 2019, OpenPPG 2025)
     let greenWeight = 0.75;
     let redWeight = 0.25;
 
@@ -1531,8 +1553,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     // Solo cambia si la nueva fuente es CLARAMENTE mejor (>50%). Umbral alto +
-    // histéresis larga (4 s) → el switching R/G/RG es raro: evita los saltos de
-    // escala/offset al alternar fuente, que se veían como onda inestable/ruidosa.
+    // histÃ©resis larga (4 s) â†’ el switching R/G/RG es raro: evita los saltos de
+    // escala/offset al alternar fuente, que se veÃ­an como onda inestable/ruidosa.
     const currentScore = this.sourceScores[this.activeSource] ?? 0;
     if (bestSource !== this.activeSource && bestScore > currentScore * 1.5) {
       this.activeSource = bestSource;
@@ -1581,8 +1603,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (windowSize < 36) return;
 
     // Copia zero-alloc de la cola de cada canal a scratch reutilizable (mismo
-    // patrón que calculatePeriodicity). Antes se asignaban 3 number[] por llamada
-    // (~15 Hz con dedo) vía tail() → GC churn que provoca jitter/frames perdidos.
+    // patrÃ³n que calculatePeriodicity). Antes se asignaban 3 number[] por llamada
+    // (~15 Hz con dedo) vÃ­a tail() â†’ GC churn que provoca jitter/frames perdidos.
     const redW = this.acdcRedScratch;
     const greenW = this.acdcGreenScratch;
     const blueW = this.acdcBlueScratch;
@@ -1590,8 +1612,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.greenBuffer.copyTailInto(greenW, windowSize);
     this.blueBuffer.copyTailInto(blueW, windowSize);
 
-    // DC = media de la ventana. Suma en el MISMO orden (oldest→newest) que el
-    // tail()+reduce previo → resultado numéricamente idéntico, sin alocar.
+    // DC = media de la ventana. Suma en el MISMO orden (oldestâ†’newest) que el
+    // tail()+reduce previo â†’ resultado numÃ©ricamente idÃ©ntico, sin alocar.
     let rSum = 0, gSum = 0, bSum = 0;
     for (let i = 0; i < windowSize; i++) {
       rSum += redW[i];
@@ -1605,8 +1627,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (this.redDC < 5 || this.greenDC < 5) return;
 
     const sortedScratch = this.sortedScratch;
-    // `n` se pasa explícito: el scratch mide ACDC_WINDOW, no windowSize. Usar
-    // window.length leería datos viejos del resto del buffer.
+    // `n` se pasa explÃ­cito: el scratch mide ACDC_WINDOW, no windowSize. Usar
+    // window.length leerÃ­a datos viejos del resto del buffer.
     const computeAC = (window: Float32Array, n: number, dc: number): number => {
       let sumSq = 0;
       for (let i = 0; i < n; i++) {
@@ -1615,7 +1637,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         sortedScratch[i] = window[i];
       }
       const rms = Math.sqrt(sumSq / n);
-      // In-place sort sobre la porción usada del scratch (sin alocar).
+      // In-place sort sobre la porciÃ³n usada del scratch (sin alocar).
       const view = sortedScratch.subarray(0, n);
       view.sort();
       const p5 = view[Math.floor(n * 0.05)] ?? 0;
@@ -1636,8 +1658,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   /**
-   * Calcula la periodicidad de la señal mediante autocorrelación simplificada.
-   * Un valor cercano a 1 indica una señal rítmica (pulso cardíaco).
+   * Calcula la periodicidad de la seÃ±al mediante autocorrelaciÃ³n simplificada.
+   * Un valor cercano a 1 indica una seÃ±al rÃ­tmica (pulso cardÃ­aco).
    * ZERO-ALLOCATION: Usa copyTailInto para evitar alocar number[] en cada frame.
    */
   private calculatePeriodicity(): number {
@@ -1648,7 +1670,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const n = this.filteredBuffer.copyTailInto(this.periodicityScratch, nReq);
     const data = this.periodicityScratch;
     
-    // Autocorrelación: lags escalados por sample rate real (36-180 bpm @30fps)
+    // AutocorrelaciÃ³n: lags escalados por sample rate real (36-180 bpm @30fps)
     const sr = clamp(this.estimatedSampleRate, 10, 60);
     const minLag = Math.max(5, Math.round((sr * 60) / 180));
     const maxLag = Math.min(n - 8, Math.round((sr * 60) / 36));
@@ -1795,11 +1817,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   /**
-   * Score de micro-movimiento del dedo derivado de la SEÑAL (no del IMU).
-   * Un escalón brusco del DC del rojo crudo entre frames = el dedo se movió/
-   * deslizó sobre el lente. El pulso es lento (<1% del DC por frame), así que un
-   * salto grande del DC delata movimiento. EMA lenta → solo el movimiento
-   * sostenido eleva el score; un único frame no alcanza el umbral de supresión.
+   * Score de micro-movimiento del dedo derivado de la SEÃ‘AL (no del IMU).
+   * Un escalÃ³n brusco del DC del rojo crudo entre frames = el dedo se moviÃ³/
+   * deslizÃ³ sobre el lente. El pulso es lento (<1% del DC por frame), asÃ­ que un
+   * salto grande del DC delata movimiento. EMA lenta â†’ solo el movimiento
+   * sostenido eleva el score; un Ãºnico frame no alcanza el umbral de supresiÃ³n.
    */
   private updateSignalMotion(rawRed: number, centroidMotion = 0): void {
     if (this.lastRawRedForMotion === 0) {
@@ -1829,8 +1851,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const az = acc.z ?? 0;
     this.lastAcceleration = { x: ax, y: ay, z: az };
 
-    // --- Captura de respiración por acelerómetro (modalidad ACC) ---
-    // Gravedad ≈ EMA lento (corte muy por debajo de la banda respiratoria).
+    // --- Captura de respiraciÃ³n por acelerÃ³metro (modalidad ACC) ---
+    // Gravedad â‰ˆ EMA lento (corte muy por debajo de la banda respiratoria).
     if (!this.gravityEmaInit) {
       this.gravityEma = { x: ax, y: ay, z: az };
       this.gravityEmaInit = true;
@@ -1841,8 +1863,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.gravityEma.z += gA * (az - this.gravityEma.z);
     }
     const gMag = Math.hypot(this.gravityEma.x, this.gravityEma.y, this.gravityEma.z) || 1;
-    // Proyección del vector AC (accel − gravedad) sobre la dirección de gravedad:
-    // la aceleración "vertical" cuya oscilación lenta porta la respiración.
+    // ProyecciÃ³n del vector AC (accel âˆ’ gravedad) sobre la direcciÃ³n de gravedad:
+    // la aceleraciÃ³n "vertical" cuya oscilaciÃ³n lenta porta la respiraciÃ³n.
     const vertAccel =
       ((ax - this.gravityEma.x) * this.gravityEma.x +
         (ay - this.gravityEma.y) * this.gravityEma.y +
@@ -1867,9 +1889,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   };
 
   /**
-   * Recalcula (cada ~1 s) la estimación de FR del acelerómetro por periodograma
-   * sobre el buffer respiratorio. Cachea {rpm, quality} o null si no hay señal
-   * periódica clara. La Smart Fusion (en VitalSignsProcessor) decide si fusiona.
+   * Recalcula (cada ~1 s) la estimaciÃ³n de FR del acelerÃ³metro por periodograma
+   * sobre el buffer respiratorio. Cachea {rpm, quality} o null si no hay seÃ±al
+   * periÃ³dica clara. La Smart Fusion (en VitalSignsProcessor) decide si fusiona.
    */
   private updateAccelRespEstimate(nowMs: number): void {
     if (nowMs - this.lastAccelRespComputeMs < 1000) return;
@@ -1933,7 +1955,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   /**
    * Backpressure: si el fps real cae por debajo de 20 durante > 3s, sube el
-   * stride espacial a 4 (≈1.78× más rápido el bucle de píxeles). Cuando el fps
+   * stride espacial a 4 (â‰ˆ1.78Ã— mÃ¡s rÃ¡pido el bucle de pÃ­xeles). Cuando el fps
    * vuelve a >= 25 sostenido > 3s, restaura stride 3. No toca el resto del
    * pipeline ni la frecuencia temporal de muestreo.
    */
@@ -1942,7 +1964,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.lastBackpressureCheck = nowMs;
     const cfg = this.backpressureConfig;
 
-    // Stride forzado (modo manual / test) — bypass total.
+    // Stride forzado (modo manual / test) â€” bypass total.
     if (typeof cfg.forceStride === 'number') {
       if (this.pixelStride !== cfg.forceStride) {
         this.pixelStride = cfg.forceStride;
@@ -1952,11 +1974,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       return;
     }
 
-    // Adaptación deshabilitada → vuelve a baseline (3) y no toca más.
+    // AdaptaciÃ³n deshabilitada â†’ vuelve a baseline (3) y no toca mÃ¡s.
     if (!cfg.enabled) {
       if (this.pixelStride !== 3) {
         this.pixelStride = 3;
-        log.info('Backpressure DISABLED — stride reset to 3');
+        log.info('Backpressure DISABLED â€” stride reset to 3');
       }
       this.lowFpsSinceMs = 0; this.highFpsSinceMs = 0;
       return;
@@ -1970,14 +1992,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       if (this.lowFpsSinceMs === 0) this.lowFpsSinceMs = nowMs;
       else if (this.pixelStride < cfg.maxStride && nowMs - this.lowFpsSinceMs >= cfg.sustainMs) {
         this.pixelStride = Math.min(cfg.maxStride, this.pixelStride + 1);
-        log.warn(`Backpressure ON — fps=${fps.toFixed(1)} stride=${this.pixelStride}`);
+        log.warn(`Backpressure ON â€” fps=${fps.toFixed(1)} stride=${this.pixelStride}`);
       }
     } else if (fps >= cfg.highFpsThreshold) {
       this.lowFpsSinceMs = 0;
       if (this.highFpsSinceMs === 0) this.highFpsSinceMs = nowMs;
       else if (this.pixelStride > 3 && nowMs - this.highFpsSinceMs >= cfg.sustainMs) {
         this.pixelStride = Math.max(3, this.pixelStride - 1);
-        log.info(`Backpressure OFF — fps=${fps.toFixed(1)} stride=${this.pixelStride}`);
+        log.info(`Backpressure OFF â€” fps=${fps.toFixed(1)} stride=${this.pixelStride}`);
       }
     } else {
       this.lowFpsSinceMs = 0;
@@ -1997,7 +2019,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     };
   }
 
-  /** Estado actual del backpressure adaptativo (para telemetría). */
+  /** Estado actual del backpressure adaptativo (para telemetrÃ­a). */
   getBackpressureState() {
     return {
       pixelStride: this.pixelStride,
@@ -2007,10 +2029,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     };
   }
 
-  /** Aplica una nueva configuración de backpressure (saneada). */
+  /** Aplica una nueva configuraciÃ³n de backpressure (saneada). */
   setBackpressureConfig(partial: Partial<BackpressureConfig>): BackpressureConfig {
     this.backpressureConfig = sanitizeBackpressureConfig({ ...this.backpressureConfig, ...partial });
-    // Forzar re-evaluación inmediata
+    // Forzar re-evaluaciÃ³n inmediata
     this.lastBackpressureCheck = 0;
     this.maybeAdaptBackpressure(typeof performance !== 'undefined' ? performance.now() : Date.now());
     return { ...this.backpressureConfig };

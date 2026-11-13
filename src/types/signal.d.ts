@@ -1,4 +1,4 @@
-export type ContactState = 'NO_CONTACT' | 'UNSTABLE_CONTACT' | 'STABLE_CONTACT';
+﻿export type ContactState = 'NO_CONTACT' | 'UNSTABLE_CONTACT' | 'STABLE_CONTACT';
 
 export type FingerPlacementMode = 'tip' | 'pad' | 'hybrid';
 
@@ -6,13 +6,13 @@ export interface ProcessedSignal {
   timestamp: number;
   rawValue: number;
   filteredValue: number;
-  /** Señal verde suavizada para morfología PA (menos AGC que HR) */
+  /** SeÃ±al verde suavizada para morfologÃ­a PA (menos AGC que HR) */
   morphologyValue?: number;
-  /** Canal 3 del banco de filtros: morfología con Bessel de fase lineal (preserva fiduciales) */
+  /** Canal 3 del banco de filtros: morfologÃ­a con Bessel de fase lineal (preserva fiduciales) */
   morphologyFiltered?: number;
-  /** Canal 4 del banco de filtros: señal de modulación lenta para estimación de FR */
+  /** Canal 4 del banco de filtros: seÃ±al de modulaciÃ³n lenta para estimaciÃ³n de FR */
   respirationFiltered?: number;
-  /** Canal 5 del banco de filtros: señal limpia para detección de intervalos RR / arritmias */
+  /** Canal 5 del banco de filtros: seÃ±al limpia para detecciÃ³n de intervalos RR / arritmias */
   arrhythmiaFiltered?: number;
   /** Canal 2 del banco de filtros: componentes AC y DC separados por canal para ratio SpO2 */
   spo2Channels?: {
@@ -39,8 +39,8 @@ export interface ProcessedSignal {
   rawGreen?: number;
   rawBlue?: number;
   /**
-   * Respiración derivada del acelerómetro (IMU), modalidad NO-óptica que se
-   * fusiona con las ópticas (RIAV/RIIV/RIFV) en la Smart Fusion respiratoria.
+   * RespiraciÃ³n derivada del acelerÃ³metro (IMU), modalidad NO-Ã³ptica que se
+   * fusiona con las Ã³pticas (RIAV/RIIV/RIFV) en la Smart Fusion respiratoria.
    * Pre-estimada en el procesador porque vive con el listener DeviceMotion.
    */
   accelRespiration?: { rpm: number; quality: number };
@@ -48,18 +48,20 @@ export interface ProcessedSignal {
     message: string;
     hasPulsatility: boolean;
     pulsatilityValue: number;
-    /** Cobertura del ROI por tiles “dedo” (0–1) */
+    /** Cobertura del ROI por tiles â€œdedoâ€ (0â€“1) */
     coverageRatio?: number;
     placementMode?: FingerPlacementMode;
     placementHint?: string;
     fingerPressure?: 'LIGHT' | 'IDEAL' | 'HEAVY';
+    /** Evidencia fisica de colocacion (presion/ubicacion/movimiento/pulso). */
+    placementEvidence?: import('../lib/finger/fingerPlacementEvidence').FingerPlacementEvidence;
     status?: import('./measurements').MeasurementStatus;
     sqm?: Partial<import('./measurements').SignalQualityMetrics>;
-    /** Estado de la estabilización de adquisición (fase inicial de colocación). */
+    /** Estado de la estabilizaciÃ³n de adquisiciÃ³n (fase inicial de colocaciÃ³n). */
     acquisitionStage?: import('../lib/acquisition/AcquisitionStabilizer').AcquisitionStage;
-    /** Confianza de adquisición suavizada [0..1]. */
+    /** Confianza de adquisiciÃ³n suavizada [0..1]. */
     acquisitionConfidence?: number;
-    /** Progreso monótono de estabilización [0..1] para la UI. */
+    /** Progreso monÃ³tono de estabilizaciÃ³n [0..1] para la UI. */
     acquisitionProgress?: number;
   };
 }

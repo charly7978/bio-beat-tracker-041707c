@@ -557,16 +557,13 @@ function wellThemeFor(contactState?: string): WellTheme {
  * (cero cÃ³mputo nuevo del pipeline). El tamaÃ±o de la ventana es su feedback.
  */
 function wellScoreOf(state: PpgRenderState, contactState?: string): number {
-  const q = clamp((state.props.quality ?? 0) / 100, 0, 1);
-  const pi = state.props.perfusionIndex ?? 0;
-  const piN = clamp(pi / 0.004, 0, 1); // 0.004 = PI bueno con cÃ¡mara
-  if (contactState === 'STABLE_CONTACT') {
-    return clamp(0.55 + 0.25 * q + 0.20 * piN, 0.55, 1);
-  }
-  if (contactState === 'UNSTABLE_CONTACT') {
-    return clamp(0.18 + 0.24 * q + 0.13 * piN, 0, 0.55);
-  }
-  return 0;
+  // EVIDENCIA FISICA REAL: score directo del modulo fingerPlacementEvidence
+  // (presion/ubicacion/movimiento/pulso medidos por frame en el pipeline).
+  // Sin evidencia (pipeline parado, sin monitoreo, senal stale) -> 0:
+  // la ventana NUNCA queda agrandada con datos viejos.
+  const evidence = state.props.diagnostics?.placementEvidence;
+  if (!evidence) return 0;
+  return clamp(evidence.score, 0, 1);
 }
 
 /** RectÃ¡ngulo redondeado compatible (ctx.roundRect no existe en WebViews viejos). */
@@ -752,10 +749,15 @@ export function drawPreviewWell3D(
   }
 
   // 6) ETIQUETA de guÃ­a sobre el panel + porcentaje de colocaciÃ³n.
+  // Guia EXACTA: el primer criterio que falla segun la evidencia fisica.
+  const evidence = state.props.diagnostics?.placementEvidence;
+  const guideText = evidence && evidence.failing.length > 0 && size > 0.08
+    ? evidence.failing[0]
+    : theme.label;
   ctx.font = `bold 9px ${FONT}`;
   ctx.textAlign = 'center';
   ctx.fillStyle = theme.core;
-  ctx.fillText(theme.label, base.x, py - 14);
+  ctx.fillText(guideText, base.x, py - 14);
   ctx.font = `bold 11px ${FONT}`;
   ctx.fillText(`${Math.round(size * 100)}%`, base.x, py - 4);
 

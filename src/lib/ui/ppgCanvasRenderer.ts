@@ -1,4 +1,4 @@
-import { CircularBuffer } from '../../utils/CircularBuffer';
+﻿import { CircularBuffer } from '../../utils/CircularBuffer';
 import { isPhysiologicalRR } from '../../utils/physio';
 import {
   buildRhythmPanel,
@@ -40,65 +40,65 @@ export const COLORS = {
 };
 
 /**
- * TABLA DE CONSTANTES CONFIGURABLES PARA LAS ONDAS CARDÍACAS (PPG MONITOR)
+ * TABLA DE CONSTANTES CONFIGURABLES PARA LAS ONDAS CARDÃACAS (PPG MONITOR)
  * 
- * Modifica estos valores para calibrar detalladamente la visualización de la onda
+ * Modifica estos valores para calibrar detalladamente la visualizaciÃ³n de la onda
  * y ajustar el comportamiento de los trazos, brillo, auto-escala y marcadores fiduciales.
  */
 export const CARDIAC_WAVE_CONFIG = {
   // === Ventana de Tiempo e Historial ===
   /**
    * Ventana de tiempo visualizada en pantalla en milisegundos.
-   * - ¿Qué significa?: El lapso de tiempo físico de señal representado de izquierda a derecha.
-   * - Si se sube (ej. 2500 - 3500): La onda se comprime horizontalmente (se ven más ciclos en pantalla, dando un aspecto veloz o de "látigo").
+   * - Â¿QuÃ© significa?: El lapso de tiempo fÃ­sico de seÃ±al representado de izquierda a derecha.
+   * - Si se sube (ej. 2500 - 3500): La onda se comprime horizontalmente (se ven mÃ¡s ciclos en pantalla, dando un aspecto veloz o de "lÃ¡tigo").
    * - Si se baja (ej. 1500 - 2000): La onda se estira horizontalmente (se ven menos ciclos, dibujo lento y detallado).
    */
   WINDOW_MS: 2200,
 
   /**
-   * Capacidad del buffer circular de almacenamiento de señal.
-   * - ¿Qué significa?: Cantidad de muestras históricas máximas guardadas para dibujar en el Canvas.
-   * - Si se sube: Retiene más muestras históricas de la señal (evita cortes visuales si la tasa de muestreo sube).
-   * - Si se baja: Reduce el uso de memoria RAM, pero si se baja demasiado la onda podría truncarse.
+   * Capacidad del buffer circular de almacenamiento de seÃ±al.
+   * - Â¿QuÃ© significa?: Cantidad de muestras histÃ³ricas mÃ¡ximas guardadas para dibujar en el Canvas.
+   * - Si se sube: Retiene mÃ¡s muestras histÃ³ricas de la seÃ±al (evita cortes visuales si la tasa de muestreo sube).
+   * - Si se baja: Reduce el uso de memoria RAM, pero si se baja demasiado la onda podrÃ­a truncarse.
    */
   BUFFER_SIZE: 2500,
 
   /**
    * Retraso visual de renderizado en milisegundos.
-   * - ¿Qué significa?: Tiempo de espera artificial antes de graficar la señal entrante.
-   * - Si se sube: La onda tarda más en aparecer en el gráfico, desfasándola hacia el pasado.
-   * - Si se baja: La onda se dibuja de forma más instantánea y reactiva en tiempo real.
+   * - Â¿QuÃ© significa?: Tiempo de espera artificial antes de graficar la seÃ±al entrante.
+   * - Si se sube: La onda tarda mÃ¡s en aparecer en el grÃ¡fico, desfasÃ¡ndola hacia el pasado.
+   * - Si se baja: La onda se dibuja de forma mÃ¡s instantÃ¡nea y reactiva en tiempo real.
    */
   VISUAL_DELAY_MS: 0,
 
-  // === Auto-escala de Amplitud (Ajuste dinámico Y) ===
+  // === Auto-escala de Amplitud (Ajuste dinÃ¡mico Y) ===
   /**
-   * Coeficiente de ataque (crecimiento) del escalado automático de amplitud.
-   * - ¿Qué significa?: Qué tan rápido se expande la escala vertical cuando la señal de entrada aumenta de tamaño.
-   * - Si se sube: La onda se adapta instantáneamente a picos de gran amplitud (evita que se corte por arriba/abajo).
-   * - Si se baja: La onda cambia su tamaño vertical más despacio, suavizando transiciones bruscas.
+   * Coeficiente de ataque (crecimiento) del escalado automÃ¡tico de amplitud.
+   * - Â¿QuÃ© significa?: QuÃ© tan rÃ¡pido se expande la escala vertical cuando la seÃ±al de entrada aumenta de tamaÃ±o.
+   * - Si se sube: La onda se adapta instantÃ¡neamente a picos de gran amplitud (evita que se corte por arriba/abajo).
+   * - Si se baja: La onda cambia su tamaÃ±o vertical mÃ¡s despacio, suavizando transiciones bruscas.
    */
   AMP_ATTACK: 0.50,
 
   /**
-   * Coeficiente de relajación (decrecimiento) del escalado automático de amplitud.
-   * - ¿Qué significa?: Qué tan rápido se contrae la escala vertical cuando la amplitud de la señal decae.
-   * - Si se sube: La onda recupera tamaño visual de forma veloz cuando la señal de entrada se debilita.
-   * - Si se baja: Mantiene la escala amplia por más tiempo, evitando vibraciones molestas si la amplitud fluctúa.
+   * Coeficiente de relajaciÃ³n (decrecimiento) del escalado automÃ¡tico de amplitud.
+   * - Â¿QuÃ© significa?: QuÃ© tan rÃ¡pido se contrae la escala vertical cuando la amplitud de la seÃ±al decae.
+   * - Si se sube: La onda recupera tamaÃ±o visual de forma veloz cuando la seÃ±al de entrada se debilita.
+   * - Si se baja: Mantiene la escala amplia por mÃ¡s tiempo, evitando vibraciones molestas si la amplitud fluctÃºa.
    */
   AMP_RELEASE: 0.30,
 
-  // === Estética y Grosor de Línea (Canvas Rendering) ===
+  // === EstÃ©tica y Grosor de LÃ­nea (Canvas Rendering) ===
   /**
-   * Grosor de la línea principal de la onda.
-   * - ¿Qué significa?: El ancho en píxeles del trazo base de la señal.
-   * - Si se sube: Onda más gruesa, densa y visible en pantallas de alta densidad de píxeles.
-   * - Si se baja: Onda más fina, nítida y con un look clínico o médico de alta precisión (efecto "eléctrico").
+   * Grosor de la lÃ­nea principal de la onda.
+   * - Â¿QuÃ© significa?: El ancho en pÃ­xeles del trazo base de la seÃ±al.
+   * - Si se sube: Onda mÃ¡s gruesa, densa y visible en pantallas de alta densidad de pÃ­xeles.
+   * - Si se baja: Onda mÃ¡s fina, nÃ­tida y con un look clÃ­nico o mÃ©dico de alta precisiÃ³n (efecto "elÃ©ctrico").
    */
   BASE_STROKE_WIDTH: 2.0,
 
   /**
-   * Grosor de la línea de brillo secundaria.
+   * Grosor de la lÃ­nea de brillo secundaria.
    */
   GLOW_STROKE_WIDTH: 1.6,
 
@@ -108,150 +108,150 @@ export const CARDIAC_WAVE_CONFIG = {
   LEADING_STROKE_WIDTH: 1.5,
 
   /**
-   * Desenfoque de sombra del cuerpo de la señal (Glow).
+   * Desenfoque de sombra del cuerpo de la seÃ±al (Glow).
    */
   SHADOW_BLUR_BASE: 8,
 
   /**
-   * Desenfoque de sombra de la punta o cabeza conductora de la señal.
+   * Desenfoque de sombra de la punta o cabeza conductora de la seÃ±al.
    */
   SHADOW_BLUR_LEADING: 15,
 
-  // === Marcadores Fisiológicos (Fiduciales) ===
+  // === Marcadores FisiolÃ³gicos (Fiduciales) ===
   /**
-   * Radio del punto indicador del Pico Sistólico (SYS).
-   * - ¿Qué significa?: Tamaño del círculo cian en el punto máximo de cada latido.
-   * - Si se sube: Círculos marcadores sistólicos más grandes y fáciles de identificar.
-   * - Si se baja: Círculos más pequeños y discretos en los picos.
+   * Radio del punto indicador del Pico SistÃ³lico (SYS).
+   * - Â¿QuÃ© significa?: TamaÃ±o del cÃ­rculo cian en el punto mÃ¡ximo de cada latido.
+   * - Si se sube: CÃ­rculos marcadores sistÃ³licos mÃ¡s grandes y fÃ¡ciles de identificar.
+   * - Si se baja: CÃ­rculos mÃ¡s pequeÃ±os y discretos en los picos.
    */
   SYS_PEAK_RADIUS: 3.5,
 
   /**
-   * Radio del indicador del Valle Diastólico (DIA).
-   * - ¿Qué significa?: Diámetro del anillo gris de marcación en el punto mínimo del latido.
-   * - Si se sube: Marcador diastólico más grande y visible.
-   * - Si se baja: Marcador diastólico más diminuto.
+   * Radio del indicador del Valle DiastÃ³lico (DIA).
+   * - Â¿QuÃ© significa?: DiÃ¡metro del anillo gris de marcaciÃ³n en el punto mÃ­nimo del latido.
+   * - Si se sube: Marcador diastÃ³lico mÃ¡s grande y visible.
+   * - Si se baja: Marcador diastÃ³lico mÃ¡s diminuto.
    */
   DIA_VALLEY_RADIUS: 2.4,
 
   /**
-   * Radio del indicador de la Muesca Dícrota (DIC).
-   * - ¿Qué significa?: Tamaño del punto cian claro que resalta el rebote elástico aórtico.
-   * - Si se sube: Marcador de muesca dícrota más grande y notorio.
-   * - Si se baja: Marcador más imperceptible y minimalista.
+   * Radio del indicador de la Muesca DÃ­crota (DIC).
+   * - Â¿QuÃ© significa?: TamaÃ±o del punto cian claro que resalta el rebote elÃ¡stico aÃ³rtico.
+   * - Si se sube: Marcador de muesca dÃ­crota mÃ¡s grande y notorio.
+   * - Si se baja: Marcador mÃ¡s imperceptible y minimalista.
    */
   DIC_NOTCH_RADIUS: 2.4,
 
   /**
    * Radio del anillo de alarma rojo para latidos con arritmia (ARR).
-   * - ¿Qué significa?: El diámetro del círculo exterior rojo que envuelve los picos anómalos.
-   * - Si se sube: El anillo se expande más lejos de la coordenada del pico.
+   * - Â¿QuÃ© significa?: El diÃ¡metro del cÃ­rculo exterior rojo que envuelve los picos anÃ³malos.
+   * - Si se sube: El anillo se expande mÃ¡s lejos de la coordenada del pico.
    * - Si se baja: El anillo abraza estrechamente y de cerca el pico con arritmia.
    */
   ARR_WARNING_RADIUS: 10.0,
 
   /**
-   * Grosor de la línea del anillo de advertencia de arritmia.
-   * - ¿Qué significa?: Ancho del trazo circular de alerta roja.
-   * - Si se sube: Anillo más grueso, visible y alarmante.
-   * - Si se baja: Anillo rojo más fino y discreto.
+   * Grosor de la lÃ­nea del anillo de advertencia de arritmia.
+   * - Â¿QuÃ© significa?: Ancho del trazo circular de alerta roja.
+   * - Si se sube: Anillo mÃ¡s grueso, visible y alarmante.
+   * - Si se baja: Anillo rojo mÃ¡s fino y discreto.
    */
   ARR_WARNING_WIDTH: 1.5,
 
   // === Cursor Conductor (Punta de Barrido) ===
   /**
-   * Radio base del halo pulsátil que sigue a la punta del barrido.
-   * - ¿Qué significa?: El tamaño base del círculo que late al ritmo del pulso al frente del barrido.
-   * - Si se sube: Aura de barrido de mayor tamaño y dinamismo.
-   * - Si se baja: Aura pequeña y compacta en el extremo del trazado.
+   * Radio base del halo pulsÃ¡til que sigue a la punta del barrido.
+   * - Â¿QuÃ© significa?: El tamaÃ±o base del cÃ­rculo que late al ritmo del pulso al frente del barrido.
+   * - Si se sube: Aura de barrido de mayor tamaÃ±o y dinamismo.
+   * - Si se baja: Aura pequeÃ±a y compacta en el extremo del trazado.
    */
   HEAD_PULSE_BASE_RADIUS: 6.0,
 
   /**
-   * Radio del núcleo central blanco en la punta conductora del barrido.
+   * Radio del nÃºcleo central blanco en la punta conductora del barrido.
    */
   HEAD_PULSE_INNER_RADIUS: 3.0,
 
-  // === Márgenes y Límites de Dibujo ===
+  // === MÃ¡rgenes y LÃ­mites de Dibujo ===
   /**
-   * Margen superior de la onda en el gráfico.
-   * - ¿Qué significa?: Espacio vacío superior en píxeles para que la onda no solape los textos superiores del monitor.
-   * - Si se sube: Desplaza la onda hacia abajo, comprimiendo el área útil de dibujo.
-   * - Si se baja: Permite que la onda se desplace más arriba en pantalla.
+   * Margen superior de la onda en el grÃ¡fico.
+   * - Â¿QuÃ© significa?: Espacio vacÃ­o superior en pÃ­xeles para que la onda no solape los textos superiores del monitor.
+   * - Si se sube: Desplaza la onda hacia abajo, comprimiendo el Ã¡rea Ãºtil de dibujo.
+   * - Si se baja: Permite que la onda se desplace mÃ¡s arriba en pantalla.
    */
   WAVE_PAD_TOP: 14,
 
   /**
-   * Margen inferior de la onda en el gráfico.
-   * - ¿Qué significa?: Espacio vacío inferior en píxeles antes del tacograma para evitar solapamientos.
-   * - Si se sube: Comprime la onda hacia arriba, alejándola del tacograma.
-   * - Si se baja: Permite que los valles de la onda bajen más cerca de la sección del tacograma.
+   * Margen inferior de la onda en el grÃ¡fico.
+   * - Â¿QuÃ© significa?: Espacio vacÃ­o inferior en pÃ­xeles antes del tacograma para evitar solapamientos.
+   * - Si se sube: Comprime la onda hacia arriba, alejÃ¡ndola del tacograma.
+   * - Si se baja: Permite que los valles de la onda bajen mÃ¡s cerca de la secciÃ³n del tacograma.
    */
   WAVE_PAD_BOTTOM: 41,
 
-  // === Tiempos de Reacción y Velocidades Dinámicas ===
+  // === Tiempos de ReacciÃ³n y Velocidades DinÃ¡micas ===
   /**
-   * Velocidad de amortiguación (desvanecimiento) de la punta conductora tras cada latido.
-   * - ¿Qué significa?: Factor multiplicador por cuadro que reduce el tamaño del halo del cursor (sweepPulse).
-   * - Si se sube: El halo brillante de la punta se apaga más lentamente, dejando un rastro luminoso más largo.
+   * Velocidad de amortiguaciÃ³n (desvanecimiento) de la punta conductora tras cada latido.
+   * - Â¿QuÃ© significa?: Factor multiplicador por cuadro que reduce el tamaÃ±o del halo del cursor (sweepPulse).
+   * - Si se sube: El halo brillante de la punta se apaga mÃ¡s lentamente, dejando un rastro luminoso mÃ¡s largo.
    * - Si se baja: El halo se apaga de forma abrupta y veloz.
    */
   SWEEP_PULSE_DECAY: 0.90,
 
   /**
-   * Tiempo de rebote (debounce) mínimo entre picos registrados en milisegundos.
-   * - ¿Qué significa?: El tiempo de espera mínimo necesario para procesar visualmente el siguiente latido y evitar falsas detecciones duplicadas.
-   * - Si se sube: Evita falsos picos por ruido, pero puede ignorar latidos reales si la frecuencia cardíaca es extremadamente alta (taquicardia).
+   * Tiempo de rebote (debounce) mÃ­nimo entre picos registrados en milisegundos.
+   * - Â¿QuÃ© significa?: El tiempo de espera mÃ­nimo necesario para procesar visualmente el siguiente latido y evitar falsas detecciones duplicadas.
+   * - Si se sube: Evita falsos picos por ruido, pero puede ignorar latidos reales si la frecuencia cardÃ­aca es extremadamente alta (taquicardia).
    * - Si se baja: Aumenta la sensibilidad ante frecuencias altas, pero puede duplicar marcas visuales en un solo latido.
    */
   PEAK_DEBOUNCE_MS: 250,
 
   /**
    * Intervalo RR (IBI) por defecto utilizado cuando no hay mediciones previas.
-   * - ¿Qué significa?: El valor base de intervalo entre latidos en milisegundos para inicializar cálculos de ritmo.
-   * - Si se sube: La duración de la ventana de análisis inicial es mayor.
-   * - Si se baja: La duración de la ventana inicial es menor.
+   * - Â¿QuÃ© significa?: El valor base de intervalo entre latidos en milisegundos para inicializar cÃ¡lculos de ritmo.
+   * - Si se sube: La duraciÃ³n de la ventana de anÃ¡lisis inicial es mayor.
+   * - Si se baja: La duraciÃ³n de la ventana inicial es menor.
    */
   DEFAULT_RR_INTERVAL_MS: 800,
 
   /**
-   * Límite de duración fisiológica mínimo para el cálculo de alineación de arritmias en milisegundos.
-   * - ¿Qué significa?: El intervalo RR mínimo aceptado en el mapeo visual de la alerta.
-   * - Si se sube: Agranda el intervalo mínimo a marcar.
-   * - Si se baja: Permite marcar anomalías extremadamente rápidas.
+   * LÃ­mite de duraciÃ³n fisiolÃ³gica mÃ­nimo para el cÃ¡lculo de alineaciÃ³n de arritmias en milisegundos.
+   * - Â¿QuÃ© significa?: El intervalo RR mÃ­nimo aceptado en el mapeo visual de la alerta.
+   * - Si se sube: Agranda el intervalo mÃ­nimo a marcar.
+   * - Si se baja: Permite marcar anomalÃ­as extremadamente rÃ¡pidas.
    */
   MIN_ARR_DURATION_MS: 400,
 
   /**
-   * Límite de duración fisiológica máximo para el cálculo de alineación de arritmias en milisegundos.
-   * - ¿Qué significa?: El intervalo RR máximo aceptado en el mapeo visual de la alerta.
+   * LÃ­mite de duraciÃ³n fisiolÃ³gica mÃ¡ximo para el cÃ¡lculo de alineaciÃ³n de arritmias en milisegundos.
+   * - Â¿QuÃ© significa?: El intervalo RR mÃ¡ximo aceptado en el mapeo visual de la alerta.
    * - Si se sube: Permite que las marcas de arritmia persistan en el tiempo de manera prolongada.
-   * - Si se baja: Acorta el tiempo máximo en pantalla que dura el trazo rojo.
+   * - Si se baja: Acorta el tiempo mÃ¡ximo en pantalla que dura el trazo rojo.
    */
   MAX_ARR_DURATION_MS: 1500,
 
   /**
-   * Factor de alineación retrógrada para el marcado de arritmias.
-   * - ¿Qué significa?: La proporción del intervalo RR que se pinta de rojo hacia atrás en el tiempo a partir del pico detectado.
-   * - Si se sube: La alerta roja abarca una porción mayor del trazado de la onda antes del pico.
-   * - Si se baja: La alerta se concentra solo sobre el pico o ligeramente después.
+   * Factor de alineaciÃ³n retrÃ³grada para el marcado de arritmias.
+   * - Â¿QuÃ© significa?: La proporciÃ³n del intervalo RR que se pinta de rojo hacia atrÃ¡s en el tiempo a partir del pico detectado.
+   * - Si se sube: La alerta roja abarca una porciÃ³n mayor del trazado de la onda antes del pico.
+   * - Si se baja: La alerta se concentra solo sobre el pico o ligeramente despuÃ©s.
    */
   ARR_RETRO_ALIGN_FACTOR: 0.35,
 
   /**
-   * Factor de alineación anterógrada para el marcado de arritmias.
-   * - ¿Qué significa?: La proporción del intervalo RR que la alerta roja se mantiene activa hacia adelante en el tiempo a partir del pico.
-   * - Si se sube: El color rojo de la alerta persiste durante más tiempo en el barrido que se desplaza.
-   * - Si se baja: El color rojo desaparece rápidamente después de que pasa el pico.
+   * Factor de alineaciÃ³n anterÃ³grada para el marcado de arritmias.
+   * - Â¿QuÃ© significa?: La proporciÃ³n del intervalo RR que la alerta roja se mantiene activa hacia adelante en el tiempo a partir del pico.
+   * - Si se sube: El color rojo de la alerta persiste durante mÃ¡s tiempo en el barrido que se desplaza.
+   * - Si se baja: El color rojo desaparece rÃ¡pidamente despuÃ©s de que pasa el pico.
    */
   ARR_ANTERO_ALIGN_FACTOR: 1.65,
 
   /**
    * Exponente de agudeza visual para controlar la velocidad de subida y bajada de la onda.
-   * - ¿Qué significa?: Distorsión no-lineal matemática aplicada exclusivamente al trazado del Canvas.
-   * - Si se sube (ej. 1.3 - 1.7): Hace que la subida al pico sistólico y la caída posterior sean visualmente mucho más rápidas y agudas (efecto "látigo" o "relámpago").
-   * - Si se baja (ej. 1.0): La onda se grafica de forma 100% lineal y fiel a la fisiología pura sin distorsión.
-   * - ¡ATENCIÓN!: Esta constante es 100% visual y estética. No afecta la lógica interna de captación de latidos ni las matemáticas médicas del procesador, por lo que es totalmente seguro calibrarla sin alterar la detección de pulso.
+   * - Â¿QuÃ© significa?: DistorsiÃ³n no-lineal matemÃ¡tica aplicada exclusivamente al trazado del Canvas.
+   * - Si se sube (ej. 1.3 - 1.7): Hace que la subida al pico sistÃ³lico y la caÃ­da posterior sean visualmente mucho mÃ¡s rÃ¡pidas y agudas (efecto "lÃ¡tigo" o "relÃ¡mpago").
+   * - Si se baja (ej. 1.0): La onda se grafica de forma 100% lineal y fiel a la fisiologÃ­a pura sin distorsiÃ³n.
+   * - Â¡ATENCIÃ“N!: Esta constante es 100% visual y estÃ©tica. No afecta la lÃ³gica interna de captaciÃ³n de latidos ni las matemÃ¡ticas mÃ©dicas del procesador, por lo que es totalmente seguro calibrarla sin alterar la detecciÃ³n de pulso.
    */
   WAVE_SHARPNESS_EXPONENT: 1.75,
 };
@@ -333,6 +333,7 @@ export interface PpgRenderProps {
     message?: string;
     placementHint?: string;
     fingerPressure?: 'LIGHT' | 'IDEAL' | 'HEAVY';
+    placementEvidence?: import('../finger/fingerPlacementEvidence').FingerPlacementEvidence;
     hasPulsatility?: boolean;
     acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY';
     acquisitionProgress?: number;
@@ -369,14 +370,14 @@ export interface PpgRenderState {
   pendingTrendArr: boolean;
   lastPeakProcessedTime: number;
   arrActiveUntil: number;
-  /** Latch: la onda solo se revela cuando la señal se ESTABILIZÓ (adquisición READY). */
+  /** Latch: la onda solo se revela cuando la seÃ±al se ESTABILIZÃ“ (adquisiciÃ³n READY). */
   traceRevealed: boolean;
-  /** Fuerza pulsátil real [0..1]: comprime la altura de la onda (objeto inerte → plana). */
+  /** Fuerza pulsÃ¡til real [0..1]: comprime la altura de la onda (objeto inerte â†’ plana). */
   signalStrength: number;
   /**
-   * Capa de presentación 3D (perspectiva pura en canvas 2D). Si `enabled`, la grilla
+   * Capa de presentaciÃ³n 3D (perspectiva pura en canvas 2D). Si `enabled`, la grilla
    * se dibuja como piso en perspectiva y la onda como cinta extruida. La onda reusa
-   * las MISMAS coords honestas → misma forma/amplitud/tiempo que el modo 2D.
+   * las MISMAS coords honestas â†’ misma forma/amplitud/tiempo que el modo 2D.
    */
   threeD?: { enabled: boolean; intensity?: number };
 }
@@ -436,7 +437,7 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.fillText(`SQI ${Math.round(quality)}%`, header.w - 16, header.y + 22);
 
   if (state.props.isMonitoring) {
-    const elapStr = `⏱ ${em}:${es}`;
+    const elapStr = `â± ${em}:${es}`;
     ctx.font = `11px ${FONT_MONO}`;
     ctx.textAlign = 'left';
     ctx.fillStyle = COLORS.TEXT_INFO;
@@ -446,7 +447,7 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.font = `10px ${FONT_MONO}`;
   ctx.textAlign = 'right';
   ctx.fillStyle = detected ? COLORS.TEXT_PRIMARY : COLORS.TEXT_DIM;
-  ctx.fillText(detected ? '● DEDO OK' : '○ SIN DEDO', header.w - 110, header.y + 22);
+  ctx.fillText(detected ? 'â— DEDO OK' : 'â—‹ SIN DEDO', header.w - 110, header.y + 22);
 
   const diag = diagnostics;
   const hideLowFlicker =
@@ -468,12 +469,12 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.textAlign = 'center';
     if (placementHint) {
       ctx.font = `bold 9px ${FONT_MONO}`;
-      ctx.fillText(`ESTABILIZANDO SEÑAL · ${pct}%`, header.w / 2, header.y + 8);
+      ctx.fillText(`ESTABILIZANDO SEÃ‘AL Â· ${pct}%`, header.w / 2, header.y + 8);
       ctx.font = `9px ${FONT_MONO}`;
       ctx.fillText(placementHint, header.w / 2, header.y + 18);
     } else {
       ctx.font = `bold 10px ${FONT_MONO}`;
-      ctx.fillText(`ESTABILIZANDO SEÑAL · ${pct}%`, header.w / 2, header.y + 12);
+      ctx.fillText(`ESTABILIZANDO SEÃ‘AL Â· ${pct}%`, header.w / 2, header.y + 12);
     }
   } else if (placementHint && detected && stage === 'READY') {
     ctx.fillStyle = COLORS.TEXT_INFO;
@@ -489,7 +490,7 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.fillStyle = COLORS.TEXT_DANGER;
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.textAlign = 'center';
-    ctx.fillText(`⚠ ${diag.status}`, header.w / 2, header.y + 12);
+    ctx.fillText(`âš  ${diag.status}`, header.w / 2, header.y + 12);
   }
 }
 
@@ -528,7 +529,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
   ctx.textAlign = 'left';
-  ctx.fillText('FRECUENCIA CARDÍACA', 16, metrics.y + 26);
+  ctx.fillText('FRECUENCIA CARDÃACA', 16, metrics.y + 26);
 
   ctx.font = `bold 56px ${FONT_MONO}`;
   ctx.fillStyle = hrColor;
@@ -577,7 +578,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
   ctx.textAlign = 'left';
-  ctx.fillText('SATURACIÓN O₂', colW + 16, metrics.y + 26);
+  ctx.fillText('SATURACIÃ“N Oâ‚‚', colW + 16, metrics.y + 26);
 
   ctx.font = `bold 56px ${FONT_MONO}`;
   ctx.fillStyle = spo2Color;
@@ -622,7 +623,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
   ctx.textAlign = 'left';
-  ctx.fillText('PRESIÓN ART.', bpX, metrics.y + 26);
+  ctx.fillText('PRESIÃ“N ART.', bpX, metrics.y + 26);
 
   ctx.font = `bold 28px ${FONT_MONO}`;
   ctx.fillStyle = bpColor;
@@ -633,7 +634,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
       state.props.bpStatus === 'NO_VALID_SIGNAL' ||
       state.props.bpStatus === 'WARMUP');
   ctx.fillText(
-    sys > 0 ? `${sys}/${dia}` : bpPending ? '···' : '--/--',
+    sys > 0 ? `${sys}/${dia}` : bpPending ? 'Â·Â·Â·' : '--/--',
     bpX,
     metrics.y + 68,
   );
@@ -646,12 +647,12 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.font = `9px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
     ctx.textAlign = 'right';
-    ctx.fillText(`MAP ${map} · PP ${pp}`, metrics.w - 12, metrics.y + 68);
+    ctx.fillText(`MAP ${map} Â· PP ${pp}`, metrics.w - 12, metrics.y + 68);
 
     let bpLabel = '';
-    if (sys >= 140 || dia >= 90) bpLabel = 'HIPERTENSIÓN';
+    if (sys >= 140 || dia >= 90) bpLabel = 'HIPERTENSIÃ“N';
     else if (sys >= 130 || dia >= 80) bpLabel = 'ELEVADA';
-    else if (sys < 90 || dia < 60) bpLabel = 'HIPOTENSIÓN';
+    else if (sys < 90 || dia < 60) bpLabel = 'HIPOTENSIÃ“N';
     else bpLabel = 'NORMAL';
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = bpColor;
@@ -683,7 +684,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.font = `8px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'right';
-    ctx.fillText(`${fps.toFixed(1)} FPS · Δ${jitter.toFixed(1)}ms`, metrics.w - 12, metrics.y + 12);
+    ctx.fillText(`${fps.toFixed(1)} FPS Â· Î”${jitter.toFixed(1)}ms`, metrics.w - 12, metrics.y + 12);
   }
   if (pd && typeof pd.confidence === 'number' && pd.confidence > 0) {
     const ae = pd.agreement?.elgendi ?? 0;
@@ -691,7 +692,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.fillStyle = COLORS.TEXT_INFO;
     ctx.textAlign = 'right';
     ctx.fillText(
-      `Picos ensemble ${(pd.confidence * 100).toFixed(0)}% · E${(ae * 100).toFixed(0)}`,
+      `Picos ensemble ${(pd.confidence * 100).toFixed(0)}% Â· E${(ae * 100).toFixed(0)}`,
       metrics.w - 12,
       metrics.y + (fps > 0 ? 24 : 12)
     );
@@ -783,7 +784,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.textAlign = 'left';
   ctx.fillStyle = COLORS.TEXT_DIM;
   ctx.font = `bold 10px ${FONT_MONO}`;
-  ctx.fillText('25 mm/s · 0.5–12 Hz · HIGH-FIDELITY PPG', plot.x + 8, plot.y - 8);
+  ctx.fillText('25 mm/s Â· 0.5â€“12 Hz Â· HIGH-FIDELITY PPG', plot.x + 8, plot.y - 8);
 
   drawPressureGauge(ctx, state);
 }
@@ -805,16 +806,16 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
   ctx.font = `bold 9px ${FONT_MONO}`;
   ctx.textAlign = 'left';
   
-  let labelText = 'PRESIÓN: IDEAL';
+  let labelText = 'PRESIÃ“N: IDEAL';
   let labelColor = COLORS.SIGNAL;
   let targetPct = 0.5;
 
   if (pressure === 'LIGHT') {
-    labelText = 'PRESIÓN: SUAVE';
+    labelText = 'PRESIÃ“N: SUAVE';
     labelColor = COLORS.TEXT_WARN;
     targetPct = 0.2;
   } else if (pressure === 'HEAVY') {
-    labelText = 'PRESIÓN: EXCESIVA';
+    labelText = 'PRESIÃ“N: EXCESIVA';
     labelColor = COLORS.TEXT_DANGER;
     targetPct = 0.8;
   }
@@ -923,7 +924,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     if (x < plot.x || x > plot.x + plot.w) continue;
     const honestValue = midValue + (pt.value - midValue) * strength;
     
-    // Mapeo normalizado [0..1] para aplicar la transformación de subida/bajada no lineal
+    // Mapeo normalizado [0..1] para aplicar la transformaciÃ³n de subida/bajada no lineal
     const pct = Math.max(0, Math.min(1, (honestValue - stats.min) / safeRange));
     const transformedPct = Math.pow(pct, CARDIAC_WAVE_CONFIG.WAVE_SHARPNESS_EXPONENT);
     const y = plot.y + wavePadTop + (1 - transformedPct) * waveH;
@@ -942,8 +943,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   state.sweepPulse *= CARDIAC_WAVE_CONFIG.SWEEP_PULSE_DECAY;
 
   if (state.threeD?.enabled) {
-    // ── MODO 3D: onda como cinta extruida sobre el piso en perspectiva. ──
-    // Reusa las MISMAS coords honestas → forma, amplitud y tiempo idénticos al 2D.
+    // â”€â”€ MODO 3D: onda como cinta extruida sobre el piso en perspectiva. â”€â”€
+    // Reusa las MISMAS coords honestas â†’ forma, amplitud y tiempo idÃ©nticos al 2D.
     drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
   } else {
   // Background areas for arrhythmia
@@ -1074,7 +1075,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.fill();
   }
 
-  // ─── FIDUCIAL MARKERS: INSTRUMENTATION GRADE (Annotated) ───────────
+  // â”€â”€â”€ FIDUCIAL MARKERS: INSTRUMENTATION GRADE (Annotated) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (state.traceRevealed) {
     ctx.font = `bold 8px ${FONT_MONO}`;
     for (let i = 2; i < coords.length - 2; i++) {
@@ -1187,9 +1188,9 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       ctx.fillText(label.text, midX, topY - 4);
     }
   }
-  } // ── fin MODO 2D ──
+  } // â”€â”€ fin MODO 2D â”€â”€
 
-  // Tachogram (panel clínico: 2D en ambos modos)
+  // Tachogram (panel clÃ­nico: 2D en ambos modos)
   const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
   ctx.fillStyle = 'rgba(8, 14, 26, 0.85)';
   ctx.fillRect(plot.x + 2, tachoY - 4, plot.w - 4, RR_TACHO_H);
@@ -1283,7 +1284,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.fillStyle = COLORS.TEXT_PRIMARY;
   ctx.textAlign = 'left';
   ctx.fillText(
-    compact ? 'TENDENCIA BPM · 60s' : 'TENDENCIA FRECUENCIA CARDÍACA · 60 s',
+    compact ? 'TENDENCIA BPM Â· 60s' : 'TENDENCIA FRECUENCIA CARDÃACA Â· 60 s',
     trend.x + 8,
     trend.y + (compact ? 12 : 14),
   );
@@ -1295,10 +1296,10 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   if (hrv.rmssd > 0) hrvBits.push(`RMSSD ${hrv.rmssd}`);
   if (arrCnt > 0) hrvBits.push(`${arrCnt} arr`);
   if (hrvBits.length > 0 && !compact) {
-    ctx.fillText(hrvBits.join(' · '), trend.x + 8, trend.y + 26);
+    ctx.fillText(hrvBits.join(' Â· '), trend.x + 8, trend.y + 26);
   } else if (hrvBits.length > 0) {
     ctx.textAlign = 'right';
-    ctx.fillText(hrvBits.join(' · '), trend.x + trend.w - 8, trend.y + 12);
+    ctx.fillText(hrvBits.join(' Â· '), trend.x + trend.w - 8, trend.y + 12);
     ctx.textAlign = 'left';
   }
 
@@ -1306,7 +1307,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.font = `9px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'center';
-    ctx.fillText('Acumulando…', trend.x + trend.w / 2, trend.y + trend.h / 2 + 4);
+    ctx.fillText('Acumulandoâ€¦', trend.x + trend.w / 2, trend.y + trend.h / 2 + 4);
     return;
   }
 
@@ -1396,7 +1397,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.font = `8px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'center';
-    ctx.fillText(s === 0 ? 'ahora' : `−${s}s`, x, innerY + innerH + (compact ? 9 : 12));
+    ctx.fillText(s === 0 ? 'ahora' : `âˆ’${s}s`, x, innerY + innerH + (compact ? 9 : 12));
   }
 
   const coords: { x: number; y: number; isArr: boolean }[] = data.map((point) => ({
@@ -1472,14 +1473,14 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.fillStyle = COLORS.TEXT_DIM;
   ctx.textAlign = 'left';
   ctx.fillText(
-    `min ${Math.round(mn)} · max ${Math.round(mx)}`,
+    `min ${Math.round(mn)} Â· max ${Math.round(mx)}`,
     innerX,
     trend.y + trend.h - 4,
   );
   if (!compact) {
     ctx.textAlign = 'right';
     ctx.fillStyle = 'rgba(251, 113, 133, 0.85)';
-    ctx.fillText('● arrítmico', innerX + innerW, trend.y + trend.h - 4);
+    ctx.fillText('â— arrÃ­tmico', innerX + innerW, trend.y + trend.h - 4);
   }
 }
 
@@ -1527,7 +1528,7 @@ export function drawFooter(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     : 0;
   const alarms: string[] = [];
   if (bpm != null && bpm > 0 && (bpm < 50 || bpm > 120)) alarms.push('HR');
-  if (spo2 > 0 && spo2 < 92) alarms.push('SpO₂');
+  if (spo2 > 0 && spo2 < 92) alarms.push('SpOâ‚‚');
   if (map > 0 && (map < 65 || map > 110)) alarms.push('MAP');
   if (pi > 0 && pi < 0.005) alarms.push('PI');
 
@@ -1535,11 +1536,11 @@ export function drawFooter(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   if (alarms.length > 0) {
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DANGER;
-    ctx.fillText(`⚠ ALARMA: ${alarms.join(' · ')}`, footer.x + footer.w - 12, footer.y + 16);
+    ctx.fillText(`âš  ALARMA: ${alarms.join(' Â· ')}`, footer.x + footer.w - 12, footer.y + 16);
   } else if (bpm != null && bpm > 0) {
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_PRIMARY;
-    ctx.fillText('● SIN ALARMAS', footer.x + footer.w - 12, footer.y + 16);
+    ctx.fillText('â— SIN ALARMAS', footer.x + footer.w - 12, footer.y + 16);
   }
 
   const beats = state.beatHistory;
@@ -1562,6 +1563,6 @@ export function drawFooter(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'right';
     const arrCount = beats.filter(b => b.isArrhythmia).length;
-    ctx.fillText(`Últimos ${showN} · N:${beats.length - arrCount} A:${arrCount}`, footer.x + footer.w - 12, dy + 14);
+    ctx.fillText(`Ãšltimos ${showN} Â· N:${beats.length - arrCount} A:${arrCount}`, footer.x + footer.w - 12, dy + 14);
   }
 }
