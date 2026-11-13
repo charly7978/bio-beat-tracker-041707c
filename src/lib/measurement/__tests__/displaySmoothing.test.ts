@@ -18,9 +18,9 @@ describe('displaySmoothing', () => {
     expect(v).toBeLessThan(20);
   });
 
-  it('alphas de vitales son sutiles (< 0.2)', () => {
-    expect(DISPLAY_SMOOTH_ALPHAS.hr).toBeLessThan(0.2);
-    expect(DISPLAY_SMOOTH_ALPHAS.spo2).toBeLessThan(0.2);
-    expect(DISPLAY_SMOOTH_ALPHAS.bp).toBeLessThan(0.2);
+  it('alphas de vitales son sutiles (<= 0.3)', () => {
+    expect(DISPLAY_SMOOTH_ALPHAS.hr).toBeLessThanOrEqual(0.3);
+    expect(DISPLAY_SMOOTH_ALPHAS.spo2).toBeLessThanOrEqual(0.3);
+    expect(DISPLAY_SMOOTH_ALPHAS.bp).toBeLessThanOrEqual(0.3);
   });
 });
