@@ -6,6 +6,14 @@ import { BloodPressureProcessor } from '../BloodPressureProcessor';
 
 describe('VitalSignsProcessor', () => {
   afterEach(() => vi.restoreAllMocks());
+  it('passes the capture timestamp to SpO2 rather than the display clock', () => {
+    const calculate = vi.spyOn(SpO2Calculator.prototype, 'calculate').mockReturnValue(0);
+    const proc = new VitalSignsProcessor();
+    proc.setRGBData({ redAC: 1, redDC: 100, greenAC: 1, greenDC: 80 });
+    proc.processSignal(1, 80, 72, undefined, 0.005, { sqi: 80 }, 1,
+      undefined, undefined, undefined, undefined, undefined, [], 12_345);
+    expect(calculate).toHaveBeenCalledWith(expect.any(Object), expect.any(Number), 12_345);
+  });
   it('se inicializa con valores correctos', () => {
     const proc = new VitalSignsProcessor();
     const result = proc.reset();
@@ -109,3 +117,4 @@ describe('VitalSignsProcessor', () => {
     expect(result.signalQuality).toBe(75);
   });
 });
+

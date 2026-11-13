@@ -3,6 +3,9 @@ import { clamp } from '../../utils/math';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { CalibrationManager } from './CalibrationManager';
 import { fastICA } from '../../utils/ica';
+import { resampleTimedSignal } from '../../lib/signal/timedSamples';
+import { median } from '../../utils/stats';
+import { SPO2_TIMING_DEFAULTS } from '../../config/signalProcessing';
 
 const log = createLogger('SpO2Calculator');
 
@@ -62,14 +65,36 @@ export class SpO2Calculator {
   private redAcHistory: number[] = [];
   private greenAcHistory: number[] = [];
   private blueAcHistory: number[] = [];
-  private readonly ICA_WINDOW_SIZE = 64;
+  private sampleTimesMs: number[] = [];
+  private usingTimestamps: boolean | null = null;
+  private timing = {
+    sampleRateHz: null as number | null,
+    lagMin: null as number | null,
+    lagMax: null as number | null,
+    detectedLag: null as number | null,
+  };
+  private readonly ICA_WINDOW_SIZE = SPO2_TIMING_DEFAULTS.windowSamples;
+  private windowSampleLimit = SPO2_TIMING_DEFAULTS.windowSamples;
 
   /** Calcula SpO2 a partir de los canales RGB. Retorna 0 si no hay señal válida. */
-  calculate(raw: RGBData, frameCount: number): number {
+  calculate(raw: RGBData, frameCount: number, timestampMs?: number): number {
     const spoCfg = VITAL_THRESHOLDS.SPO2;
     let { redAC, redDC, greenAC, greenDC, blueAC, blueDC } = raw;
 
-    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC) return 0;
+    if (
+      ![redAC, redDC, greenAC, greenDC].every(Number.isFinite) ||
+      redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC
+    ) {
+      this.reset();
+      return 0;
+    }
+    // A callback/render replay is not another optical observation. Untimed
+    // callers retain amplitude ratios, but cannot claim temporal ICA evidence.
+    if (!this.acceptTimestamp(timestampMs)) return 0;
+    if (!Number.isFinite(blueAC) || !Number.isFinite(blueDC) || !(blueDC! > 0)) {
+      blueAC = undefined;
+      blueDC = undefined;
+    }
 
     // ── Corrección inversa del tone mapping sigmoidal ──
     const rawRedDC = redDC;
@@ -91,14 +116,15 @@ export class SpO2Calculator {
     this.greenAcHistory.push(greenAC);
     this.blueAcHistory.push(blueAC ?? 0);
 
-    if (this.redAcHistory.length > this.ICA_WINDOW_SIZE) {
-      this.redAcHistory.shift();
-      this.greenAcHistory.shift();
-      this.blueAcHistory.shift();
+    if (this.redAcHistory.length > this.windowSampleLimit) {
+      const excess = this.redAcHistory.length - this.windowSampleLimit;
+      this.redAcHistory.splice(0, excess);
+      this.greenAcHistory.splice(0, excess);
+      this.blueAcHistory.splice(0, excess);
     }
 
     // Requerimos al menos 10 muestras para estimar amplitudes AC estables por RMS
-    if (this.redAcHistory.length < 10) return 0;
+    if (this.redAcHistory.length < SPO2_TIMING_DEFAULTS.minRmsSamples) return 0;
 
     // Calcular amplitudes AC efectivas mediante RMS de la ventana de componentes AC
     let sumSqRed = 0;
@@ -143,22 +169,30 @@ export class SpO2Calculator {
     let snrGreen = 0;
     let snrBlue = 0;
 
-    // Si tenemos suficientes muestras, corremos FastICA y estimamos SNR
-    if (this.redAcHistory.length >= this.ICA_WINDOW_SIZE) {
-      const icaResult = fastICA([this.redAcHistory, this.greenAcHistory, this.blueAcHistory]);
+    // ICA needs a uniform optical timeline. Its cadence is the cadence of
+    // accepted RGB observations, not camera FPS or the frequency of renders.
+    const timedWindow = this.getUniformWindow();
+    if (timedWindow) {
+      const { channels: [redHistory, greenHistory, blueHistory], sampleRateHz } = timedWindow;
+      const lagMin = Math.max(2, Math.floor(sampleRateHz * 60 / VITAL_THRESHOLDS.HR.MAX));
+      const lagMax = Math.min(
+        Math.floor(greenHistory.length / 2),
+        Math.ceil(sampleRateHz * 60 / VITAL_THRESHOLDS.HR.MIN),
+      );
+      this.timing = { sampleRateHz, lagMin, lagMax, detectedLag: null };
+      let detectedLag = lagMin;
+      let maxAutoCorr = -Infinity;
+      for (let lag = lagMin; lag <= lagMax; lag++) {
+        const acVal = computeAutocorrelation(greenHistory, lag);
+        if (acVal > maxAutoCorr) {
+          maxAutoCorr = acVal;
+          detectedLag = lag;
+        }
+      }
+      this.timing.detectedLag = detectedLag;
+      const icaResult = fastICA([redHistory, greenHistory, blueHistory]);
       if (icaResult) {
         const { A, S } = icaResult;
-
-        // Buscamos el pitch period de la frecuencia cardíaca mediante autocorrelación en el canal verde (el más pulsátil)
-        let detectedLag = 20; // fallback ≈ 90 BPM a 30fps
-        let maxAutoCorr = -1;
-        for (let lag = 10; lag <= 40; lag++) {
-          const acVal = computeAutocorrelation(this.greenAcHistory, lag);
-          if (acVal > maxAutoCorr) {
-            maxAutoCorr = acVal;
-            detectedLag = lag;
-          }
-        }
 
         // Puntuamos componentes de FastICA para hallar el componente de pulso cardiaco
         let bestComp = 0;
@@ -174,9 +208,9 @@ export class SpO2Calculator {
           let normSrc = 0;
           let normGreen = 0;
           for (let k = 0; k < src.length; k++) {
-            dot += src[k] * this.greenAcHistory[k];
+            dot += src[k] * greenHistory[k];
             normSrc += src[k] * src[k];
-            normGreen += this.greenAcHistory[k] * this.greenAcHistory[k];
+            normGreen += greenHistory[k] * greenHistory[k];
           }
           const corr = normSrc > 0 && normGreen > 0 ? Math.abs(dot) / Math.sqrt(normSrc * normGreen) : 0;
           const score = periodicity * corr;
@@ -211,16 +245,16 @@ export class SpO2Calculator {
         }
 
         // Calcular SNR para cada canal usando el lag cardíaco detectado
-        const r0Red = computeAutocorrelation(this.redAcHistory, 0);
-        const rLagRed = computeAutocorrelation(this.redAcHistory, detectedLag);
+        const r0Red = computeAutocorrelation(redHistory, 0);
+        const rLagRed = computeAutocorrelation(redHistory, detectedLag);
         snrRed = r0Red > 1e-10 ? Math.max(0, rLagRed / (r0Red - Math.abs(rLagRed) + 1e-6)) : 0;
 
-        const r0Green = computeAutocorrelation(this.greenAcHistory, 0);
-        const rLagGreen = computeAutocorrelation(this.greenAcHistory, detectedLag);
+        const r0Green = computeAutocorrelation(greenHistory, 0);
+        const rLagGreen = computeAutocorrelation(greenHistory, detectedLag);
         snrGreen = r0Green > 1e-10 ? Math.max(0, rLagGreen / (r0Green - Math.abs(rLagGreen) + 1e-6)) : 0;
 
-        const r0Blue = computeAutocorrelation(this.blueAcHistory, 0);
-        const rLagBlue = computeAutocorrelation(this.blueAcHistory, detectedLag);
+        const r0Blue = computeAutocorrelation(blueHistory, 0);
+        const rLagBlue = computeAutocorrelation(blueHistory, detectedLag);
         snrBlue = r0Blue > 1e-10 ? Math.max(0, rLagBlue / (r0Blue - Math.abs(rLagBlue) + 1e-6)) : 0;
       }
     }
@@ -312,10 +346,76 @@ export class SpO2Calculator {
     return this.rValueHistory;
   }
 
+  getTimingDiagnostics() {
+    return { ...this.timing, timestamped: this.usingTimestamps === true, samples: this.redAcHistory.length };
+  }
+
+  private acceptTimestamp(timestampMs: number | undefined): boolean {
+    const timestamped = timestampMs !== undefined;
+    if (timestamped && (!Number.isFinite(timestampMs) || timestampMs <= 0)) {
+      this.reset();
+      return false;
+    }
+    if (this.usingTimestamps !== null && this.usingTimestamps !== timestamped) this.reset();
+    this.usingTimestamps = timestamped;
+    if (!timestamped) return true;
+
+    const previous = this.sampleTimesMs[this.sampleTimesMs.length - 1];
+    if (previous !== undefined) {
+      if (timestampMs === previous) return false;
+      const delta = timestampMs! - previous;
+      const intervals = this.sampleTimesMs.slice(1).map((t, i) => t - this.sampleTimesMs[i]);
+      const gapLimit = intervals.length >= 3
+        ? Math.min(SPO2_TIMING_DEFAULTS.maxGapMs, median(intervals) * SPO2_TIMING_DEFAULTS.maxGapMultiple)
+        : SPO2_TIMING_DEFAULTS.maxGapMs;
+      if (delta < 0 || delta > gapLimit) {
+        this.reset();
+        this.usingTimestamps = true;
+      }
+    }
+    this.sampleTimesMs.push(timestampMs!);
+    const intervals = this.sampleTimesMs.slice(1).map((t, i) => t - this.sampleTimesMs[i]);
+    if (intervals.length >= 3) {
+      // At higher accepted cadences, 64 samples can cover less than the two
+      // seconds required by the shared resampler. Grow the window in time,
+      // within a bounded capacity, without changing low-cadence behavior.
+      this.windowSampleLimit = Math.min(
+        SPO2_TIMING_DEFAULTS.maxWindowSamples,
+        Math.max(this.ICA_WINDOW_SIZE, Math.ceil(SPO2_TIMING_DEFAULTS.minIcaWindowMs / median(intervals)) + 1),
+      );
+    }
+    if (this.sampleTimesMs.length > this.windowSampleLimit) {
+      this.sampleTimesMs.splice(0, this.sampleTimesMs.length - this.windowSampleLimit);
+    }
+    this.timing = { sampleRateHz: null, lagMin: null, lagMax: null, detectedLag: null };
+    return true;
+  }
+
+  private getUniformWindow(): { channels: number[][]; sampleRateHz: number } | null {
+    if (this.usingTimestamps !== true || this.sampleTimesMs.length < this.ICA_WINDOW_SIZE) return null;
+    const options = {
+      targetRateHz: SPO2_TIMING_DEFAULTS.maxSampleRateHz,
+      minRateHz: SPO2_TIMING_DEFAULTS.minSampleRateHz,
+      maxRateHz: SPO2_TIMING_DEFAULTS.maxSampleRateHz,
+      maxGapMultiple: SPO2_TIMING_DEFAULTS.maxGapMultiple,
+      maxJitterRatio: SPO2_TIMING_DEFAULTS.maxJitterRatio,
+    };
+    const windows = [this.redAcHistory, this.greenAcHistory, this.blueAcHistory].map(channel =>
+      resampleTimedSignal(channel.map((value, i) => ({ value, timestampMs: this.sampleTimesMs[i] })), options),
+    );
+    if (windows.some(window => window === null)) return null;
+    return { channels: windows.map(window => window!.samples), sampleRateHz: windows[0]!.sampleRateHz };
+  }
+
   reset(): void {
     this.rValueHistory = [];
     this.redAcHistory = [];
     this.greenAcHistory = [];
     this.blueAcHistory = [];
+    this.sampleTimesMs = [];
+    this.usingTimestamps = null;
+    this.windowSampleLimit = this.ICA_WINDOW_SIZE;
+    this.timing = { sampleRateHz: null, lagMin: null, lagMax: null, detectedLag: null };
   }
 }
+

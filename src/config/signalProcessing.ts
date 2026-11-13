@@ -4,6 +4,35 @@
  */
 import { VITAL_THRESHOLDS } from './vitalThresholds';
 
+/** Ventanas y validez temporal de observaciones IMU con reloj de adquisición. */
+export const IMU_RESPIRATION_DEFAULTS = {
+  windowMs: 25_000,
+  minWindowMs: 8_000,
+  maxSamples: 4_096,
+  cadenceWindowSamples: 16,
+  maxGapMs: 500,
+  maxAgeMs: 1_000,
+  computeIntervalMs: 1_000,
+  minSampleRateHz: 4,
+  maxSampleRateHz: 120,
+  maxGapMultiple: 2.5,
+  maxJitterRatio: 0.5,
+  gravityTimeConstantMs: 2_500,
+};
+
+/** El reloj observado gobierna las ventanas ópticas, no la cadencia de render. */
+export const SPO2_TIMING_DEFAULTS = {
+  windowSamples: 64,
+  minIcaWindowMs: 2_000,
+  maxWindowSamples: 256,
+  minRmsSamples: 10,
+  minSampleRateHz: 4,
+  maxSampleRateHz: 120,
+  maxGapMs: 1_000,
+  maxGapMultiple: 2.5,
+  maxJitterRatio: 0.5,
+};
+
 export const PEAK_DETECTION_DEFAULTS = {
   minBpm: VITAL_THRESHOLDS.HR.MIN,
   maxBpm: VITAL_THRESHOLDS.HR.MAX,
@@ -161,3 +190,4 @@ export const RESP_SMART_FUSION = {
   /** Mínimo de muestras en una serie de modalidad para estimar */
   MIN_SERIES_SAMPLES: 24,
 } as const;
+

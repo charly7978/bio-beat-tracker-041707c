@@ -5,6 +5,16 @@
  * tengan metadatos de calidad, confianza y estado de adquisición.
  */
 
+/** Evento IMU en el reloj de la página, compartido con los frames enviados al Worker. */
+export interface MotionObservation {
+  /** Event.timeStamp del navegador; no implica timestamp de hardware del sensor. */
+  timestampMs: number;
+  timeOriginMs: number;
+  clockDomain: 'page-performance';
+  accelerationIncludingGravity: { x: number | null; y: number | null; z: number | null } | null; // m/s²
+  rotationRate: { alpha: number | null; beta: number | null; gamma: number | null } | null; // grados/s
+}
+
 export type MeasurementStatus =
   | "VALID"
   | "WARMUP"
@@ -111,3 +121,4 @@ export interface PeakDetectionResult {
   }>;
   diagnostics: Record<string, unknown>;
 }
+
