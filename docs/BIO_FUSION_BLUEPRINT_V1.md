@@ -108,6 +108,24 @@ Hallazgos de integración comprobados:
 
 Esta primera corrección resuelve errores de sincronización/frecuencia; no valida clínicamente los modelos de SpO₂ ni BP ni convierte sus salidas actuales en mediciones médicas certificadas.
 
+## 4.2 Segunda intervención: fluidez del monitor y latencia de captura
+
+Hallazgos adicionales del renderizador:
+- PPGSignalMeter recibía un timestamp, pero lo descartaba y fechaba cada muestra con Date.now() al recibirla en el hilo principal. Esto introducía jitter de despacho entre captura y visualización.
+- drawSignal llamaba CircularBuffer.getPoints(), que copiaba hasta 2.500 puntos y recorría todo el historial en cada frame, aunque la ventana visible es de 2,2 segundos.
+- El Worker recibía frames sin límite de cola. Si el procesamiento tardaba más que el período de cámara, podía procesar capturas antiguas y retrasar la onda en pantalla.
+- El render 3D estaba activado por defecto y reconstruía su escena a cada frame, con mayor coste en Android.
+
+Correcciones realizadas en research/bio-fusion-v1:
+- La onda utiliza el timestamp de captura PPG y lo convierte al reloj utilizado por Canvas.
+- El Worker procesa una imagen a la vez y mantiene, como máximo, el frame pendiente más reciente. No acumula una cola de video atrasada.
+- CircularBuffer.getRecentPointsSince() entrega solo muestras dentro de la ventana visible, en orden cronológico, incluso después del wrap-around.
+- Android renderiza a una cadencia de 30 fps, con reloj RAF monotónico y resolución de backing canvas reducida; escritorio mantiene 60 fps.
+- El modo 2D liviano pasa a ser el predeterminado. El toggle 3D sigue disponible como elección explícita.
+- Se añadieron pruebas para la lectura de ventanas recientes del buffer circular.
+
+Esta intervención optimiza presentación y latencia; no interpola picos ni altera las muestras utilizadas por el estimador fisiológico. La respuesta visual debe verificarse en el teléfono real porque depende del WebView, GPU y cámara del dispositivo.
+
 ## 5. Arquitectura objetivo
 
 ### Capa A — Adquisición nativa y web
