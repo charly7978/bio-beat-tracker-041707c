@@ -74,7 +74,6 @@ const {
   HEAVY_WARMUP_FRAMES,
   HEAVY_ENTER_FRAMES,
   VERDICT_CONFIRM_FRAMES,
-  PEAK_DECAY,
   DC_SLOW_ALPHA,
   SCORE_ALPHA,
 } = VITAL_THRESHOLDS.PRESSURE;
@@ -204,8 +203,11 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
   // que la presión sostenida no se "olvide" y cause HEAVY→LIGHT falso.
   const prevVerdict = ev.verdict;
   if (prevVerdict !== 'HEAVY' && !motionBad) {
-    ev.peak = Math.max(ev.peak * PEAK_DECAY, ev.pulse);
-    ev.peakRaw = Math.max(ev.peakRaw * PEAK_DECAY, ev.pulseRaw);
+    // Pico historico del episodio (maximo observado). Sin decaimiento: asi una
+    // caida gradual del pulso (presion creciente) se detecta frente al maximo,
+    // no frente a un pico que se olvida en unos segundos.
+    ev.peak = Math.max(ev.peak, ev.pulse);
+    ev.peakRaw = Math.max(ev.peakRaw, ev.pulseRaw);
   }
   const hasPeak = ev.peakRaw >= AC_PEAK_MIN_PI;
   const acCollapse = hasPeak
