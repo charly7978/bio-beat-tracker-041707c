@@ -285,13 +285,13 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const header = { x: 0, y: 0, w: cssW, h: 36 };
-    const metricsH = Math.max(92, Math.min(108, Math.round(cssH * 0.11)));
+    const metricsH = Math.max(90, Math.min(104, Math.round(cssH * 0.11)));
     const metrics = { x: 0, y: header.h, w: cssW, h: metricsH };
 
-    const lowerH = Math.max(68, Math.min(86, Math.round(cssH * 0.095)));
-    const footerH = 42;
+    const lowerH = Math.max(56, Math.min(74, Math.round(cssH * 0.085)));
+    const footerH = 38;
     const safeAreaBottom = getSafeAreaBottom();
-    const buttonsH = 48 + safeAreaBottom;
+    const buttonsH = 52 + safeAreaBottom;
     const plotY = header.h + metricsH;
     const plotH = cssH - plotY - lowerH - footerH - buttonsH;
 

@@ -1,11 +1,6 @@
 import { CircularBuffer } from '../../utils/CircularBuffer';
 import { isPhysiologicalRR } from '../../utils/physio';
-import {
-  buildRhythmPanel,
-  formatContactState,
-  ibiSegmentLabel,
-  levelColor,
-} from './ppgMonitorClinical';
+import { buildRhythmPanel } from './ppgMonitorClinical';
 import { drawWaveRibbon3D } from './ppg3dProjection';
 
 export const FONT_MONO = '"SF Mono", Consolas, "Roboto Mono", monospace';
@@ -396,7 +391,7 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   const { header } = state.layout;
   const { quality, isFingerDetected: detected, elapsedTime: elapsed, diagnostics } = state.props;
 
-  ctx.fillStyle = 'rgba(8, 16, 28, 0.7)';
+  ctx.fillStyle = 'rgba(6, 12, 22, 0.9)';
   ctx.fillRect(header.x, header.y, header.w, header.h);
   ctx.strokeStyle = COLORS.PANEL_BORDER_DIM;
   ctx.beginPath();
@@ -404,10 +399,14 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.lineTo(header.w, header.y + header.h);
   ctx.stroke();
 
+  // 1. Estado a la izquierda con indicador LED
   const pulse = (Math.sin(state.now / 400) + 1) / 2;
-  const statusColor = state.props.isMonitoring ? COLORS.SIGNAL : (state.props.preserveResults ? COLORS.TEXT_INFO : COLORS.TEXT_DIM);
+  const statusColor = state.props.isMonitoring
+    ? COLORS.SIGNAL
+    : (state.props.preserveResults ? COLORS.TEXT_INFO : COLORS.TEXT_DIM);
+
   ctx.beginPath();
-  ctx.arc(16, header.y + 18, 5, 0, Math.PI * 2);
+  ctx.arc(14, header.y + 18, 4.5, 0, Math.PI * 2);
   ctx.fillStyle = state.props.isMonitoring
     ? `rgba(34, 197, 94, ${0.55 + pulse * 0.45})`
     : statusColor;
@@ -416,45 +415,14 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.font = `bold 11px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_PRIMARY;
   ctx.textAlign = 'left';
-  ctx.fillText(state.props.isMonitoring ? 'MONITOREANDO' : (state.props.preserveResults ? 'RESULTADOS' : 'EN ESPERA'), 28, header.y + 22);
+  const modeText = state.props.isMonitoring
+    ? 'MONITOREANDO'
+    : (state.props.preserveResults ? 'RESULTADOS' : 'EN ESPERA');
+  ctx.fillText(modeText, 25, header.y + 22);
 
-  const d = new Date(state.now);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  const t = Math.max(0, Math.floor(elapsed || 0));
-  const em = String(Math.floor(t / 60)).padStart(2, '0');
-  const es = String(t % 60).padStart(2, '0');
-
-  ctx.font = `11px ${FONT_MONO}`;
-  ctx.fillStyle = COLORS.TEXT_SECONDARY;
+  // 2. Información central limpia
   ctx.textAlign = 'center';
-  ctx.fillText(`${hh}:${mm}:${ss}`, header.w / 2, header.y + 22);
-
-  ctx.textAlign = 'right';
-  const qColor = quality > 60 ? COLORS.TEXT_PRIMARY : quality > 30 ? COLORS.TEXT_WARN : (quality > 0 ? COLORS.TEXT_DANGER : COLORS.TEXT_DIM);
-  ctx.fillStyle = qColor;
-  ctx.fillText(`SQI ${Math.round(quality)}%`, header.w - 16, header.y + 22);
-
-  if (state.props.isMonitoring) {
-    const elapStr = `â± ${em}:${es}`;
-    ctx.font = `11px ${FONT_MONO}`;
-    ctx.textAlign = 'left';
-    ctx.fillStyle = COLORS.TEXT_INFO;
-    ctx.fillText(elapStr, 160, header.y + 22);
-  }
-
-  ctx.font = `10px ${FONT_MONO}`;
-  ctx.textAlign = 'right';
-  ctx.fillStyle = detected ? COLORS.TEXT_PRIMARY : COLORS.TEXT_DIM;
-  ctx.fillText(detected ? 'â— DEDO OK' : 'â—‹ SIN DEDO', header.w - 110, header.y + 22);
-
   const diag = diagnostics;
-  const hideLowFlicker =
-    diag?.status === 'LOW_SIGNAL_QUALITY' &&
-    diag.hasPulsatility === true;
-  const placementHint =
-    typeof diag?.placementHint === 'string' ? diag.placementHint : '';
   const stage = diag?.acquisitionStage;
   const hardBlocker =
     diag?.status === 'MOTION_ARTIFACT' ||
@@ -465,40 +433,46 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
   if (detected && stage === 'STABILIZING' && !hardBlocker) {
     const pct = Math.round((diag?.acquisitionProgress ?? 0) * 100);
-    ctx.fillStyle = COLORS.TEXT_INFO;
-    ctx.textAlign = 'center';
-    if (placementHint) {
-      ctx.font = `bold 9px ${FONT_MONO}`;
-      ctx.fillText(`ESTABILIZANDO SEÃ‘AL · ${pct}%`, header.w / 2, header.y + 8);
-      ctx.font = `9px ${FONT_MONO}`;
-      ctx.fillText(placementHint, header.w / 2, header.y + 18);
-    } else {
-      ctx.font = `bold 10px ${FONT_MONO}`;
-      ctx.fillText(`ESTABILIZANDO SEÃ‘AL · ${pct}%`, header.w / 2, header.y + 12);
-    }
-  } else if (placementHint && detected && stage === 'READY') {
-    ctx.fillStyle = COLORS.TEXT_INFO;
-    ctx.font = `9px ${FONT_MONO}`;
-    ctx.textAlign = 'center';
-    ctx.fillText(placementHint, header.w / 2, header.y + 12);
-  } else if (
-    diag?.status &&
-    diag.status !== 'VALID' &&
-    diag.status !== 'WARMUP' &&
-    !hideLowFlicker
-  ) {
-    ctx.fillStyle = COLORS.TEXT_DANGER;
     ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.textAlign = 'center';
-    ctx.fillText(`⚠ ${diag.status}`, header.w / 2, header.y + 12);
+    ctx.fillStyle = COLORS.TEXT_INFO;
+    ctx.fillText(`ESTABILIZANDO · ${pct}%`, header.w / 2, header.y + 22);
+  } else if (state.props.isMonitoring) {
+    const t = Math.max(0, Math.floor(elapsed || 0));
+    const em = String(Math.floor(t / 60)).padStart(2, '0');
+    const es = String(t % 60).padStart(2, '0');
+    ctx.font = `bold 11px ${FONT_MONO}`;
+    ctx.fillStyle = COLORS.TEXT_INFO;
+    ctx.fillText(`${em}:${es}`, header.w / 2, header.y + 22);
+  } else {
+    const d = new Date(state.now);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    ctx.font = `11px ${FONT_MONO}`;
+    ctx.fillStyle = COLORS.TEXT_SECONDARY;
+    ctx.fillText(`${hh}:${mm}:${ss}`, header.w / 2, header.y + 22);
   }
+
+  // 3. Extremo derecho: SQI y Contacto
+  ctx.textAlign = 'right';
+  const qColor = quality > 60
+    ? COLORS.TEXT_PRIMARY
+    : (quality > 30 ? COLORS.TEXT_WARN : (quality > 0 ? COLORS.TEXT_DANGER : COLORS.TEXT_DIM));
+
+  ctx.font = `bold 10px ${FONT_MONO}`;
+  ctx.fillStyle = qColor;
+  ctx.fillText(`SQI ${Math.round(quality)}%`, header.w - 14, header.y + 22);
+
+  ctx.font = `10px ${FONT_MONO}`;
+  ctx.fillStyle = detected ? COLORS.TEXT_PRIMARY : COLORS.TEXT_DIM;
+  ctx.fillText(detected ? 'DEDO OK' : 'SIN DEDO', header.w - 82, header.y + 22);
 }
 
 export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { metrics } = state.layout;
   const { pressure, perfusionIndex: pi, arrhythmiaStatus: arr, arrhythmiaCount: arrCnt } = state.props;
 
-  ctx.fillStyle = 'rgba(6, 12, 22, 0.85)';
+  ctx.fillStyle = 'rgba(6, 12, 22, 0.88)';
   ctx.fillRect(metrics.x, metrics.y, metrics.w, metrics.h);
   ctx.strokeStyle = COLORS.PANEL_BORDER_DIM;
   ctx.beginPath();
@@ -519,6 +493,8 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   const dispSpo2 = state.displaySpo2;
   const dispSys = state.displaySys;
   const dispDia = state.displayDia;
+
+  // 1. Columna PULSO (HR)
   const hrColor = dispBpm <= 0 ? COLORS.TEXT_DIM
     : dispBpm < 50 ? COLORS.TEXT_DANGER
     : dispBpm < 60 ? COLORS.TEXT_WARN
@@ -529,47 +505,32 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
   ctx.textAlign = 'left';
-  ctx.fillText('FRECUENCIA CARDÃACA', 16, metrics.y + 26);
+  ctx.fillText('FRECUENCIA CARDÍACA', 14, metrics.y + 22);
 
-  ctx.font = `bold 56px ${FONT_MONO}`;
+  ctx.font = `bold 48px ${FONT_MONO}`;
   ctx.fillStyle = hrColor;
-  const heartPulse = state.props.isMonitoring && dispBpm > 30 ? (Math.sin(state.now / (60000 / Math.max(60, dispBpm)) * 2 * Math.PI) + 1) / 2 : 0;
-  ctx.save();
-  if (heartPulse > 0) {
-    ctx.shadowColor = hrColor;
-    ctx.shadowBlur = 6 + heartPulse * 6;
-  }
-  ctx.fillText(dispBpm > 0 ? dispBpm.toString() : '--', 16, metrics.y + 72);
-  ctx.restore();
+  ctx.fillText(dispBpm > 0 ? dispBpm.toString() : '--', 14, metrics.y + 68);
 
-  ctx.font = `12px ${FONT_MONO}`;
+  ctx.font = `11px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
-  ctx.fillText('BPM', 16, metrics.y + 90);
+  ctx.fillText('BPM', 14, metrics.y + 88);
 
   let hrLabel = '';
   if (dispBpm > 0) {
-    if (dispBpm < 50) hrLabel = 'BRADICARDIA SEVERA';
+    if (dispBpm < 50) hrLabel = 'BRADICARDIA';
     else if (dispBpm < 60) hrLabel = 'BRADICARDIA';
-    else if (dispBpm <= 100) hrLabel = 'NORMAL (SINUSAL)';
-    else if (dispBpm <= 120) hrLabel = 'TAQUICARDIA LEVE';
-    else if (dispBpm <= 150) hrLabel = 'TAQUICARDIA';
-    else hrLabel = 'TAQUICARDIA SEVERA';
+    else if (dispBpm <= 100) hrLabel = 'SINUSAL';
+    else if (dispBpm <= 120) hrLabel = 'TAQUICARDIA';
+    else hrLabel = 'TAQUICARDIA SEV.';
   }
   if (hrLabel) {
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = hrColor;
     ctx.textAlign = 'right';
-    ctx.fillText(hrLabel, colW - 12, metrics.y + 90);
+    ctx.fillText(hrLabel, colW - 10, metrics.y + 88);
   }
 
-  const s = state.bpmStats;
-  if (s.n > 0) {
-    ctx.font = `9px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_DIM;
-    ctx.textAlign = 'right';
-    ctx.fillText(`min:${s.min} max:${s.max}`, colW - 12, metrics.y + 26);
-  }
-
+  // 2. Columna SpO2
   const spo2Color = dispSpo2 <= 0 ? COLORS.TEXT_DIM
     : dispSpo2 >= 95 ? COLORS.SPO2
     : dispSpo2 >= 90 ? COLORS.TEXT_WARN
@@ -578,39 +539,39 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
   ctx.textAlign = 'left';
-  ctx.fillText('SATURACIÃ“N Oâ‚‚', colW + 16, metrics.y + 26);
+  ctx.fillText('SATURACIÓN O₂', colW + 14, metrics.y + 22);
 
-  ctx.font = `bold 56px ${FONT_MONO}`;
+  ctx.font = `bold 48px ${FONT_MONO}`;
   ctx.fillStyle = spo2Color;
-  ctx.fillText(dispSpo2 > 0 ? dispSpo2.toString() : '--', colW + 16, metrics.y + 72);
+  ctx.fillText(dispSpo2 > 0 ? dispSpo2.toString() : '--', colW + 14, metrics.y + 68);
 
-  ctx.font = `12px ${FONT_MONO}`;
+  ctx.font = `11px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
-  ctx.fillText('%', colW + 16 + (dispSpo2 > 0 ? 64 : 32), metrics.y + 72);
+  ctx.fillText('%', colW + 14 + (dispSpo2 > 0 ? 64 : 32), metrics.y + 68);
 
   let spLabel = '';
   if (dispSpo2 > 0) {
     if (dispSpo2 >= 95) spLabel = 'NORMOXIA';
-    else if (dispSpo2 >= 90) spLabel = 'HIPOXEMIA LEVE';
-    else if (dispSpo2 >= 85) spLabel = 'HIPOXEMIA MODERADA';
-    else spLabel = 'HIPOXEMIA SEVERA';
+    else if (dispSpo2 >= 90) spLabel = 'HIPOXEMIA';
+    else spLabel = 'HIPOXEMIA SEV.';
   }
-  ctx.font = `bold 10px ${FONT_MONO}`;
-  ctx.fillStyle = spo2Color;
-  ctx.textAlign = 'right';
-  if (spLabel) ctx.fillText(spLabel, colW * 2 - 12, metrics.y + 90);
+  if (spLabel) {
+    ctx.font = `bold 10px ${FONT_MONO}`;
+    ctx.fillStyle = spo2Color;
+    ctx.textAlign = 'right';
+    ctx.fillText(spLabel, colW * 2 - 10, metrics.y + 88);
+  }
 
   if (pi > 0) {
     ctx.font = `9px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'left';
-    ctx.fillText(`PI ${(pi * 100).toFixed(2)}%`, colW + 16, metrics.y + 90);
+    ctx.fillText(`PI ${(pi * 100).toFixed(2)}%`, colW + 14, metrics.y + 88);
   }
 
+  // 3. Columna Presión Arterial
   const sys = dispSys > 0 ? dispSys : pressure?.systolic || 0;
   const dia = dispDia > 0 ? dispDia : pressure?.diastolic || 0;
-  const map = sys > 0 && dia > 0 ? Math.round(dia + (sys - dia) / 3) : 0;
-  const pp = sys > 0 && dia > 0 ? sys - dia : 0;
 
   const bpColor = sys <= 0 ? COLORS.TEXT_DIM
     : sys >= 140 || dia >= 90 ? COLORS.TEXT_DANGER
@@ -618,47 +579,34 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     : sys < 90 || dia < 60 ? COLORS.TEXT_WARN
     : COLORS.BP;
 
-  const bpX = colW * 2 + 4;
+  const bpX = colW * 2 + 14;
 
   ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
   ctx.textAlign = 'left';
-  ctx.fillText('PRESIÃ“N ART.', bpX, metrics.y + 26);
+  ctx.fillText('PRESIÓN ART.', bpX, metrics.y + 22);
 
   ctx.font = `bold 28px ${FONT_MONO}`;
   ctx.fillStyle = bpColor;
-  const bpPending =
-    state.props.isMonitoring &&
-    sys <= 0 &&
-    (state.props.bpStatus === 'INSUFFICIENT_WINDOW' ||
-      state.props.bpStatus === 'NO_VALID_SIGNAL' ||
-      state.props.bpStatus === 'WARMUP');
-  ctx.fillText(
-    sys > 0 ? `${sys}/${dia}` : bpPending ? '···' : '--/--',
-    bpX,
-    metrics.y + 68,
-  );
+  ctx.fillText(sys > 0 ? `${sys}/${dia}` : '--/--', bpX, metrics.y + 64);
 
-  ctx.font = `12px ${FONT_MONO}`;
+  ctx.font = `11px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
-  ctx.fillText('mmHg', bpX, metrics.y + 90);
+  ctx.fillText('mmHg', bpX, metrics.y + 88);
 
   if (sys > 0) {
-    ctx.font = `9px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.textAlign = 'right';
-    ctx.fillText(`MAP ${map} · PP ${pp}`, metrics.w - 12, metrics.y + 68);
-
     let bpLabel = '';
-    if (sys >= 140 || dia >= 90) bpLabel = 'HIPERTENSIÃ“N';
+    if (sys >= 140 || dia >= 90) bpLabel = 'HIPERTENSIÓN';
     else if (sys >= 130 || dia >= 80) bpLabel = 'ELEVADA';
-    else if (sys < 90 || dia < 60) bpLabel = 'HIPOTENSIÃ“N';
+    else if (sys < 90 || dia < 60) bpLabel = 'HIPOTENSIÓN';
     else bpLabel = 'NORMAL';
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = bpColor;
-    ctx.fillText(bpLabel, metrics.w - 12, metrics.y + 102);
+    ctx.textAlign = 'right';
+    ctx.fillText(bpLabel, metrics.w - 10, metrics.y + 88);
   }
 
+  // Alerta de arritmia discreta si existe
   const rhythm = buildRhythmPanel(
     arr,
     arrCnt ?? 0,
@@ -666,36 +614,10 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     state.hrv,
   );
   if (rhythm.level === 'danger' || rhythm.level === 'warn') {
-    ctx.fillStyle =
-      rhythm.level === 'danger' ? 'rgba(127, 29, 29, 0.75)' : 'rgba(120, 53, 15, 0.65)';
-    ctx.fillRect(metrics.x + 12, metrics.y + 2, metrics.w - 24, 18);
-    ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.fillStyle = rhythm.level === 'danger' ? '#fecaca' : '#fde68a';
+    ctx.fillStyle = rhythm.level === 'danger' ? 'rgba(239, 68, 68, 0.9)' : 'rgba(245, 158, 11, 0.9)';
+    ctx.font = `bold 9px ${FONT_MONO}`;
     ctx.textAlign = 'center';
-    ctx.fillText(rhythm.title, metrics.w / 2, metrics.y + 14);
-  }
-
-  const fps = state.props.diagnostics?.sqm?.fpsEffective || 0;
-  const jitter = state.props.diagnostics?.sqm?.timestampJitterMs || 0;
-  const pd = state.props.diagnostics?.peakDetection as
-    | { confidence?: number; agreement?: { elgendi?: number } }
-    | undefined;
-  if (fps > 0) {
-    ctx.font = `8px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_DIM;
-    ctx.textAlign = 'right';
-    ctx.fillText(`${fps.toFixed(1)} FPS · Î”${jitter.toFixed(1)}ms`, metrics.w - 12, metrics.y + 12);
-  }
-  if (pd && typeof pd.confidence === 'number' && pd.confidence > 0) {
-    const ae = pd.agreement?.elgendi ?? 0;
-    ctx.font = `8px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_INFO;
-    ctx.textAlign = 'right';
-    ctx.fillText(
-      `Picos ensemble ${(pd.confidence * 100).toFixed(0)}% · E${(ae * 100).toFixed(0)}`,
-      metrics.w - 12,
-      metrics.y + (fps > 0 ? 24 : 12)
-    );
+    ctx.fillText(`⚠ ${rhythm.title}`, metrics.w / 2, metrics.y + 11);
   }
 }
 
@@ -784,7 +706,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.textAlign = 'left';
   ctx.fillStyle = COLORS.TEXT_DIM;
   ctx.font = `bold 10px ${FONT_MONO}`;
-  ctx.fillText('25 mm/s · 0.5â€“12 Hz · HIGH-FIDELITY PPG', plot.x + 8, plot.y - 8);
+  ctx.fillText('25 mm/s · 0.5–12 Hz', plot.x + 8, plot.y - 6);
 
 }
 
@@ -800,159 +722,37 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
  * el usuario entienda por qué se le pide ajustar.
  */
 export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
+  // La guía ergonómica de presión reside de forma nítida en el componente React PressureCoach.
+  // En el canvas mantenemos una barra lineal discreta en la base del gráfico.
   const p = state.props;
   const evidence = p.diagnostics?.placementEvidence;
-  // Sin evidencia no se afirma nada. Tampoco se exige "dedo detectado": la
-  // guía de "apoya el dedo" es precisamente la que más se necesita cuando no
-  // hay contacto.
   if (!evidence) return;
 
   const { plot } = state.layout;
-  const guidance = evidence.guidance;
-  const pressureScore = clamp01(
-    typeof evidence.pressureScore === 'number' ? evidence.pressureScore : 0.5,
-  );
-  const seal = clamp01(typeof evidence.seal === 'number' ? evidence.seal : evidence.coverage);
-  const blanching = clamp01(typeof evidence.blanching === 'number' ? evidence.blanching : 0);
+  const score = typeof evidence.pressureScore === 'number'
+    ? Math.max(0, Math.min(1, evidence.pressureScore))
+    : 0.5;
 
-  const gaugeW = Math.min(250, Math.max(180, plot.w * 0.52));
-  const gaugeH = 9;
-  const gaugeX = plot.x + 12;
-  const gaugeY = plot.y + plot.h - RR_TACHO_H - 30;
-  const panelH = 34;
-
-  // Paleta por ACCIÓN, no por etiqueta: la acción es lo que el usuario debe hacer.
-  let accent: string;
-  let accentSoft: string;
-  switch (guidance?.action) {
-    case 'RELEASE':
-      accent = '#ef4444';
-      accentSoft = 'rgba(239,68,68,0.22)';
-      break;
-    case 'PRESS_MORE':
-      accent = '#f59e0b';
-      accentSoft = 'rgba(245,158,11,0.22)';
-      break;
-    case 'HOLD':
-      accent = '#22c55e';
-      accentSoft = 'rgba(34,197,94,0.22)';
-      break;
-    case 'WARM':
-      // Frío/vasoconstricción: el problema no es la presión, es la perfusión.
-      accent = '#38bdf8';
-      accentSoft = 'rgba(56,189,248,0.20)';
-      break;
-    case 'REPOSITION':
-    case 'CENTER':
-      accent = '#a78bfa';
-      accentSoft = 'rgba(167,139,250,0.20)';
-      break;
-    default:
-      accent = '#94a3b8';
-      accentSoft = 'rgba(148,163,184,0.18)';
-  }
+  const barW = Math.min(180, plot.w * 0.4);
+  const barH = 3;
+  const barX = plot.x + (plot.w - barW) / 2;
+  const barY = plot.y + plot.h - 6;
 
   ctx.save();
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.6)';
+  ctx.fillRect(barX, barY, barW, barH);
 
-  // Fondo translúcido para legibilidad sobre la onda.
-  ctx.fillStyle = 'rgba(2, 6, 23, 0.82)';
-  ctx.fillRect(gaugeX - 6, gaugeY - 22, gaugeW + 12, panelH + 24);
-  ctx.strokeStyle = accentSoft;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(gaugeX - 6, gaugeY - 22, gaugeW + 12, panelH + 24);
+  // Zona objetivo
+  ctx.fillStyle = 'rgba(34, 197, 94, 0.5)';
+  ctx.fillRect(barX + barW * 0.44, barY, barW * 0.12, barH);
 
-  // Titular (la instrucción concreta) y detalle.
-  ctx.textAlign = 'left';
-  ctx.font = `bold 10px ${FONT_MONO}`;
-  ctx.fillStyle = accent;
-  const headline = guidance?.headline ?? 'PRESIÓN · AJUSTA EL DEDO';
-  ctx.fillText(clipText(ctx, headline, gaugeW), gaugeX, gaugeY - 9);
-
-  ctx.font = `8px ${FONT_MONO}`;
-  ctx.fillStyle = COLORS.TEXT_DIM;
-  const detail = guidance?.detail ?? '';
-  if (detail) ctx.fillText(clipText(ctx, detail, gaugeW), gaugeX, gaugeY + 1);
-
-  // Barra de grado continuo.
-  const barY = gaugeY + 7;
-  const grad = ctx.createLinearGradient(gaugeX, 0, gaugeX + gaugeW, 0);
-  grad.addColorStop(0, '#f59e0b');
-  grad.addColorStop(0.42, '#f59e0b');
-  grad.addColorStop(0.5, '#22c55e');
-  grad.addColorStop(0.58, '#22c55e');
-  grad.addColorStop(0.66, '#ef4444');
-  grad.addColorStop(1, '#ef4444');
-
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
-  ctx.fillRect(gaugeX - 1, barY - 1, gaugeW + 2, gaugeH + 2);
-  ctx.fillStyle = grad;
-  ctx.fillRect(gaugeX, barY, gaugeW, gaugeH);
-
-  // Banda objetivo (Pt ≈ 0).
-  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(gaugeX + gaugeW * 0.44, barY - 2, gaugeW * 0.14, gaugeH + 4);
-
-  // Aguja.
-  const needleX = gaugeX + gaugeW * Math.max(0.03, Math.min(0.97, pressureScore));
-  const pulseAlpha =
-    guidance?.action === 'RELEASE' ? 0.55 + 0.45 * Math.abs(state.sweepPulse) : 1;
-  ctx.fillStyle = `rgba(255,255,255,${pulseAlpha.toFixed(3)})`;
+  // Cursor aguja
+  const needleX = barX + barW * score;
+  ctx.fillStyle = '#ffffff';
   ctx.beginPath();
-  ctx.moveTo(needleX, barY - 2);
-  ctx.lineTo(needleX - 5, barY - 8);
-  ctx.lineTo(needleX + 5, barY - 8);
-  ctx.closePath();
+  ctx.arc(needleX, barY + barH / 2, 3, 0, Math.PI * 2);
   ctx.fill();
-
-  // Sub-lecturas: sellado (¿tapa la lente?) y blanqueo (¿hay isquemia?).
-  const subY = barY + gaugeH + 6;
-  const halfW = (gaugeW - 8) / 2;
-  drawMiniBar(ctx, gaugeX, subY, halfW, seal, '#38bdf8', 'SELLO');
-  drawMiniBar(ctx, gaugeX + halfW + 8, subY, halfW, blanching, blanching >= 0.5 ? '#ef4444' : '#64748b', 'BLANQUEO');
-
   ctx.restore();
-}
-
-/** Recorte a [0..1] tolerante a NaN (las métricas del modelo pueden faltar). */
-function clamp01(v: number): number {
-  return Number.isFinite(v) ? (v < 0 ? 0 : v > 1 ? 1 : v) : 0;
-}
-
-/** Texto recortado con elipsis para que nunca se salga del panel. */
-function clipText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
-  if (ctx.measureText(text).width <= maxWidth) return text;
-  let lo = 0;
-  let hi = text.length;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (ctx.measureText(`${text.slice(0, mid)}…`).width <= maxWidth) lo = mid;
-    else hi = mid - 1;
-  }
-  return lo > 0 ? `${text.slice(0, lo)}…` : '';
-}
-
-/** Barra compacta etiquetada para las sub-lecturas del gauge. */
-function drawMiniBar(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  value: number,
-  color: string,
-  label: string,
-): void {
-  const v = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
-  ctx.font = `7px ${FONT_MONO}`;
-  ctx.textAlign = 'left';
-  ctx.fillStyle = COLORS.TEXT_DIM;
-  ctx.fillText(label, x, y + 5);
-  const barX = x + 44;
-  const barW = Math.max(10, w - 44);
-  ctx.fillStyle = 'rgba(15,23,42,0.9)';
-  ctx.fillRect(barX, y, barW, 5);
-  ctx.fillStyle = color;
-  ctx.fillRect(barX, y, barW * v, 5);
 }
 
 export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
@@ -1258,90 +1058,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       }
     }
 
-    const rrForLabels = state.props.rrIntervals ?? [];
-    const validRr = rrForLabels.filter((r) => isPhysiologicalRR(r));
-    const meanIbi = validRr.length > 0 ? validRr.reduce((a, v) => a + v, 0) / validRr.length : state.ibiDisplay;
-
-    // IBI Labels
-    ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.textAlign = 'center';
-    const visiblePeaks: { x: number; y: number; time: number }[] = [];
-    for (const beat of state.beatHistory) {
-      const age = state.now - beat.time - VISUAL_DELAY_MS;
-      if (age > WINDOW_MS || age < 0) continue;
-      const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
-      if (x < plot.x || x > plot.x + plot.w) continue;
-      visiblePeaks.push({ x, y: 0, time: beat.time });
-    }
-
-    for (let i = 0; i < visiblePeaks.length - 1; i++) {
-      const p1 = visiblePeaks[i];
-      const p2 = visiblePeaks[i + 1];
-      const ibiMs = Math.abs(p2.time - p1.time);
-      if (!isPhysiologicalRR(ibiMs)) continue;
-      const label = ibiSegmentLabel(ibiMs, meanIbi);
-      const midX = (p1.x + p2.x) / 2;
-      const topY = plot.y + 40;
-      ctx.strokeStyle = label.level === 'danger' ? 'rgba(248, 113, 113, 0.7)' : label.level === 'warn' ? 'rgba(245, 158, 11, 0.65)' : 'rgba(103, 232, 249, 0.5)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(p1.x, topY + 6);
-      ctx.lineTo(p1.x, topY);
-      ctx.lineTo(p2.x, topY);
-      ctx.lineTo(p2.x, topY + 6);
-      ctx.stroke();
-      ctx.fillStyle = levelColor(label.level);
-      ctx.fillText(label.text, midX, topY - 4);
-    }
   }
-  } // â”€â”€ fin MODO 2D â”€â”€
-
-  // Tachogram (panel clÃ­nico: 2D en ambos modos)
-  const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
-  ctx.fillStyle = 'rgba(8, 14, 26, 0.85)';
-  ctx.fillRect(plot.x + 2, tachoY - 4, plot.w - 4, RR_TACHO_H);
-  ctx.font = `bold 8px ${FONT_MONO}`;
-  ctx.fillStyle = COLORS.TEXT_DIM;
-  ctx.textAlign = 'left';
-  ctx.fillText('TACHOGRAMA RR (IBI)', plot.x + 8, tachoY + 8);
-
-  const rhythm = buildRhythmPanel(p.arrhythmiaStatus, p.arrhythmiaCount ?? 0, p.rrIntervals ?? [], state.hrv);
-  const panelH = 56;
-  const panelY = plot.y + 8;
-  ctx.fillStyle = 'rgba(8, 14, 26, 0.88)';
-  ctx.strokeStyle = rhythm.level === 'danger' ? 'rgba(239, 68, 68, 0.55)' : rhythm.level === 'warn' ? 'rgba(245, 158, 11, 0.45)' : 'rgba(34, 197, 94, 0.35)';
-  ctx.lineWidth = 1;
-  ctx.fillRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH);
-  ctx.strokeRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH);
-  ctx.textAlign = 'left';
-  ctx.font = `bold 11px ${FONT_MONO}`;
-  ctx.fillStyle = levelColor(rhythm.level);
-  ctx.fillText(rhythm.title, plot.x + 16, panelY + 16);
-  ctx.font = `9px ${FONT_MONO}`;
-  ctx.fillStyle = '#cbd5e1';
-  ctx.fillText(rhythm.detail, plot.x + 16, panelY + 30);
-  ctx.fillStyle = '#94a3b8';
-  ctx.fillText(rhythm.guidance, plot.x + 16, panelY + 44);
-
-  if (p.isMonitoring) {
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.85)';
-    ctx.beginPath();
-    ctx.arc(plot.x + plot.w - 42, plot.y + 18, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.fillStyle = '#fca5a5';
-    ctx.textAlign = 'right';
-    ctx.fillText('REC', plot.x + plot.w - 12, plot.y + 22);
   }
-  ctx.font = `bold 9px ${FONT_MONO}`;
-  ctx.textAlign = 'right';
-  ctx.fillStyle = 'rgba(34, 197, 94, 0.9)';
-  ctx.fillText(`SQI ${Math.round(p.quality)}%`, plot.x + plot.w - 12, plot.y + 38);
-  ctx.fillStyle = 'rgba(103, 232, 249, 0.9)';
-  ctx.fillText(`PI ${(p.perfusionIndex ?? 0).toFixed(3)}`, plot.x + plot.w - 12, plot.y + 52);
-  const contact = formatContactState(p.contactState);
-  ctx.fillStyle = '#94a3b8';
-  ctx.fillText(contact, plot.x + plot.w - 12, plot.y + 66);
 
   ctx.restore();
 }
@@ -1413,7 +1131,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.font = `9px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'center';
-    ctx.fillText('Acumulandoâ€¦', trend.x + trend.w / 2, trend.y + trend.h / 2 + 4);
+    ctx.fillText('Acumulando…', trend.x + trend.w / 2, trend.y + trend.h / 2 + 4);
     return;
   }
 
@@ -1634,7 +1352,7 @@ export function drawFooter(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     : 0;
   const alarms: string[] = [];
   if (bpm != null && bpm > 0 && (bpm < 50 || bpm > 120)) alarms.push('HR');
-  if (spo2 > 0 && spo2 < 92) alarms.push('SpOâ‚‚');
+  if (spo2 > 0 && spo2 < 92) alarms.push('SpO₂');
   if (map > 0 && (map < 65 || map > 110)) alarms.push('MAP');
   if (pi > 0 && pi < 0.005) alarms.push('PI');
 
@@ -1669,6 +1387,6 @@ export function drawFooter(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'right';
     const arrCount = beats.filter(b => b.isArrhythmia).length;
-    ctx.fillText(`Ãšltimos ${showN} · N:${beats.length - arrCount} A:${arrCount}`, footer.x + footer.w - 12, dy + 14);
+    ctx.fillText(`Últimos ${showN} · N:${beats.length - arrCount} A:${arrCount}`, footer.x + footer.w - 12, dy + 14);
   }
 }
