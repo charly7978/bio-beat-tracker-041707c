@@ -78,9 +78,6 @@ interface VitalSignsProcessorAPI {
         dcBlue?: number;
       };
     },
-    faceBvp?: number,
-    faceBpm?: number,
-    faceQuality?: number,
     accelRespiration?: { rpm: number; quality: number },
     morphologyBatch?: TimedSignalSample[],
     sampleTimestampMs?: number,
@@ -834,9 +831,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         enrichedSqm,
         lastSignal.morphologyValue ?? lastSignal.filteredValue,
         splitterChannels,
-        undefined,
-        undefined,
-        undefined,
         lastSignal.accelRespiration,
         morphologyBatch,
         lastSignal.timestamp
@@ -938,3 +932,4 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     applyLiveDisplaySmooth,
   };
 }
+

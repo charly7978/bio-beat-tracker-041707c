@@ -322,7 +322,7 @@ export class VitalSignsProcessor {
       fusedBpm = (currentBPM * fingerWeight + faceBpm * faceWeight) / (fingerWeight + faceWeight);
     }
 
-    this.calculateVitalSigns(signalValue, effectiveSqi, fusedBpm, rrData);
+    this.calculateVitalSigns(signalValue, effectiveSqi, fusedBpm, rrData, sampleTimestampMs);
 
     return this.getFormattedResult();
   }
@@ -696,7 +696,10 @@ export class VitalSignsProcessor {
             ? "Beer–Lambert ratio-of-ratios con perfil de referencia vigente"
             : "Estimación ratio-of-ratios cámara+flash (no sustituye oxímetro certificado); calibre con oxímetro para uso clínico",
         signalQuality: { ...commonSQM },
-        diagnostics: { rValue: (() => { const h = this.spo2Calculator.getRValueHistory(); return h.length ? h[h.length - 1] : undefined; })() },
+        diagnostics: {
+          rValue: (() => { const h = this.spo2Calculator.getRValueHistory(); return h.length ? h[h.length - 1] : undefined; })(),
+          opticalTiming: this.spo2Calculator.getTimingDiagnostics(),
+        },
         calibration: spo2Calib
       },
       bloodPressure: {
@@ -778,6 +781,7 @@ export class VitalSignsProcessor {
     signalQuality: number,
     currentBPM: number,
     rrData?: RRData,
+    sampleTimestampMs?: number,
   ): void {
     const minQualityForCalculation = 5; // Bajado de 12 para permitir visualización temprana
     if (signalQuality < minQualityForCalculation) {
@@ -805,7 +809,7 @@ export class VitalSignsProcessor {
     // === SpO2 — Basado en física (Beer-Lambert), no estadística ===
     // SpO2 usa ratios ópticos AC/DC directamente de la cámara.
     // Solo necesita datos RGB válidos y confidence no-INVALID.
-    const spo2 = this.spo2Calculator.calculate(this.rgbData, this.frameCount);
+    const spo2 = this.spo2Calculator.calculate(this.rgbData, this.frameCount, sampleTimestampMs);
     const spo2Conf = this.getSpo2Confidence();
     if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && spo2Conf !== 'INVALID') {
       const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 5;
@@ -978,5 +982,6 @@ export class VitalSignsProcessor {
     this.bpTotalWeight = 0;
   }
 }
+
 
 

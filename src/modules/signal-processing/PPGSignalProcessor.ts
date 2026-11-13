@@ -9,7 +9,7 @@ import {
   sanitizeBackpressureConfig,
   type BackpressureConfig,
 } from '../../lib/perf/backpressureConfig';
-import type { MeasurementStatus, SignalQualityMetrics } from '../../types/measurements';
+import type { MeasurementStatus, SignalQualityMetrics, MotionObservation } from '../../types/measurements';
 import {
   SignalQualityIndex,
   createDiagnosticStatusState,
@@ -69,7 +69,8 @@ import {
   resetActiveStabilizer,
 } from '../../lib/signal/activeStabilizer';
 import { bandLimitedDominantFreq } from './shared/dsp';
-import { RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
+import { IMU_RESPIRATION_DEFAULTS, RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
+import { resampleTimedSignal, type TimedSignalSample } from '../../lib/signal/timedSamples';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -229,16 +230,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   /** Cuenta regresiva de supresiÃ³n post-motion para que el ringing del BPF decaiga */
   private postMotionSuppression = 0;
 
-  // IMU â†’ RESPIRACIÃ“N (modalidad ACC, no-Ã³ptica). La respiraciÃ³n mece levemente
-  // la mano/telÃ©fono â†’ el acelerÃ³metro oscila en banda respiratoria. Se sigue la
-  // gravedad con un EMA lento (â‰ˆDC) y se guarda la proyecciÃ³n AC del vector sobre
-  // la direcciÃ³n de gravedad, muestreada a ACCEL_RESP_HZ. El periodograma sobre
-  // ese buffer da una estimaciÃ³n de FR independiente de la cÃ¡mara.
-  private readonly ACCEL_RESP_HZ = 20;
-  private readonly accelRespRing = new RingF32(512); // â‰ˆ25 s a 20 Hz
+  // La serie IMU conserva tiempos de adquisición de la página, igual que los frames.
+  // La presencia de una oscilación en mano/teléfono no demuestra origen respiratorio.
+  private accelRespSamples: TimedSignalSample[] = [];
   private gravityEma = { x: 0, y: 0, z: 0 };
   private gravityEmaInit = false;
-  private lastAccelRespPushMs = 0;
+  private motionTimeOriginMs: number | null = null;
+  private lastMotionTimestampMs = 0;
   private lastAccelRespComputeMs = 0;
   private accelRespEstimate: { rpm: number; quality: number } | null = null;
 
@@ -683,7 +681,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     );
 
     // Refresca (throttled) la estimaciÃ³n respiratoria del acelerÃ³metro antes de emitir.
-    this.updateAccelRespEstimate(timestamp);
+    const accelRespiration = this.getAccelRespirationEstimate(timestamp);
 
     this.onSignalReady({
       timestamp,
@@ -705,7 +703,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       rawRed: roi.rawRed,
       rawGreen: roi.rawGreen,
       rawBlue: roi.rawBlue,
-      accelRespiration: this.accelRespEstimate ?? undefined,
+      accelRespiration: accelRespiration ?? undefined,
       diagnostics: {
         ...this.buildFingerDiagnostics(roi, motionArtifact, displayStatus, {
           message:
@@ -1601,12 +1599,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.stableContactCount = 0;
     this.instantLostStreak = 0;
     this.lastInstantFinger = false;
-    this.accelRespRing.reset();
-    this.gravityEmaInit = false;
-    this.accelRespEstimate = null;
-    this.lastAccelRespPushMs = 0;
-    this.lastAccelRespComputeMs = 0;
-    this.lastAcceleration = { x: 0, y: 0, z: 0 };
+    this.resetMotionAcquisition();
     this.sourceScores = { R: 0, G: 0, RG: 0, POS: 0 };
     this.activeSource = 'RG';
     this.lastSourceSwitch = 0;
@@ -1637,82 +1630,171 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.signalMotionScore * (1 - Q.MOTION_SIGNAL_EMA_ALPHA) + combinedInst * Q.MOTION_SIGNAL_EMA_ALPHA;
   }
 
-  private handleMotionEvent = (event: DeviceMotionEvent) => {
-    const acc = event.accelerationIncludingGravity;
-    if (!acc || acc.x === null || acc.y === null || acc.z === null) return;
+  private resetMotionAcquisition(): void {
+    this.accelRespSamples = [];
+    this.gravityEmaInit = false;
+    this.motionTimeOriginMs = null;
+    this.lastMotionTimestampMs = 0;
+    this.lastAccelRespComputeMs = 0;
+    this.accelRespEstimate = null;
+    this.lastAcceleration = { x: 0, y: 0, z: 0 };
+    this.motionScore = 0;
+  }
 
-    const dx = (acc.x ?? 0) - this.lastAcceleration.x;
-    const dy = (acc.y ?? 0) - this.lastAcceleration.y;
-    const dz = (acc.z ?? 0) - this.lastAcceleration.z;
+  /** Ingesta tipada: el Worker no convierte su hora de recepción en adquisición. */
+  ingestMotionSample(observation: MotionObservation): void {
+    const cfg = IMU_RESPIRATION_DEFAULTS;
+    const acc = observation.accelerationIncludingGravity;
+    if (
+      observation.clockDomain !== 'page-performance' ||
+      !Number.isFinite(observation.timeOriginMs) || observation.timeOriginMs <= 0 ||
+      !Number.isFinite(observation.timestampMs) ||
+      !acc || acc.x === null || acc.y === null || acc.z === null ||
+      !Number.isFinite(acc.x) || !Number.isFinite(acc.y) || !Number.isFinite(acc.z)
+    ) {
+      this.resetMotionAcquisition();
+      return;
+    }
 
-    const ax = acc.x ?? 0;
-    const ay = acc.y ?? 0;
-    const az = acc.z ?? 0;
+    // Algunos navegadores antiguos expresan Event.timeStamp en milisegundos Unix.
+    // Ambas formas se normalizan al reloj de la página que también usa la cámara.
+    const timestampMs = observation.timestampMs >= observation.timeOriginMs
+      ? observation.timestampMs - observation.timeOriginMs
+      : observation.timestampMs;
+    if (!(timestampMs > 0)) {
+      this.resetMotionAcquisition();
+      return;
+    }
+    const recent = this.accelRespSamples.slice(-cfg.cadenceWindowSamples);
+    const intervals = recent.slice(1).map((sample, i) => sample.timestampMs - recent[i].timestampMs);
+    intervals.sort((a, b) => a - b);
+    const middle = Math.floor(intervals.length / 2);
+    const typicalIntervalMs = intervals.length % 2 === 0
+      ? (intervals[middle - 1] + intervals[middle]) / 2
+      : intervals[middle];
+    const maxContinuousGapMs = intervals.length >= 3
+      ? Math.min(cfg.maxGapMs, typicalIntervalMs * cfg.maxGapMultiple)
+      : cfg.maxGapMs;
+    if (
+      this.motionTimeOriginMs !== observation.timeOriginMs ||
+      timestampMs < this.lastMotionTimestampMs ||
+      timestampMs - this.lastMotionTimestampMs > maxContinuousGapMs
+    ) this.resetMotionAcquisition();
+    if (timestampMs === this.lastMotionTimestampMs) return;
+
+    const hadSample = this.lastMotionTimestampMs > 0;
+    const deltaMs = hadSample ? timestampMs - this.lastMotionTimestampMs : 0;
+    this.motionTimeOriginMs = observation.timeOriginMs;
+    this.lastMotionTimestampMs = timestampMs;
+    const ax = acc.x;
+    const ay = acc.y;
+    const az = acc.z;
+    const dx = hadSample ? ax - this.lastAcceleration.x : 0;
+    const dy = hadSample ? ay - this.lastAcceleration.y : 0;
+    const dz = hadSample ? az - this.lastAcceleration.z : 0;
     this.lastAcceleration = { x: ax, y: ay, z: az };
 
-    // --- Captura de respiraciÃ³n por acelerÃ³metro (modalidad ACC) ---
-    // Gravedad â‰ˆ EMA lento (corte muy por debajo de la banda respiratoria).
     if (!this.gravityEmaInit) {
       this.gravityEma = { x: ax, y: ay, z: az };
       this.gravityEmaInit = true;
     } else {
-      const gA = 0.02;
-      this.gravityEma.x += gA * (ax - this.gravityEma.x);
-      this.gravityEma.y += gA * (ay - this.gravityEma.y);
-      this.gravityEma.z += gA * (az - this.gravityEma.z);
+      // Misma constante de tiempo aunque cambie la frecuencia real del sensor.
+      const alpha = 1 - Math.exp(-deltaMs / cfg.gravityTimeConstantMs);
+      this.gravityEma.x += alpha * (ax - this.gravityEma.x);
+      this.gravityEma.y += alpha * (ay - this.gravityEma.y);
+      this.gravityEma.z += alpha * (az - this.gravityEma.z);
     }
     const gMag = Math.hypot(this.gravityEma.x, this.gravityEma.y, this.gravityEma.z) || 1;
-    // ProyecciÃ³n del vector AC (accel âˆ’ gravedad) sobre la direcciÃ³n de gravedad:
-    // la aceleraciÃ³n "vertical" cuya oscilaciÃ³n lenta porta la respiraciÃ³n.
     const vertAccel =
       ((ax - this.gravityEma.x) * this.gravityEma.x +
         (ay - this.gravityEma.y) * this.gravityEma.y +
-        (az - this.gravityEma.z) * this.gravityEma.z) /
-      gMag;
-    const nowMotion = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    if (nowMotion - this.lastAccelRespPushMs >= 1000 / this.ACCEL_RESP_HZ) {
-      this.lastAccelRespPushMs = nowMotion;
-      this.accelRespRing.push(vertAccel);
-    }
+        (az - this.gravityEma.z) * this.gravityEma.z) / gMag;
+    this.accelRespSamples.push({ value: vertAccel, timestampMs });
+    let pruneCount = Math.max(0, this.accelRespSamples.length - cfg.maxSamples);
+    while (
+      pruneCount < this.accelRespSamples.length &&
+      timestampMs - this.accelRespSamples[pruneCount].timestampMs > cfg.windowMs
+    ) pruneCount++;
+    if (pruneCount > 0) this.accelRespSamples.splice(0, pruneCount);
 
     const accelRMS = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    const rot = event.rotationRate;
+    const rot = observation.rotationRate;
     let gyroRMS = 0;
-
-    if (rot && rot.alpha !== null && rot.beta !== null && rot.gamma !== null) {
-      gyroRMS = Math.sqrt((rot.alpha ?? 0) ** 2 + (rot.beta ?? 0) ** 2 + (rot.gamma ?? 0) ** 2) / 120;
+    if (
+      rot && rot.alpha !== null && rot.beta !== null && rot.gamma !== null &&
+      Number.isFinite(rot.alpha) && Number.isFinite(rot.beta) && Number.isFinite(rot.gamma)
+    ) {
+      gyroRMS = Math.sqrt(rot.alpha ** 2 + rot.beta ** 2 + rot.gamma ** 2) / 120;
     }
-
     const rawScore = accelRMS * 0.5 + gyroRMS * 0.3;
     this.motionScore = this.motionScore * 0.85 + rawScore * 0.15;
+  }
+
+  private handleMotionEvent = (event: DeviceMotionEvent) => {
+    this.ingestMotionSample({
+      timestampMs: event.timeStamp,
+      timeOriginMs: performance.timeOrigin,
+      clockDomain: 'page-performance',
+      accelerationIncludingGravity: event.accelerationIncludingGravity,
+      rotationRate: event.rotationRate,
+    });
   };
 
-  /**
-   * Recalcula (cada ~1 s) la estimaciÃ³n de FR del acelerÃ³metro por periodograma
-   * sobre el buffer respiratorio. Cachea {rpm, quality} o null si no hay seÃ±al
-   * periÃ³dica clara. La Smart Fusion (en VitalSignsProcessor) decide si fusiona.
-   */
-  private updateAccelRespEstimate(nowMs: number): void {
-    if (nowMs - this.lastAccelRespComputeMs < 1000) return;
-    this.lastAccelRespComputeMs = nowMs;
-    if (this.accelRespRing.length < this.ACCEL_RESP_HZ * 8) {
-      this.accelRespEstimate = null;
-      return;
+  /** Lectura acotada a una ventana fresca en el mismo reloj que los frames. */
+  getAccelRespirationEstimate(nowMs: number): { rpm: number; quality: number } | null {
+    const cfg = IMU_RESPIRATION_DEFAULTS;
+    // Un frame de otra época no puede reutilizar evidencia calculada en su futuro.
+    if (nowMs < this.lastAccelRespComputeMs) {
+      this.resetMotionAcquisition();
+      return null;
     }
-    const series = this.accelRespRing.tail(this.accelRespRing.length);
+    const latest = this.accelRespSamples[this.accelRespSamples.length - 1];
+    if (
+      !latest || !Number.isFinite(nowMs) ||
+      nowMs - latest.timestampMs > cfg.maxAgeMs ||
+      latest.timestampMs - nowMs > cfg.maxAgeMs
+    ) {
+      this.resetMotionAcquisition();
+      return null;
+    }
+    if (nowMs - this.lastAccelRespComputeMs < cfg.computeIntervalMs) {
+      return this.accelRespEstimate;
+    }
+    this.lastAccelRespComputeMs = nowMs;
+    // No usar muestras posteriores a la ventana de cámara que solicita el resultado.
+    const samples = this.accelRespSamples.filter((sample) => sample.timestampMs <= nowMs);
+    if (
+      samples.length < 2 ||
+      samples[samples.length - 1].timestampMs - samples[0].timestampMs < cfg.minWindowMs
+    ) {
+      this.accelRespEstimate = null;
+      return null;
+    }
+    const uniform = resampleTimedSignal(samples, {
+      // No decimar: la frecuencia observada preserva el ancho de banda adquirido.
+      targetRateHz: cfg.maxSampleRateHz,
+      minRateHz: cfg.minSampleRateHz,
+      maxRateHz: cfg.maxSampleRateHz,
+      maxGapMultiple: cfg.maxGapMultiple,
+      maxJitterRatio: cfg.maxJitterRatio,
+    });
+    if (!uniform) {
+      this.accelRespEstimate = null;
+      return null;
+    }
     const { freqHz, quality } = bandLimitedDominantFreq(
-      series,
-      this.ACCEL_RESP_HZ,
+      uniform.samples,
+      uniform.sampleRateHz,
       RESPIRATION_DEFAULTS.minRpm / 60,
       RESPIRATION_DEFAULTS.maxRpm / 60,
     );
     const rpm = freqHz * 60;
     this.accelRespEstimate =
       quality >= RESP_SMART_FUSION.MIN_MODALITY_QUALITY &&
-      rpm >= RESPIRATION_DEFAULTS.minRpm &&
-      rpm <= RESPIRATION_DEFAULTS.maxRpm
+      rpm >= RESPIRATION_DEFAULTS.minRpm && rpm <= RESPIRATION_DEFAULTS.maxRpm
         ? { rpm, quality }
         : null;
+    return this.accelRespEstimate;
   }
 
   private startMotionListener(): void {
@@ -1740,14 +1822,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private stopMotionListener(): void {
-    if (!this.motionListenerActive) return;
-    if (typeof window === 'undefined') return;
-    window.removeEventListener('devicemotion', this.handleMotionEvent);
+    if (this.motionListenerActive && typeof window !== 'undefined') {
+      window.removeEventListener('devicemotion', this.handleMotionEvent);
+    }
     this.motionListenerActive = false;
-    this.motionScore = 0;
-    this.accelRespRing.reset();
-    this.gravityEmaInit = false;
-    this.accelRespEstimate = null;
+    this.resetMotionAcquisition();
   }
 
   // clamp() importado desde utils/math.ts
@@ -1841,3 +1920,4 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return { ...this.backpressureConfig };
   }
 }
+

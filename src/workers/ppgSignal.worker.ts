@@ -1,5 +1,6 @@
 import { PPGSignalProcessor } from '../modules/signal-processing/PPGSignalProcessor';
 import type { ProcessedSignal, ProcessingError } from '../types/signal';
+import type { MotionObservation } from '../types/measurements';
 
 let processor: PPGSignalProcessor | null = null;
 
@@ -69,25 +70,8 @@ self.onmessage = async (event: MessageEvent) => {
 
       case 'motion': {
         if (!processor) return;
-        // Inyectar evento de movimiento manualmente en el procesador
-        const { accelerationIncludingGravity, rotationRate } = data as {
-          accelerationIncludingGravity: { x: number; y: number; z: number } | null;
-          rotationRate: { alpha: number; beta: number; gamma: number } | null;
-        };
-        
-        // Simular DeviceMotionEvent compatible con el procesador
-        const mockEvent = {
-          accelerationIncludingGravity,
-          rotationRate
-        } as unknown as DeviceMotionEvent;
-
-        // Acceder al manejador de eventos interno de movimiento
-        const pWithMotion = processor as unknown as {
-          handleMotionEvent?: (e: DeviceMotionEvent) => void;
-        };
-        if (typeof pWithMotion.handleMotionEvent === 'function') {
-          pWithMotion.handleMotionEvent(mockEvent);
-        }
+        // Mantener el reloj de la página: también es el de processFrame(timestamp).
+        processor.ingestMotionSample(data as MotionObservation);
         break;
       }
 
@@ -120,3 +104,4 @@ self.onmessage = async (event: MessageEvent) => {
     });
   }
 };
+

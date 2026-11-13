@@ -1,6 +1,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ProcessedSignal, ProcessingError } from '../types/signal';
+import type { MotionObservation } from '../types/measurements';
 import {
   loadBackpressureConfig,
   saveBackpressureConfig,
@@ -207,13 +208,18 @@ export const useSignalProcessor = () => {
     const handleMotionEvent = (event: DeviceMotionEvent) => {
       const acc = event.accelerationIncludingGravity;
       const rot = event.rotationRate;
+      const observation: MotionObservation = {
+        // Conservar el reloj del evento aunque el Worker reciba tarde.
+        timestampMs: event.timeStamp,
+        timeOriginMs: performance.timeOrigin,
+        clockDomain: 'page-performance',
+        accelerationIncludingGravity: acc ? { x: acc.x, y: acc.y, z: acc.z } : null,
+        rotationRate: rot ? { alpha: rot.alpha, beta: rot.beta, gamma: rot.gamma } : null,
+      };
 
       workerRef.current?.postMessage({
         type: 'motion',
-        data: {
-          accelerationIncludingGravity: acc ? { x: acc.x, y: acc.y, z: acc.z } : null,
-          rotationRate: rot ? { alpha: rot.alpha, beta: rot.beta, gamma: rot.gamma } : null
-        }
+        data: observation,
       });
     };
 
@@ -354,3 +360,4 @@ export const useSignalProcessor = () => {
     setSignalCallback,
   };
 };
+
