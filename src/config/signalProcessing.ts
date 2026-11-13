@@ -4,6 +4,27 @@
  */
 import { VITAL_THRESHOLDS } from './vitalThresholds';
 
+/** Límites temporales de adquisición, compartidos por cámara y detector. */
+export const CAPTURE_TIMING_DEFAULTS = {
+  minSampleRateHz: 5,
+  maxSampleRateHz: 120,
+  maxFrameGapMs: 250,
+  motionRecoveryMs: 650,
+};
+
+/** Recuperación óptica previa al bloqueo manual, sin presuponer marca de cámara. */
+export const CAMERA_EXPOSURE_RECOVERY_DEFAULTS = {
+  clippingDwellMs: 600,
+  observationGapMs: 500,
+  cooldownMs: 1_500,
+  maxAttempts: 6,
+  maxNoProgressAttempts: 2,
+  clippedFraction: 0.5,
+  stepEv: 0.5,
+  minImageLevelProgress: 3,
+  minClippedFractionProgress: 0.05,
+};
+
 /** Ventanas y validez temporal de observaciones IMU con reloj de adquisición. */
 export const IMU_RESPIRATION_DEFAULTS = {
   windowMs: 25_000,

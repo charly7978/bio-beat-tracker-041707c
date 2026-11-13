@@ -10,13 +10,14 @@
  *      hacia el piso + cara superior con grosor en profundidad + sombra proyectada.
  *
  * CLAVE: la onda NO se recalcula. Reusa EXACTAMENTE las mismas coordenadas honestas
- * (`coords`) que produce el render 2D (mismo gate de strength, misma agudeza ^1.75,
+ * (`coords`) que produce el render 2D (mismo gate de strength, mismo mapeo de amplitud,
  * misma marcaciÃ³n de arritmia, mismo barrido temporal). El 3D es sÃ³lo presentaciÃ³n:
  * la actividad cardÃ­aca del dedo se representa idÃ©ntica al modo 2D.
  *
  * Sin dependencias de Three.js / React-Three-Fiber (no compilan en mÃ³vil, son pesadas).
  * SÃ³lo importa el TIPO del renderer (erased en runtime) â†’ sin ciclos de import.
  */
+import { traceMeasuredPath } from './measuredTrace';
 import { WINDOW_MS, type PpgRenderState } from './ppgCanvasRenderer';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import {
@@ -93,12 +94,12 @@ const WAVE_D_BACK = 0.17;
 
 // Paleta local (evita import de valores desde el renderer â†’ sin ciclo en runtime).
 const C = {
-  signal: '34, 197, 94', // verde ECG
-  signalBright: '74, 222, 128',
+  signal: '104, 221, 192', // verde ECG
+  signalBright: '151, 237, 217',
   arr: '239, 68, 68',
-  cyan: '0, 242, 255',
+  cyan: '131, 204, 228',
   horizon: '103, 232, 249',
-  gridMinor: '255, 255, 255', // lÃ­neas de grilla BLANCAS
+  gridMinor: '137, 165, 180', // lÃ­neas de grilla BLANCAS
 };
 
 export function makeProjector(state: PpgRenderState): Projector {
@@ -153,7 +154,7 @@ export function drawGrid3DBackdrop(ctx: CanvasRenderingContext2D, state: PpgRend
   ctx.beginPath();
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
-  ctx.fillStyle = '#000000';
+  ctx.fillStyle = '#09121a';
   ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
   ctx.restore();
 }
@@ -201,7 +202,7 @@ export function drawGrid3DLines(ctx: CanvasRenderingContext2D, state: PpgRenderS
     const b = proj.floorPoint(halfX, z);
     const isMajor = rowIdx % 5 === 0;
     const fade = 0.3 + 0.7 * a.scale;
-    const alpha = (isMajor ? 0.55 : 0.25) * fade;
+    const alpha = (isMajor ? 0.32 : 0.12) * fade;
     ctx.strokeStyle = `rgba(${C.gridMinor}, ${alpha.toFixed(3)})`;
     ctx.lineWidth = isMajor ? 1.2 : 0.7;
     ctx.beginPath();
@@ -218,7 +219,7 @@ export function drawGrid3DLines(ctx: CanvasRenderingContext2D, state: PpgRenderS
     const far = proj.floorPoint(xw, proj.zFar);
     const isMajor = k % 5 === 0;
     const g = ctx.createLinearGradient(near.x, near.y, far.x, far.y);
-    g.addColorStop(0, `rgba(${C.gridMinor}, ${isMajor ? 0.55 : 0.25})`);
+    g.addColorStop(0, `rgba(${C.gridMinor}, ${isMajor ? 0.32 : 0.12})`);
     g.addColorStop(1, `rgba(${C.gridMinor}, 0.05)`);
     ctx.strokeStyle = g;
     ctx.lineWidth = isMajor ? 1.1 : 0.65;
@@ -239,7 +240,7 @@ export function drawGrid3DLines(ctx: CanvasRenderingContext2D, state: PpgRenderS
   ctx.stroke();
 
   // Referencias numÃ©ricas de los ejes (amplitud + tiempo).
-  drawGridReferences3D(ctx, proj, plot, state.amplitudeStats);
+  drawGridReferences3D(ctx, proj, plot, state.amplitudeStats, state.windowMs ?? WINDOW_MS);
 
   ctx.restore();
 }
@@ -250,6 +251,7 @@ function drawGridReferences3D(
   proj: Projector,
   plot: { x: number; y: number; w: number; h: number },
   stats: { min: number; max: number; range: number },
+  windowMs: number,
 ): void {
   const range = stats.range > 1 ? stats.range : 1;
 
@@ -271,15 +273,16 @@ function drawGridReferences3D(
   }
 
   // Marcas de tiempo en el borde cercano (-0s â€¦ -Ns); lo reciente a la derecha.
-  const seconds = Math.floor(WINDOW_MS / 1000);
+  const seconds = Math.floor(windowMs / 1000);
   ctx.font = `bold 10px ${FONT}`;
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
   for (let sBack = 0; sBack <= seconds; sBack++) {
-    const u = 1 - (sBack * 1000) / WINDOW_MS;
+    const u = 1 - (sBack * 1000) / windowMs;
     const xWorld = (u - 0.5) * proj.plotW;
     const p = proj.floorPoint(xWorld, proj.zNear);
-    ctx.fillText(`-${sBack}s`, p.x, proj.nearY + 13);
+    ctx.textAlign = sBack === 0 ? 'right' : sBack === seconds ? 'left' : 'center';
+    ctx.fillText(sBack === 0 ? '0 s' : `−${sBack} s`, p.x, proj.nearY + 13);
   }
 }
 
@@ -367,8 +370,9 @@ export function drawWaveRibbon3D(
   if (revealed) {
     ctx.beginPath();
     ctx.moveTo(Pf[0].x, Pf[0].y);
-    for (let i = 1; i < n; i++) ctx.lineTo(Pf[i].x, Pf[i].y);
-    for (let i = n - 1; i >= 0; i--) ctx.lineTo(Pb[i].x, Pb[i].y);
+    traceMeasuredPath(ctx, Pf);
+    ctx.lineTo(Pb[n - 1].x, Pb[n - 1].y);
+    traceMeasuredPath(ctx, Pb, 0, n - 1, true);
     ctx.closePath();
     ctx.fillStyle = `rgba(${C.signalBright}, 0.16)`;
     ctx.fill();
@@ -376,11 +380,12 @@ export function drawWaveRibbon3D(
 
   // 3) Cara frontal (pared vertical de la cresta al piso) con degradado.
   const wallGrad = ctx.createLinearGradient(0, proj.horizonY, 0, proj.nearY);
-  wallGrad.addColorStop(0, `rgba(${C.signal}, ${revealed ? 0.34 : 0.12})`);
+  wallGrad.addColorStop(0, `rgba(${C.signal}, ${revealed ? 0.18 : 0.08})`);
   wallGrad.addColorStop(1, `rgba(${C.signal}, 0.02)`);
   ctx.beginPath();
   ctx.moveTo(Pfloor[0].x, Pfloor[0].y);
-  for (let i = 0; i < n; i++) ctx.lineTo(Pf[i].x, Pf[i].y);
+  ctx.lineTo(Pf[0].x, Pf[0].y);
+  traceMeasuredPath(ctx, Pf);
   for (let i = n - 1; i >= 0; i--) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
   ctx.closePath();
   ctx.fillStyle = wallGrad;
@@ -394,7 +399,8 @@ export function drawWaveRibbon3D(
     while (e < n && coords[e].isArr) e++;
     ctx.beginPath();
     ctx.moveTo(Pfloor[s].x, Pfloor[s].y);
-    for (let i = s; i < e; i++) ctx.lineTo(Pf[i].x, Pf[i].y);
+    ctx.lineTo(Pf[s].x, Pf[s].y);
+    traceMeasuredPath(ctx, Pf, s, e - 1);
     for (let i = e - 1; i >= s; i--) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
     ctx.closePath();
     ctx.fillStyle = `rgba(${C.arr}, 0.50)`;
@@ -406,7 +412,7 @@ export function drawWaveRibbon3D(
   if (revealed) {
     ctx.beginPath();
     ctx.moveTo(Pb[0].x, Pb[0].y);
-    for (let i = 1; i < n; i++) ctx.lineTo(Pb[i].x, Pb[i].y);
+    traceMeasuredPath(ctx, Pb);
     ctx.strokeStyle = `rgba(${C.signal}, 0.28)`;
     ctx.lineWidth = 1;
     ctx.stroke();
@@ -416,11 +422,11 @@ export function drawWaveRibbon3D(
   const drawCrestSeg = (from: number, to: number, arr: boolean) => {
     ctx.beginPath();
     ctx.moveTo(Pf[from].x, Pf[from].y);
-    for (let i = from + 1; i <= to; i++) ctx.lineTo(Pf[i].x, Pf[i].y);
+    traceMeasuredPath(ctx, Pf, from, to);
     if (revealed) {
       ctx.strokeStyle = arr ? `rgba(${C.arr}, 0.9)` : `rgb(${C.signalBright})`;
       ctx.shadowColor = arr ? `rgba(${C.arr}, 0.55)` : `rgba(${C.signal}, 0.55)`;
-      ctx.shadowBlur = 10;
+      ctx.shadowBlur = 4;
       ctx.lineWidth = 2.2;
     } else {
       ctx.strokeStyle = 'rgba(148, 163, 184, 0.5)';
@@ -441,7 +447,7 @@ export function drawWaveRibbon3D(
 
   // 6) Marcadores fiduciales con VALORES en tiempo real: picos mÃ¡ximos (SYS),
   //    valles mÃ­nimos (DIA), muesca dÃ­crota (DIC) y etiquetas de arritmia (ARR).
-  if (revealed) {
+  if (revealed && state.showAnnotations !== false) {
     const quality = state.props.quality ?? 0;
     ctx.textAlign = 'center';
     for (let i = 2; i < n - 2; i++) {
@@ -512,7 +518,7 @@ export function drawWaveRibbon3D(
   // 7) Halo pulsÃ¡til en la punta conductora (cresta mÃ¡s reciente).
   const head = Pf[n - 1];
   const headArr = coords[n - 1].isArr;
-  const pulse = Math.max(state.sweepPulse, 0.04);
+  const pulse = state.reducedMotion ? 0.04 : Math.max(state.sweepPulse, 0.04);
   ctx.beginPath();
   ctx.arc(head.x, head.y, (6 + pulse * 8) * (0.7 + 0.3 * head.scale), 0, Math.PI * 2);
   ctx.fillStyle = revealed
@@ -825,7 +831,7 @@ export function drawPreviewWell3D(
   //    pozo, así que no hace falta taparla; una base opaca convertiría la
   //    ventana en un parche y rompería la lectura de "recostada bajo la grilla".
   const body = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
-  body.addColorStop(0, 'rgba(4, 9, 16, 0.22)');
+  body.addColorStop(0, 'rgba(4, 9, 16, 0.06)');
   body.addColorStop(1, 'rgba(2, 5, 9, 0.10)');
   quadPath(ctx, quad);
   ctx.fillStyle = body;
@@ -891,7 +897,7 @@ export function drawPreviewWell3D(
   ctx.save();
   quadPath(ctx, quad);
   ctx.clip();
-  const phase = (state.now / 2600) % 1;
+  const phase = state.reducedMotion ? 0.5 : (state.now / 2600) % 1;
   const scanY = geo.farY + (geo.nearY - geo.farY) * phase;
   const scanH = Math.max(4, (geo.nearY - geo.farY) * 0.06);
   const scan = ctx.createLinearGradient(0, scanY, 0, scanY + scanH);
@@ -926,7 +932,7 @@ export function drawPreviewWell3D(
   ctx.lineTo(quad.nearRight.x, quad.nearRight.y + lip);
   ctx.lineTo(quad.nearLeft.x, quad.nearLeft.y + lip);
   ctx.closePath();
-  ctx.fillStyle = `rgba(${theme.tint}, 0.30)`;
+  ctx.fillStyle = `rgba(${theme.tint}, 0.12)`;
   ctx.fill();
 
   // 9) BISEL con brillo: el mismo borde que tenía el visor, ahora acostado.
@@ -937,8 +943,8 @@ export function drawPreviewWell3D(
   ctx.strokeStyle = bez;
   ctx.lineWidth = 1.2 + 0.7 * size;
   ctx.shadowColor = theme.glow;
-  ctx.shadowBlur = 5 + 8 * size
-    + (view.phase === 'LOCKED' ? 10 * Math.max(state.sweepPulse, 0) : 0);
+  ctx.shadowBlur = 2 + 3 * size
+    + (view.phase === 'LOCKED' ? 3 * Math.max(state.sweepPulse, 0) : 0);
   ctx.stroke();
   ctx.shadowBlur = 0;
 
@@ -968,7 +974,7 @@ export function drawPreviewWell3D(
 
   // 11) PULSO al latir: anillo proyectado sobre el plano de la pantalla.
   if (view.phase === 'LOCKED' && size > 0.35) {
-    const pulse = Math.max(state.sweepPulse, 0.04);
+    const pulse = state.reducedMotion ? 0.04 : Math.max(state.sweepPulse, 0.04);
     const cz = (quad.zn + quad.zf) / 2;
     const rPx = quad.halfW * (0.5 + 0.42 * pulse);
     const rZ = rPx / proj.floorSpanY;

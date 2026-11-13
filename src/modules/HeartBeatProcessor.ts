@@ -5,7 +5,7 @@
 import { clamp } from '../utils/math';
 import { triggerHeartbeatHaptic } from '../utils/haptics';
 import { robustBounds } from '../utils/stats';
-import { PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS } from '../config/signalProcessing';
+import { CAPTURE_TIMING_DEFAULTS, PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
 import { autocorrDominantLag } from './signal-processing/shared/dsp';
@@ -47,6 +47,7 @@ export class HeartBeatProcessor {
   private frameTick = 0;
   private cachedGateRange = 0;
   private cachedSampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
+  private sampleRateInitialized = false;
   private cachedPeriodicity: { bpm: number; score: number } = { bpm: 0, score: 0 };
 
   private lastDiagnostics: HeartBeatProcessDiagnostics = {};
@@ -192,7 +193,12 @@ export class HeartBeatProcessor {
 
     // Los ceros de una onda PPG filtrada incluyen cruces de fase genuinos.
     // No reusar el último valor ni inventar muestras en un frame descartado.
-    const validObservation = sampleValid && Number.isFinite(filteredValue);
+    let validObservation = sampleValid && Number.isFinite(filteredValue) && Number.isFinite(now);
+    const previousTimestamp = this.timestampBuffer[this.timestampBuffer.length - 1];
+    if (validObservation && previousTimestamp !== undefined) {
+      if (now <= previousTimestamp) validObservation = false;
+      else if (now - previousTimestamp > CAPTURE_TIMING_DEFAULTS.maxFrameGapMs) this.resetPeakTracking();
+    }
     if (validObservation) {
       this.signalBuffer.push(filteredValue);
       this.timestampBuffer.push(now);
@@ -429,19 +435,20 @@ export class HeartBeatProcessor {
 
   private estimateSampleRate(): number {
     if (this.timestampBuffer.length < 10) return this.cachedSampleRate || DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
-    if (this.frameTick % 30 !== 0 && this.cachedSampleRate > 0) {
+    if (this.sampleRateInitialized && this.frameTick % 30 !== 0 && this.cachedSampleRate > 0) {
       return this.cachedSampleRate;
     }
     const recent = this.timestampBuffer.slice(-50);
     const intervals: number[] = [];
     for (let i = 1; i < recent.length; i++) {
       const d = recent[i] - recent[i - 1];
-      if (d >= 10 && d <= 100) intervals.push(d);
+      if (d >= 1000 / CAPTURE_TIMING_DEFAULTS.maxSampleRateHz && d <= 1000 / CAPTURE_TIMING_DEFAULTS.minSampleRateHz) intervals.push(d);
     }
     if (intervals.length < 6) return this.cachedSampleRate || DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
     const sorted = [...intervals].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] ?? 33;
-    this.cachedSampleRate = clamp(1000 / median, 20, 40);
+    this.cachedSampleRate = clamp(1000 / median, CAPTURE_TIMING_DEFAULTS.minSampleRateHz, CAPTURE_TIMING_DEFAULTS.maxSampleRateHz);
+    this.sampleRateInitialized = true;
     return this.cachedSampleRate;
   }
 
@@ -575,6 +582,8 @@ export class HeartBeatProcessor {
     this.emittedPeakCount = 0;
     this.frameTick = 0;
     this.cachedGateRange = 0;
+    this.sampleRateInitialized = false;
+    this.cachedPeriodicity = { bpm: 0, score: 0 };
     this.gateRelaxUntilMs = 0;
     this.reacquireModeUntilMs = 0;
     this.lastDiagnostics = {};
@@ -601,3 +610,4 @@ export class HeartBeatProcessor {
     }
   }
 }
+

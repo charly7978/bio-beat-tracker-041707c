@@ -401,12 +401,12 @@ function unitRidges(): RidgePoint[][] {
  * pintan después del pozo (ver drawGrid3DLines), así que también lo cruzan.
  */
 export const WELL_VEIL = {
-  TINT_MIN: 0.02,
-  TINT_MAX: 0.02,
-  DEPTH_FAR: 0.20,
-  DEPTH_MID: 0.05,
+  TINT_MIN: 0.008,
+  TINT_MAX: 0.008,
+  DEPTH_FAR: 0.08,
+  DEPTH_MID: 0.02,
   DEPTH_NEAR: 0.0,
-  GLASS_FAR: 0.03,
+  GLASS_FAR: 0.015,
   VIDEO_ALPHA: 0.62,
 } as const;
 

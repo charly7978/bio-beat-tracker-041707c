@@ -98,6 +98,23 @@ describe('HeartBeatProcessor', () => {
     expect(samples).toHaveLength(before);
   });
 
+  it('ignores duplicate/out-of-order timestamps and discards RR after a capture gap', () => {
+    hbp.setFingerContactConfirmed(true);
+    const { filtered, times } = makeSignal(72, 30, 8, 0, 400);
+    for (let i = 0; i < filtered.length; i++) hbp.processSignal(filtered[i], times[i]);
+    expect(hbp.getRRIntervals().length).toBeGreaterThan(2);
+    const peaksBefore = hbp.getRRIntervals();
+    const last = times.at(-1)!;
+    expect(hbp.processSignal(100, last).isPeak).toBe(false);
+    expect(hbp.processSignal(-100, last - 33).isPeak).toBe(false);
+    expect(hbp.getRRIntervals()).toEqual(peaksBefore);
+    const resumed = hbp.processSignal(1, last + 1000);
+    expect(resumed.bpm).toBe(0);
+    expect(resumed.isPeak).toBe(false);
+    expect(hbp.getRRIntervals()).toEqual([]);
+    expect(hbp.getLastPeakTime()).toBe(0);
+  });
+
   it('does not emit beats from a flat frame stream even with confirmed contact', () => {
     hbp.setFingerContactConfirmed(true);
     let peaks = 0;
@@ -262,3 +279,4 @@ describe('HeartBeatProcessor', () => {
     expect(hbp.getDiagnostics()).toBeDefined();
   });
 });
+

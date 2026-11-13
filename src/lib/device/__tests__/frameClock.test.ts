@@ -3,6 +3,8 @@ import {
   MAX_CAPTURE_TO_CALLBACK_MS,
   MAX_CAPTURE_TO_PRESENTATION_MS,
   resolveFrameClock,
+  acceptVideoFrame,
+  createVideoFrameIdentityState,
 } from '../frameClock';
 
 describe('resolveFrameClock — reloj de captura por hardware', () => {
@@ -71,5 +73,30 @@ describe('resolveFrameClock — reloj de captura por hardware', () => {
     );
     expect(r.source).toBe('perf');
     expect(r.timestamp).toBe(5000);
+  });
+});
+
+
+describe('identidad de cuadros de vídeo', () => {
+  it('prefiere contador de cuadros aunque mediaTime permanezca en cero', () => {
+    const state = createVideoFrameIdentityState();
+    expect(acceptVideoFrame(state, { presentedFrames: 1, mediaTime: 0 })).toBe(true);
+    expect(acceptVideoFrame(state, { presentedFrames: 1, mediaTime: 0 })).toBe(false);
+    expect(acceptVideoFrame(state, { presentedFrames: 2, mediaTime: 0 })).toBe(true);
+  });
+
+  it('usa mediaTime como identidad sólo cuando existe y cambia', () => {
+    const state = createVideoFrameIdentityState();
+    expect(acceptVideoFrame(state, { mediaTime: 0.2 })).toBe(true);
+    expect(acceptVideoFrame(state, { mediaTime: 0.2 })).toBe(false);
+    expect(acceptVideoFrame(state, { mediaTime: 0.3 })).toBe(true);
+  });
+
+  it('conserva muestras cuando el navegador no proporciona identidad utilizable', () => {
+    const state = createVideoFrameIdentityState();
+    for (const metadata of [undefined, {}, { mediaTime: 0 }, { presentedFrames: NaN }, { mediaTime: -1 }]) {
+      expect(acceptVideoFrame(state, metadata)).toBe(true);
+      expect(acceptVideoFrame(state, metadata)).toBe(true);
+    }
   });
 });

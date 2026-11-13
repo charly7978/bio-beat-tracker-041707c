@@ -10,9 +10,9 @@ interface ActionButtonsProps {
 export function ActionButtons({ isMonitoring, onStartMeasurement, onReset }: ActionButtonsProps) {
   return (
     <div
-      className="fixed bottom-0 left-0 right-0 grid grid-cols-2 z-10 bg-black/80 backdrop-blur-lg border-t border-white/5"
+      className="monitor-actions fixed bottom-0 left-0 right-0 grid grid-cols-2 z-10"
       style={{
-        height: 'calc(52px + env(safe-area-inset-bottom, 0px))',
+        height: 'calc(64px + env(safe-area-inset-bottom, 0px))',
         paddingBottom: 'env(safe-area-inset-bottom, 0px)',
       }}
     >
@@ -27,7 +27,7 @@ export function ActionButtons({ isMonitoring, onStartMeasurement, onReset }: Act
       >
         {isMonitoring ? (
           <>
-            <Square className="w-3.5 h-3.5 fill-current animate-pulse text-red-400" />
+            <Square className="w-3.5 h-3.5 fill-current text-red-400" />
             <span>DETENER</span>
           </>
         ) : (
@@ -49,3 +49,4 @@ export function ActionButtons({ isMonitoring, onStartMeasurement, onReset }: Act
     </div>
   );
 }
+

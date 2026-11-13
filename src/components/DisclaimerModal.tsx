@@ -10,8 +10,8 @@ export function DisclaimerModal({ isOpen, onAccept }: DisclaimerModalProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/95 backdrop-blur-md animate-fade-in p-4 overflow-y-auto">
-      <div className="bg-black border border-zinc-900/80 rounded-2xl max-w-sm w-full shadow-2xl p-5 space-y-5 animate-in zoom-in-95 duration-300 max-h-[90vh] flex flex-col">
+    <div className="instrument-dialog-backdrop fixed inset-0 z-[110] flex items-center justify-center bg-black/95 backdrop-blur-md animate-fade-in p-4 overflow-y-auto">
+      <div role="dialog" aria-modal="true" aria-label="Aviso de uso y responsabilidad médica" className="instrument-dialog bg-black border border-zinc-900/80 rounded-2xl max-w-sm w-full shadow-2xl p-5 space-y-5 animate-in zoom-in-95 duration-300 max-h-[90vh] flex flex-col">
         <div className="text-center space-y-2">
           <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto">
             <AlertTriangle className="w-6 h-6 text-red-500" />
@@ -44,7 +44,7 @@ export function DisclaimerModal({ isOpen, onAccept }: DisclaimerModalProps) {
 
         <button
           onClick={onAccept}
-          className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-bold text-xs tracking-wider transition-all hover:scale-[1.02] active:scale-[0.98]"
+          className="instrument-primary-action w-full"
         >
           ACEPTAR Y CONTINUAR
         </button>
@@ -52,4 +52,5 @@ export function DisclaimerModal({ isOpen, onAccept }: DisclaimerModalProps) {
     </div>
   );
 }
+
 

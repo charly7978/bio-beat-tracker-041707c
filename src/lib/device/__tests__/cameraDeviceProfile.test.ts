@@ -1,45 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import {
-  inferCameraRuntimeHints,
-  isMotorolaLikeUserAgent,
-  isTclLikeUserAgent,
-} from '../cameraDeviceProfile';
+import { inferCameraRuntimeHints } from '../cameraDeviceProfile';
 import { passesFingerMaintain } from '@/lib/finger/fingerSceneClassifier';
 
 describe('cameraDeviceProfile', () => {
-  it('TCL usa perfil estricto', () => {
-    const h = inferCameraRuntimeHints({ userAgent: 'Mozilla TCL 6156' });
-    expect(h.tclLike).toBe(true);
-    expect(h.constrained).toBe(false);
-    expect(h.fingerConfirmFrames).toBe(6);
+  it('usa la misma política para cualquier marca o user agent ausente', () => {
+    const common = { fpsEffective: 30, timestampJitterMs: 3, torchActive: true };
+    const expected = inferCameraRuntimeHints(common);
+    for (const userAgent of ['Mozilla TCL 6156', 'Motorola moto g84', 'Samsung SM-A546', 'iPhone Safari', '']) {
+      expect(inferCameraRuntimeHints({ ...common, userAgent })).toEqual(expected);
+    }
   });
 
-  it('Samsung/Motorola usan perfil tolerante por defecto', () => {
-    const moto = inferCameraRuntimeHints({ userAgent: 'Motorola moto g84' });
-    expect(moto.constrained).toBe(true);
-    expect(moto.instantLostToUnstable).toBeGreaterThan(10);
-
-    const sam = inferCameraRuntimeHints({ userAgent: 'Samsung SM-A546' });
-    expect(sam.constrained).toBe(true);
-    expect(sam.tclLike).toBe(false);
+  it.each([{ fpsEffective: 16 }, { timestampJitterMs: 60 }])('adapta el contacto a la captura observada: %o', observation => {
+    const normal = inferCameraRuntimeHints({ fpsEffective: 30, timestampJitterMs: 3 });
+    const slow = inferCameraRuntimeHints(observation);
+    expect(slow.liveFingerMissGrace).toBeGreaterThan(normal.liveFingerMissGrace);
+    expect(slow.instantLostToNoContact).toBeGreaterThan(normal.instantLostToNoContact);
   });
 
-  it('detecta Motorola en user agent', () => {
-    expect(isMotorolaLikeUserAgent('Mozilla/5.0 Motorola moto g84')).toBe(true);
-    expect(isTclLikeUserAgent('Mozilla/5.0 TCL')).toBe(true);
-    expect(isTclLikeUserAgent('Mozilla/5.0 Samsung')).toBe(false);
+  it('sólo declara flash fiable cuando está soportado y confirmado activo', () => {
+    expect(inferCameraRuntimeHints({ torchActive: false }).torchReliable).toBe(false);
+    expect(inferCameraRuntimeHints({ torchSupported: false, torchActive: true }).torchReliable).toBe(false);
+    expect(inferCameraRuntimeHints({ torchSupported: true, torchActive: true }).torchReliable).toBe(true);
   });
 
-  it('marca tolerante extra con torch apagado o FPS bajo', () => {
-    const h = inferCameraRuntimeHints({
-      userAgent: 'Android Chrome',
-      torchSupported: true,
-      torchActive: false,
-      fpsEffective: 16,
-    });
-    expect(h.constrained).toBe(true);
-    expect(h.liveFingerMissGrace).toBeGreaterThanOrEqual(40);
-  });
 });
 
 describe('passesFingerMaintain', () => {
@@ -52,3 +36,4 @@ describe('passesFingerMaintain', () => {
     expect(ok).toBe(true);
   });
 });
+

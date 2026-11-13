@@ -25,7 +25,8 @@ import { usePpg3dSettings } from '@/store/ppg3dSettings';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
-import { Ppg3DToggle } from './Ppg3DToggle';
+import { MonitorControls } from './MonitorControls';
+import { useMonitorViewport } from '@/hooks/useMonitorViewport';
 import { PressureCoach } from './PressureCoach';
 
 export interface PPGSignalMeterProps {
@@ -45,6 +46,8 @@ export interface PPGSignalMeterProps {
   isPeak?: boolean;
   bpm?: number | null;
   spo2?: number;
+  respirationRate?: number;
+  respirationStatus?: string;
   rrIntervals?: number[];
   elapsedTime?: number;
   perfusionIndex?: number;
@@ -87,6 +90,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   isPeak = false,
   bpm = null,
   spo2 = 0,
+  respirationRate = 0,
+  respirationStatus,
   rrIntervals = [],
   elapsedTime = 0,
   perfusionIndex = 0,
@@ -107,7 +112,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
 
   const propsRef = useRef({
     value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus,
-    arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals,
+    arrhythmiaCount, preserveResults, isPeak, bpm, spo2, respirationRate, respirationStatus, rrIntervals,
     rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus,
     contactState, acquisitionStatus, diagnostics,
   });
@@ -119,6 +124,9 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   /** Latch: la onda se revela solo cuando la adquisición llega a READY (señal estable). */
   const traceRevealedRef = useRef(false);
   const [showPulse, setShowPulse] = useState(false);
+  const [hasSamples, setHasSamples] = useState(false);
+  const hasSamplesRef = useRef(false);
+  const waveVisibilityRef = useRef({ strength: 0, traceRevealed: false });
 
   const lastArrhythmiaCountRef = useRef(0);
   const beatHistoryRef = useRef<{ isArrhythmia: boolean; time: number; rr: number }[]>([]);
@@ -141,6 +149,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   useImperativeHandle(ref, () => ({
     pushSignal: (val: number, timestampMs: number) => {
       if (!dataBufferRef.current) return;
+      if (!hasSamplesRef.current) { hasSamplesRef.current = true; setHasSamples(true); }
       const scaledValue = val * waveGainRef.current;
       const now = Date.now();
       const perfNow = typeof performance !== 'undefined' ? performance.now() : 0;
@@ -160,6 +169,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     },
     clearBuffer: () => {
       dataBufferRef.current?.clear();
+      hasSamplesRef.current = false; setHasSamples(false);
     }
   }));
 
@@ -175,7 +185,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   useEffect(() => {
     propsRef.current = {
       value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus,
-      arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals,
+      arrhythmiaCount, preserveResults, isPeak, bpm, spo2, respirationRate, respirationStatus, rrIntervals,
       rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus,
       contactState, acquisitionStatus, diagnostics,
     };
@@ -247,7 +257,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     }
   }, [
     value, quality, isFingerDetected, arrhythmiaStatus, preserveResults,
-    isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime,
+    isPeak, bpm, spo2, respirationRate, respirationStatus, rrIntervals, rawArrhythmiaData, elapsedTime,
     perfusionIndex, pressure, bpStatus, arrhythmiaCount, isMonitoring,
     contactState, acquisitionStatus, diagnostics,
   ]);
@@ -273,8 +283,20 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   useEffect(() => {
     if (preserveResults && !isFingerDetected) {
       dataBufferRef.current?.clear();
+      hasSamplesRef.current = false; setHasSamples(false);
     }
   }, [preserveResults, isFingerDetected]);
+
+  const [layoutUi, setLayoutUi] = useState(layoutRef.current);
+  const viewport = useMonitorViewport(dataBufferRef, amplitudeStatsRef, layoutRef, waveVisibilityRef);
+  const viewportRef = viewport.view;
+  const reducedMotionRef = useRef(false);
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => { reducedMotionRef.current = media.matches; };
+    update(); media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
 
   const recomputeLayout = useCallback(() => {
     const canvas = canvasRef.current;
@@ -284,7 +306,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const maxDpr = isNative() ? 1.25 : 2.0;
     const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
     const cssW = Math.max(320, Math.floor(rect.width));
-    const cssH = Math.max(480, Math.floor(rect.height));
+    const cssH = Math.max(320, Math.floor(rect.height));
     canvas.width = Math.floor(cssW * dpr);
     canvas.height = Math.floor(cssH * dpr);
     canvas.style.width = `${cssW}px`;
@@ -292,29 +314,32 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const ctx = canvas.getContext('2d', { alpha: false });
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const header = { x: 0, y: 0, w: cssW, h: 36 };
-    const metricsH = Math.max(90, Math.min(104, Math.round(cssH * 0.11)));
+    const shortScreen = cssH < 650;
+    const focused = viewportRef.current.focus || shortScreen;
+    const header = { x: 0, y: 0, w: cssW, h: shortScreen ? 48 : 56 };
+    const metricsH = shortScreen && cssW > cssH ? 0 : focused ? 58 : 114;
     const metrics = { x: 0, y: header.h, w: cssW, h: metricsH };
 
-    const lowerH = Math.max(56, Math.min(74, Math.round(cssH * 0.085)));
-    const footerH = 38;
+    const lowerH = focused ? 0 : 76;
+    const footerH = shortScreen ? 0 : 50;
     const safeAreaBottom = getSafeAreaBottom();
-    const buttonsH = 52 + safeAreaBottom;
-    const plotY = header.h + metricsH;
-    const plotH = cssH - plotY - lowerH - footerH - buttonsH;
+    const buttonsH = 64 + safeAreaBottom;
+    const plotY = header.h + metricsH + 48;
+    const plotH = cssH - plotY - lowerH - footerH - buttonsH - 88;
 
     const plotX = 12;
     const plotW = cssW - plotX * 2;
-    const plot = { x: plotX, y: plotY + 3, w: plotW, h: Math.max(180, plotH - 3), centerY: 0 };
+    const plot = { x: plotX, y: plotY + 3, w: plotW, h: Math.max(70, plotH - 3), centerY: 0 };
     plot.centerY = plot.y + plot.h / 2;
 
-    const lowerY = plot.y + plot.h + 3;
-    const trend = { x: plotX, y: lowerY, w: plotW, h: Math.max(64, lowerH - 4) };
+    const lowerY = plot.y + plot.h + 86;
+    const trend = { x: plotX, y: lowerY, w: plotW, h: lowerH };
 
     const footer = { x: 0, y: cssH - buttonsH - footerH, w: cssW, h: footerH };
 
     layoutRef.current = { width: cssW, height: cssH, header, metrics, plot, trend, footer };
-  }, []);
+    setLayoutUi(layoutRef.current);
+  }, [viewportRef]);
 
   useLayoutEffect(() => {
     recomputeLayout();
@@ -325,7 +350,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       ro.disconnect();
       window.removeEventListener('orientationchange', recomputeLayout);
     };
-  }, [recomputeLayout]);
+  }, [recomputeLayout, viewport.focus]);
 
   useEffect(() => {
     if (isRunningRef.current) return;
@@ -333,7 +358,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
 
     // En Android, 30 fps de renderizado bastan para una captura PPG de ~30 Hz
     // y liberan tiempo de CPU para cámara y Worker. Escritorio conserva 60 fps.
-    const targetFps = isNative() ? 30 : TARGET_FPS;
+    const targetFps = isNative() || window.matchMedia('(pointer: coarse)').matches ? 30 : TARGET_FPS;
     const frameTime = 1000 / targetFps;
     let lastRenderTime = 0;
     let wallClockOffset = Date.now() - performance.now();
@@ -396,6 +421,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         ? realSignalStrength(p.perfusionIndex ?? 0, periodicityNow)
         : 0;
 
+      waveVisibilityRef.current = { strength: signalStrengthNow, traceRevealed: traceRevealedRef.current };
       const threeDState = usePpg3dSettings.getState();
 
       const renderState: PpgRenderState = {
@@ -403,7 +429,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         props: {
           value: p.value, quality: p.quality, isFingerDetected: p.isFingerDetected,
           isMonitoring: p.isMonitoring, isPeak: p.isPeak ?? false, preserveResults: p.preserveResults,
-          bpm: p.bpm, spo2: p.spo2 ?? 0, rrIntervals: p.rrIntervals ?? [],
+          bpm: p.bpm, spo2: p.spo2 ?? 0, respirationRate: fingerOn || preserve ? p.respirationRate : 0, respirationStatus: p.respirationStatus, rrIntervals: p.rrIntervals ?? [],
           elapsedTime: p.elapsedTime ?? 0, perfusionIndex: p.perfusionIndex ?? 0,
           pressure: p.pressure, bpStatus: p.bpStatus,
           arrhythmiaStatus: p.arrhythmiaStatus, arrhythmiaCount: p.arrhythmiaCount ?? 0,
@@ -411,6 +437,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
           diagnostics: p.diagnostics,
         },
         now,
+        windowMs: viewportRef.current.windowMs,
+        inspection: viewportRef.current.inspection,
+        reducedMotion: reducedMotionRef.current,
+        showAnnotations: viewportRef.current.annotations,
         displayBpm: displayBpmRef.current,
         displaySpo2: displaySpo2Ref.current,
         displaySys: displaySysRef.current,
@@ -430,13 +460,13 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         arrActiveUntil: arrActiveUntilRef.current,
         traceRevealed: traceRevealedRef.current,
         signalStrength: signalStrengthNow,
-        threeD: { enabled: threeDState.enabled, intensity: threeDState.intensity },
+        threeD: { enabled: threeDState.enabled && !viewportRef.current.inspection, intensity: threeDState.intensity },
       };
 
       drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);
       drawHeader(ctx, renderState);
       drawMetricsBar(ctx, renderState);
-      if (threeDState.enabled) {
+      if (renderState.threeD?.enabled) {
         // Escenario 3D en tres capas: fondo → pozo de previsualización → grilla.
         // El pozo se apoya DEBAJO de la grilla y las líneas del piso lo cruzan;
         // la onda se dibuja después y fluye por delante de ambos.
@@ -454,8 +484,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       // háptico. Va DESPUÉS de la onda — antes quedaba debajo y no se veía.
       drawPressureGauge(ctx, renderState);
       drawAcquisitionOverlay(ctx, renderState);
-      drawTrendStrip(ctx, renderState);
-      drawFooter(ctx, renderState);
+      if (layoutRef.current.trend.h > 0) drawTrendStrip(ctx, renderState);
+      if (layoutRef.current.footer.h > 0) drawFooter(ctx, renderState);
 
       sweepPulseRef.current = renderState.sweepPulse;
       lastPeakProcessedRef.current = renderState.lastPeakProcessedTime;
@@ -474,10 +504,13 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       isRunningRef.current = false;
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
     };
-  }, []);
+  }, [viewportRef]);
 
+  const returnLive = viewport.returnLive;
   const handleReset = useCallback(() => {
+    returnLive();
     dataBufferRef.current?.clear();
+    hasSamplesRef.current = false; setHasSamples(false);
     amplitudeStatsRef.current = { min: -50, max: 50, range: 100 };
     beatHistoryRef.current = [];
     lastArrhythmiaCountRef.current = 0;
@@ -494,14 +527,22 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       ctx.fillRect(0, 0, canvas!.width, canvas!.height);
     }
     onReset();
-  }, [onReset]);
+  }, [onReset, returnLive]);
 
   return (
-    <div ref={containerRef} className="fixed inset-0 bg-slate-950 overflow-hidden">
+    <div ref={containerRef} className="monitor-shell fixed inset-0 overflow-hidden">
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 w-full h-full"
+        className="monitor-canvas absolute inset-0 w-full h-full"
+        role="img" tabIndex={0} aria-label="Monitor de señal óptica PPG interactivo" aria-describedby="monitor-gestures"
+        {...viewport.canvasHandlers}
       />
+      <dl className="sr-only" aria-label="Valores del monitor">
+        <dt>Pulso</dt><dd>{isFingerDetected || preserveResults ? bpm || 'Sin lectura' : 'Sin lectura'} BPM</dd>
+        <dt>Saturación estimada</dt><dd>{isFingerDetected || preserveResults ? spo2 || 'Sin lectura' : 'Sin lectura'} %</dd>
+        <dt>Presión estimada</dt><dd>{(isFingerDetected || preserveResults) && pressure?.systolic && pressure?.diastolic ? `${pressure.systolic}/${pressure.diastolic} mmHg` : 'Sin lectura'} · {bpStatus}</dd>
+        <dt>Respiración estimada</dt><dd>{(isFingerDetected || preserveResults) && respirationRate > 0 ? `${Math.round(respirationRate)} rpm` : 'Sin lectura'} · {respirationStatus}</dd>
+      </dl>
       <PulseIndicator showPulse={showPulse} />
       {/* Guía de colocación: vive DENTRO de la ventana de previsualización
           (canvas). Aquí sólo queda el anuncio accesible: la tarjeta flotante
@@ -515,7 +556,12 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         }
         isMonitoring={isMonitoring}
       />
-      <Ppg3DToggle />
+      <MonitorControls viewport={viewport} layout={layoutUi} quality={quality} isMonitoring={isMonitoring} hasSamples={hasSamples} />
+      <div className="monitor-feedback" style={{ top: layoutUi.plot.y + layoutUi.plot.h + 54 }} role="status" aria-live="polite">
+        <div><span className="monitor-eyebrow">{viewport.inspecting ? 'VISTA DE ANÁLISIS' : isMonitoring ? 'CONTACTO Y ADQUISICIÓN' : 'LISTO PARA COMENZAR'}</span>
+          <p>{viewport.inspecting ? (isMonitoring ? 'Explora el registro; la medición sigue activa.' : 'Explora el registro de la sesión.') : isMonitoring ? diagnostics?.placementEvidence?.guidance?.headline || 'Apoya la yema suavemente sobre la cámara.' : 'Apoya la mano. Inicia cuando estés cómodo.'}</p></div>
+        <span className="monitor-seal">{Math.round((diagnostics?.placementEvidence?.seal ?? 0) * 100)}<small>% cobertura</small></span>
+      </div>
       <ActionButtons
         isMonitoring={isMonitoring}
         onStartMeasurement={onStartMeasurement}

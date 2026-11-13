@@ -54,6 +54,8 @@ export interface ProcessedSignal {
     sealRatio?: number;
     /** Fracción del tejido que además está perfundido [0..1]. */
     perfusedFraction?: number;
+    /** Fotometría de todos los píxeles, incluso los rechazados por recorte. */
+    photometry?: import('../lib/device/exposureRecovery').FingerExposurePhotometry;
     placementMode?: FingerPlacementMode;
     placementHint?: string;
     /**
@@ -88,3 +90,4 @@ export interface SignalProcessor {
   onSignalReady?: (signal: ProcessedSignal) => void;
   onError?: (error: ProcessingError) => void;
 }
+
