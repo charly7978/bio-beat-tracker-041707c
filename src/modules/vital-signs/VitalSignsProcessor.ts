@@ -15,6 +15,7 @@ import { RingF32 } from '../../utils/RingBuffer';
 import { clamp } from '../../utils/math';
 import { estimateRespiratorySmartFusion } from '../../lib/vitals/respiratorySmartFusion';
 import type { FingerPlacementMode } from '../../types/signal';
+import { resampleTimedSignal, type TimedSignalSample } from '../../lib/signal/timedSamples';
 
 const log = createLogger('VitalSignsProcessor');
 
@@ -82,6 +83,11 @@ export class VitalSignsProcessor {
   private readonly HISTORY_SIZE = VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES;
   private signalHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
   private morphologyHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
+  /** Muestras morfológicas de cada frame, conservadas con su instante de captura. */
+  private morphologyTimedSamples: TimedSignalSample[] = [];
+  /** Frecuencia de la ventana morfológica uniforme; 0 significa que no hay ventana utilizable. */
+  private morphologySampleRateHz = 0;
+  private readonly MORPHOLOGY_TIMED_MAX_SAMPLES = VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES * 2;
   private placementMode: FingerPlacementMode = 'hybrid';
   /** Buffer más largo para modulación respiratoria (~10 Hz efectivos desde Index). */
   private readonly RESPIRATION_BUFFER = 320;
@@ -156,7 +162,7 @@ export class VitalSignsProcessor {
       signalQuality: 0
     };
     this.signalHistory.reset();
-    this.morphologyHistory.reset();
+    this.resetMorphologyWindow();
     this.respirationHistory.reset();
     this.lastRrIntervals = [];
     this.lastAccelRespiration = null;
@@ -212,6 +218,8 @@ export class VitalSignsProcessor {
     faceQuality?: number,
     /** Respiración pre-estimada del acelerómetro (IMU) — 4ª modalidad de la Smart Fusion. */
     accelRespiration?: { rpm: number; quality: number },
+    /** Muestras morfológicas tomadas en cada frame, con timestamp de captura en ms. */
+    morphologyBatch?: TimedSignalSample[],
   ): VitalSignsResult {
     this.frameCount++;
     // Espeja el estado cacheado del acelerómetro (ya throttled en el procesador).
@@ -239,7 +247,7 @@ export class VitalSignsProcessor {
         : signalValue;
     })();
     this.signalHistory.push(signalValue);
-    this.morphologyHistory.push(morphSample);
+    this.updateMorphologyWindow(morphSample, morphologyBatch);
 
     // Canal 4 (LP respiratorio): si disponible, usa señal pre-filtrada a banda respiratoria;
     // si no, usa signalValue (comportamiento previo — no rompe nada)
@@ -313,6 +321,86 @@ export class VitalSignsProcessor {
     this.calculateVitalSigns(signalValue, effectiveSqi, fusedBpm, rrData);
 
     return this.getFormattedResult();
+  }
+
+  /**
+   * Mantiene la morfología a la frecuencia original de captura.
+   * El resto del motor puede ejecutarse a menor cadencia; la forma de onda
+   * usada para fiduciales no debe decimarse sin timestamps ni anti-aliasing.
+   */
+  private updateMorphologyWindow(
+    legacySample: number,
+    batch?: readonly TimedSignalSample[],
+  ): void {
+    // Compatibilidad para consumidores/tests antiguos que no proporcionan
+    // timestamps. La ruta productiva del router siempre envía batch, incluso vacío.
+    if (batch === undefined) {
+      this.morphologyHistory.push(legacySample);
+      this.morphologySampleRateHz = 30;
+      return;
+    }
+
+    for (const sample of batch) {
+      if (
+        !Number.isFinite(sample.value) ||
+        !Number.isFinite(sample.timestampMs) ||
+        sample.timestampMs <= 0
+      ) continue;
+
+      const previous = this.morphologyTimedSamples[this.morphologyTimedSamples.length - 1];
+      if (previous && sample.timestampMs <= previous.timestampMs) continue;
+      this.morphologyTimedSamples.push({
+        value: sample.value,
+        timestampMs: sample.timestampMs,
+      });
+    }
+
+    if (this.morphologyTimedSamples.length > this.MORPHOLOGY_TIMED_MAX_SAMPLES) {
+      this.morphologyTimedSamples.splice(
+        0,
+        this.morphologyTimedSamples.length - this.MORPHOLOGY_TIMED_MAX_SAMPLES,
+      );
+    }
+
+    const uniform = resampleTimedSignal(this.morphologyTimedSamples, {
+      targetRateHz: 30,
+      minRateHz: 20,
+      maxRateHz: 60,
+      maxGapMultiple: 2.25,
+      maxJitterRatio: 0.35,
+    });
+
+    this.morphologyHistory.reset();
+    if (!uniform) {
+      this.morphologySampleRateHz = 0;
+      this.bloodPressureProcessor.reset();
+      this.lastBPConfidence = 'INSUFFICIENT';
+      this.lastBPFeatureQuality = 0;
+      return;
+    }
+
+    this.morphologySampleRateHz = uniform.sampleRateHz;
+    for (const value of uniform.samples.slice(-this.HISTORY_SIZE)) {
+      this.morphologyHistory.push(value);
+    }
+  }
+
+  /**
+   * Descarta la ventana morfológica cuando se interrumpe el contacto o aparece
+   * movimiento. Evita concatenar ciclos de sesiones/condiciones distintas.
+   */
+  resetMorphologyWindow(): void {
+    this.morphologyTimedSamples = [];
+    this.morphologyHistory.reset();
+    this.morphologySampleRateHz = 0;
+    this.bloodPressureProcessor.reset();
+    this.lastBPConfidence = 'INSUFFICIENT';
+    this.lastBPFeatureQuality = 0;
+    this.measurements.systolicPressure = 0;
+    this.measurements.diastolicPressure = 0;
+    this.bpSysWeightedSum = 0;
+    this.bpDiaWeightedSum = 0;
+    this.bpTotalWeight = 0;
   }
 
   private validateRealPulse(rrData?: RRData): boolean {
@@ -669,7 +757,7 @@ export class VitalSignsProcessor {
       const bpEstimate = this.bloodPressureProcessor.estimate(
         this.morphologyHistory.tail(this.HISTORY_SIZE),
         validRR,
-        30,
+        this.morphologySampleRateHz,
         this.lastBPM > 0 ? this.lastBPM : undefined,
       );
 
@@ -762,7 +850,7 @@ export class VitalSignsProcessor {
       }
     }
     this.signalHistory.reset();
-    this.morphologyHistory.reset();
+    this.resetMorphologyWindow();
     this.respirationHistory.reset();
     this.lastRrIntervals = [];
     this.lastAccelRespiration = null;
@@ -781,7 +869,7 @@ export class VitalSignsProcessor {
 
   fullReset(): void {
     this.signalHistory.reset();
-    this.morphologyHistory.reset();
+    this.resetMorphologyWindow();
     this.respirationHistory.reset();
     this.lastRrIntervals = [];
     this.lastAccelRespiration = null;
