@@ -75,16 +75,50 @@ export const useSignalProcessor = () => {
         { type: 'module' }
       );
 
+      const postFrame = (frame: PendingPpgFrame) => {
+        const worker = workerRef.current;
+        if (
+          !worker ||
+          initializationState.current !== 'READY' ||
+          !isProcessingRef.current
+        ) return;
+
+        frameInFlightRef.current = true;
+        try {
+          const buffer = frame.imageData.data.buffer;
+          worker.postMessage({
+            type: 'processFrame',
+            data: {
+              imageData: frame.imageData,
+              timestamp: frame.timestamp,
+            }
+          }, [buffer]);
+        } catch (error) {
+          frameInFlightRef.current = false;
+          log.error('Could not transfer PPG frame to Worker:', error);
+        }
+      };
+
+      const releaseFrameAndFlushLatest = () => {
+        frameInFlightRef.current = false;
+        const pending = pendingFrameRef.current;
+        pendingFrameRef.current = null;
+        if (pending && isProcessingRef.current) {
+          postFrame(pending);
+        }
+      };
+
       workerRef.current.onmessage = (event: MessageEvent) => {
         const { type, data } = event.data;
 
         if (type === 'initialized') {
           initializationState.current = 'READY';
         } else if (type === 'signalReady') {
-          if (initializationState.current !== 'READY') return;
-          const { signal, rgbStats, backpressureState } = data;
+          try {
+            if (initializationState.current !== 'READY') return;
+            const { signal, rgbStats, backpressureState } = data;
 
-          // Actualizar las caches de telemetría
+            // Actualizar las caches de telemetría
           if (rgbStats) rgbStatsRef.current = rgbStats;
           if (backpressureState) {
             backpressureStateRef.current = backpressureState;
@@ -111,9 +145,12 @@ export const useSignalProcessor = () => {
             };
             lastUiPushRef.current = nowMs;
             setLastSignal(signal);
-          } else if (nowMs - lastUiPushRef.current >= UI_SNAPSHOT_INTERVAL_MS) {
-            lastUiPushRef.current = nowMs;
-            setLastSignal(signal);
+            } else if (nowMs - lastUiPushRef.current >= UI_SNAPSHOT_INTERVAL_MS) {
+              lastUiPushRef.current = nowMs;
+              setLastSignal(signal);
+            }
+          } finally {
+            releaseFrameAndFlushLatest();
           }
         } else if (type === 'backpressureConfigChanged') {
           if (data) {
@@ -122,7 +159,18 @@ export const useSignalProcessor = () => {
         } else if (type === 'error') {
           const err = data as ProcessingError;
           console.error(`PPGSignalProcessor Web Worker error: ${err.code} ${err.message}`);
+          releaseFrameAndFlushLatest();
+        } else if (type === 'stopped') {
+          pendingFrameRef.current = null;
+          frameInFlightRef.current = false;
         }
+      };
+
+      workerRef.current.onerror = (event) => {
+        pendingFrameRef.current = null;
+        frameInFlightRef.current = false;
+        initializationState.current = 'ERROR';
+        log.error('PPG Web Worker crashed:', event.message);
       };
 
       // Inicializar el procesador dentro del worker
@@ -138,6 +186,8 @@ export const useSignalProcessor = () => {
     }
 
     return () => {
+      pendingFrameRef.current = null;
+      frameInFlightRef.current = false;
       if (workerRef.current) {
         workerRef.current.terminate();
         workerRef.current = null;
