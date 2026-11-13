@@ -112,8 +112,26 @@ export const VITAL_THRESHOLDS = {
     /** Acuerdo Elgendi mínimo para alimentar arritmias */
     MIN_DETECTOR_AGREEMENT_ARRHYTHMIA: 0.55,
     MIN_FOR_CLINICAL: 55,
-    /** PI (AC/DC) mínimo para marcar contacto STABLE — cámara suele dar 0.001–0.008 al inicio */
+    /**
+     * PI (AC/DC) para ADQUISICIÓN (transición a UNSTABLE) — holgado porque el AE
+     * tarda 1-3 s en asentarse y el PI real tarda en emerger del ruido.
+     */
     MIN_PI: 0.0009,
+    /**
+     * PI mínimo para MANTENER STABLE_CONTACT (anti falso-positivo "posición perfecta"):
+     * 0.0009 (adquisición) es indistinguible del ruido del AE con flash → bastaba para
+     * declarar STABLE sin pulso real. 0.0020 exige pulso REAL y sostenido.
+     */
+    STABLE_MIN_PI: 0.0020,
+    /**
+     * Cobertura ROI mínima para MANTENER STABLE_CONTACT. MIN_COVERAGE (0.09) cubre
+     * apenas el 9% del frame — trivial con un dedo mal colocado. STABLE exige
+     * cubrir bien la lente (>=0.35 ≈ 1/3 del ROI). No sustituye a MIN_COVERAGE:
+     * la adquisición temprana (UNSTABLE) sigue usándola.
+     */
+    STABLE_MIN_COVERAGE: 0.35,
+    /** STABLE se revierte a UNSTABLE tras estos frames SIN pulso confirmado (30 ≈ 1 s). */
+    STABLE_MAX_NO_PULSE_FRAMES: 30,
     MAX_MOTION: 0.75,
     MAX_JITTER_MS: 55,
     /** Alpha del primer EMA para signos vitales estables (SpO₂, PA). */

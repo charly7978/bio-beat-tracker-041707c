@@ -23,7 +23,7 @@ import {
   drawTrendStrip,
   drawFooter,
 } from '@/lib/ui/ppgCanvasRenderer';
-import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
+import { drawGrid3D, drawPreviewWell3D } from '@/lib/ui/ppg3dProjection';
 import { usePpg3dSettings } from '@/store/ppg3dSettings';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
 import { PulseIndicator } from './PulseIndicator';
@@ -123,6 +123,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const animationRef = useRef<number | null>(null);
   const isRunningRef = useRef(false);
   const dataBufferRef = useRef<CircularBuffer | null>(null);
+  /** <video> de la cámara cacheado para el pozo 3D (se re-resuelve si se desmonta). */
+  const videoWellRef = useRef<HTMLVideoElement | null>(null);
 
   const propsRef = useRef({
     value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus,
@@ -446,6 +448,13 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       drawMetricsBar(ctx, renderState);
       if (threeDState.enabled) {
         drawGrid3D(ctx, renderState);
+        // Pozo de previsualización: la ventana del dedo embebida en el piso 3D.
+        // Se cachea el <video> de la cámara una vez (no por frame). Se dibuja
+        // DESPUÉS de la grilla y ANTES de la onda → las ondas fluyen encima.
+        if (!videoWellRef.current || !videoWellRef.current.isConnected) {
+          videoWellRef.current = document.querySelector('video');
+        }
+        drawPreviewWell3D(ctx, renderState, videoWellRef.current, p.contactState);
         drawPressureGauge(ctx, renderState);
       } else {
         drawECGGrid(ctx, renderState);

@@ -507,3 +507,141 @@ export function drawWaveRibbon3D(
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
+
+// === POZO DE PREVISUALIZACIÓN DEL DEDO ==========================================
+// Ventana de cámara embebida EN el piso de la grilla (perspectiva del monitor
+// 3D): hueco biselado sobre el suelo + panel de video vivo de pie sobre él.
+// La cinta de la onda fluye POR ENCIMA (el pozo se dibuja antes que ella).
+
+const WELL_D_FRONT = 0.38;     // borde frontal del hueco (0=near, 1=horizonte)
+const WELL_D_BACK = 0.52;      // borde trasero (donde se apoya el panel)
+const WELL_HALF_W_FRAC = 0.26; // semiancho del hueco vs plotW
+const WELL_PANEL_H_FRAC = 0.60; // altura del panel vs su ancho proyectado
+
+interface WellColors { bezel: string; glow: string; label: string; }
+function wellColorsForContact(contactState?: string): WellColors {
+  switch (contactState) {
+    case 'STABLE_CONTACT':
+      return { bezel: 'rgba(34,197,94,0.85)', glow: 'rgba(34,197,94,0.35)', label: 'CONTACTO ÓPTIMO' };
+    case 'UNSTABLE_CONTACT':
+      return { bezel: 'rgba(245,158,11,0.85)', glow: 'rgba(245,158,11,0.30)', label: 'AJUSTA POSICIÓN' };
+    default:
+      return { bezel: 'rgba(148,163,184,0.45)', glow: 'rgba(148,163,184,0.12)', label: 'APOYA EL DEDO EN LA LENTE' };
+  }
+}
+
+/**
+ * Dibuja el pozo de previsualización sobre el piso 3D. Debe llamarse DESPUÉS de
+ * `drawGrid3D` y ANTES de la onda (`drawSignal`), para que las ondas cardíacas
+ * fluyan visualmente por encima de la ventana.
+ *
+ * @param source  element de video de la cámara trasera (o null → pozo vacío).
+ */
+export function drawPreviewWell3D(
+  ctx: CanvasRenderingContext2D,
+  state: PpgRenderState,
+  source: HTMLVideoElement | null,
+  contactState?: string,
+): void {
+  const proj = makeProjector(state);
+  const { plot } = state.layout;
+  const colors = wellColorsForContact(contactState);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(plot.x, plot.y, plot.w, plot.h);
+  ctx.clip();
+
+  // 1) HUECO en el piso: trapecio escorzado compacto, en la banda media del piso
+  // (ni pegado al espectador ni perdido en el horizonte).
+  const halfW = plot.w * WELL_HALF_W_FRAC;
+  const zF = proj.zNear + WELL_D_BACK * (proj.zFar - proj.zNear);
+  const zn = proj.zNear + WELL_D_FRONT * (proj.zFar - proj.zNear);
+  const fl = proj.floorPoint(-halfW, zn);
+  const fr = proj.floorPoint(halfW, zn);
+  const bl = proj.floorPoint(-halfW, zF);
+  const br = proj.floorPoint(halfW, zF);
+
+  ctx.beginPath();
+  ctx.moveTo(fl.x, fl.y);
+  ctx.lineTo(fr.x, fr.y);
+  ctx.lineTo(br.x, br.y);
+  ctx.lineTo(bl.x, bl.y);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0,0,0,0.82)';
+  ctx.fill();
+
+  // 1b) Paredes internas del hueco (volumen): laterales y frontal con gradiente
+  // hacia el fondo — la luz cae desde el panel trasero.
+  const wallShade = (a: ProjPoint, b: ProjPoint, alpha: number) => {
+    const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+    g.addColorStop(0, `rgba(0,0,0,${alpha})`);
+    g.addColorStop(1, 'rgba(0,0,0,0.15)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(b.x, b.y + 6 * b.scale);
+    ctx.lineTo(a.x, a.y + 6 * a.scale);
+    ctx.closePath();
+    ctx.fill();
+  };
+  wallShade(fl, bl, 0.55); // pared izquierda
+  wallShade(fr, br, 0.55); // pared derecha
+  wallShade(bl, br, 0.35); // pared trasera (bajo el panel)
+
+  // Bisel reactivo alrededor del hueco.
+  ctx.beginPath();
+  ctx.moveTo(fl.x, fl.y);
+  ctx.lineTo(fr.x, fr.y);
+  ctx.lineTo(br.x, br.y);
+  ctx.lineTo(bl.x, bl.y);
+  ctx.closePath();
+  ctx.strokeStyle = colors.bezel;
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+
+  // 2) PANEL de video de pie sobre el borde trasero del hueco (pantalla 3D).
+  const s = proj.scaleAt(WELL_D_BACK);
+  const panelW = halfW * 2 * s * 1.18; // leve vuelo sobre el hueco
+  const panelH = panelW * WELL_PANEL_H_FRAC;
+  const base = proj.floorPoint(0, zF);
+  const px = base.x - panelW / 2;
+  const py = base.y - panelH;
+
+  // Glow reactivo al estado de contacto (bisel luminoso).
+  ctx.shadowColor = colors.glow;
+  ctx.shadowBlur = 16;
+  ctx.strokeStyle = colors.bezel;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(px, py, panelW, panelH);
+  ctx.shadowBlur = 0;
+
+  // Video vivo (guard: solo con metadatos listos; throttle natural por rAF).
+  const hasVideo = !!source && source.readyState >= 2 && source.videoWidth > 0;
+  if (hasVideo) {
+    // Recorte central cuadrado-ish del video (el dedo llena la lente).
+    const v = source as HTMLVideoElement;
+    const side = Math.min(v.videoWidth, v.videoHeight) * 0.9;
+    const sx = (v.videoWidth - side) / 2;
+    const sy = (v.videoHeight - side) / 2;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(px, py, panelW, panelH);
+    ctx.clip();
+    ctx.globalAlpha = 0.92;
+    ctx.drawImage(v, sx, sy, side, side, px, py, panelW, panelH);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = 'rgba(10,12,16,0.85)';
+    ctx.fillRect(px, py, panelW, panelH);
+  }
+
+  // Etiqueta de guía SOBRE el panel (legible, centrada en su ancho).
+  ctx.font = `bold 9px ${FONT}`;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = colors.bezel;
+  ctx.fillText(colors.label, base.x, py - 6);
+
+  ctx.restore();
+}

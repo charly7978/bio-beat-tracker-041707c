@@ -195,6 +195,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private fingerConfidenceCount = 0;
   private fingerLostCount = 0;
   private stableContactCount = 0;
+  /** Frames consecutivos en STABLE sin pulso evidenciado — reversión continua. */
+  private stableNoPulseStreak = 0;
   private instantLostStreak = 0;
   private liveFingerMissStreak = 0;
   private noContactHardStreak = 0;
@@ -820,7 +822,19 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
   }
 
-  /** STABLE solo con PI real ya calculado en este frame (no en updateContactState). */
+/**
+ * STABLE solo con PI real ya calculado en este frame (no en updateContactState).
+ *
+ * ANTI FALSO-POSITIVO "posicion perfecta":
+ *  - Se exige PI >= STABLE_MIN_PI (0.0020) Y evidencia de pulso (firma de
+ *    hemoglobina + CV del rojo) — ambos, no el OR destructivo anterior: con
+ *    flash encendido el ruido del AE superaba MIN_PI*0.75 solo y bastaba para
+ *    declarar STABLE sin pulso real.
+ *  - Se exige cobertura >= STABLE_MIN_COVERAGE (0.35) — un dedo rozando el lente
+ *    cubria el 9% (MIN_COVERAGE) y pasaba como "perfecto".
+ *  - Sin pulso evidenciado durante STABLE_MAX_NO_PULSE_FRAMES consecutivos (~1 s)
+ *    el estado degrada a UNSTABLE: la validacion es CONTINUA, no solo al adquirir.
+ */
   private reconcileStableContact(): void {
     if (!this.fingerDetected || !this.lastInstantFinger) {
       if (this.contactState === 'STABLE_CONTACT') {
@@ -828,7 +842,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       }
       return;
     }
-    const minPi = VITAL_THRESHOLDS.QUALITY.MIN_PI;
+    const Q = VITAL_THRESHOLDS.QUALITY;
     const F = VITAL_THRESHOLDS.FINGER;
     const snap = this.rgbSnapshotFromSmoothed();
     const padLike = this.placementMode === 'pad';
@@ -838,12 +852,35 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.smoothedCoverage >= F.MIN_COVERAGE * (padLike ? 0.82 : 0.92) &&
       (padLike ||
         this.lastRoiRedCv >= F.ROI_RED_CV_MIN * 0.88);
-    const piOk = this.cachedPI >= minPi * 0.75;
+    // Pulso REAL: PI sobre el piso anti-ruido Y (firma RGB+CV, o periodicidad
+    // espectral cardiaca sostenida como via alternativa cuando la firma RGB
+    // fluctua frame a frame con el AE).
+    const piOk = this.cachedPI >= Q.STABLE_MIN_PI;
+    const periodicOk = this.cachedPeriodicity >= Q.WAVE_PERIODICITY_REF && piOk;
+    const pulseEvidenced = piOk && (pulseOk || periodicOk);
+    const covOk = this.smoothedCoverage >= Q.STABLE_MIN_COVERAGE * (padLike ? 0.82 : 1);
+
+    if (pulseEvidenced) {
+      this.stableNoPulseStreak = 0;
+    } else if (this.contactState === 'STABLE_CONTACT' || this.stableNoPulseStreak > 0) {
+      this.stableNoPulseStreak++;
+    }
+
     const stable =
-      this.stableContactCount >= VITAL_THRESHOLDS.QUALITY.STABLE_FRAMES_REQ &&
-      (piOk || pulseOk) &&
-      this.smoothedCoverage >= F.MIN_COVERAGE * (padLike ? 0.82 : 0.88);
-    this.contactState = stable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
+      this.stableContactCount >= Q.STABLE_FRAMES_REQ &&
+      pulseEvidenced &&
+      covOk;
+
+    if (this.contactState === 'STABLE_CONTACT') {
+      // REVERSION continua: sin pulso sostenido degrada, aunque la escena
+      // siga "roja" (dedo apoyado sin flujo util = medicion invalida).
+      this.contactState =
+        stable || this.stableNoPulseStreak < Q.STABLE_MAX_NO_PULSE_FRAMES
+          ? 'STABLE_CONTACT'
+          : 'UNSTABLE_CONTACT';
+    } else {
+      this.contactState = stable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
+    }
   }
 
   /** Pérdida de contacto; en modo tolerante evita reset de buffers hasta racha larga. */
@@ -855,6 +892,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.instantLostStreak = 0;
     this.lastInstantFinger = false;
     this.liveFingerMissStreak = 0;
+    this.stableNoPulseStreak = 0;
 
     if (hardReset) {
       this.decaySmoothedRgbFast();

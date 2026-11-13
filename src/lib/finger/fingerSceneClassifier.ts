@@ -44,8 +44,12 @@ export function passesLiveFingerContact(
   if (spatial.coverageRatio < F.MIN_COVERAGE * 0.88) return false;
   if (spatial.fingerTileCount < F.MIN_FINGER_TILES_FOR_WEIGHTING) return false;
 
+  // ANTI FALSO-POSITIVO: el ensamble ya NO autoriza contacto por sí solo. Un
+  // score alto de brillo+cobertura+histograma se cumple con flash sobre palma
+  // abierta o superficie roja. Ahora REQUIERE firma de hemoglobina además:
+  // sin la fisiología óptica del tejido NO hay contacto usable.
   if (ensembleScore !== undefined && ensembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.85) {
-    return true;
+    return hasFingerHemoglobinSignature(raw) || hasFingerHemoglobinSignature(smoothed);
   }
   if (hasFingerHemoglobinSignature(raw) || hasFingerHemoglobinSignature(smoothed)) {
     return true;
@@ -70,8 +74,10 @@ export function passesFingerMaintain(
   if (r / b < F.MAINTAIN_RB) return false;
   if (dom < F.MAINTAIN_DOMINANCE) return false;
   if (spatial.coverageRatio < F.MAINTAIN_COVERAGE) return false;
+  // ANTI FALSO-POSITIVO (misma causa raíz que en passesLiveFingerContact):
+  // el ensamble exige firma de hemoglobina, nunca autoriza solo.
   if (ensembleScore !== undefined && ensembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.8) {
-    return true;
+    return hasFingerHemoglobinSignature(raw) || hasFingerHemoglobinSignature(smoothed);
   }
   if (!hasFingerHemoglobinSignature(raw)) return false;
   return true;
