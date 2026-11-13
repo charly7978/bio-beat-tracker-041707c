@@ -250,4 +250,18 @@ describe('PressureCoach — la guía llega al usuario', () => {
     );
     expect(visible).toContain('AJUSTANDO LA CÁMARA');
   });
+
+  it("en modo srOnly no pinta tarjeta visible pero conserva el anuncio accesible", () => {
+    const html = renderToStaticMarkup(
+      <PressureCoach evidence={evidenceWith()} isMonitoring srOnly />,
+    );
+    // La tarjeta flotante tapaba la ventana de previsualizacion: en la app va
+    // oculta a la vista (el texto ya vive dentro del canvas)...
+    expect(html).toContain("sr-only");
+    expect(html).not.toContain("absolute left-2 right-2");
+    // ...pero el anuncio sigue existiendo para lectores de pantalla, porque el
+    // texto del canvas no es accesible.
+    expect(html).toContain("role=\"status\"");
+    expect(html).toContain("aria-live=\"polite\"");
+  });
 });

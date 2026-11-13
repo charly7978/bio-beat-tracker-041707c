@@ -686,6 +686,21 @@ function quadPath(ctx: CanvasRenderingContext2D, quad: FloorPreviewQuad): void {
  * dibujan de a pocas filas (máx. ~48 por frame) y el clip al trapecio recorta
  * el sobrante ? bordes laterales exactos sin escalones, coste acotado en móvil.
  */
+/**
+ * Presupuesto ADAPTATIVO de franjas del vídeo.
+ *
+ * El render compite con la captura: si el bucle de dibujo se come el frame, el
+ * `<video>` entrega menos muestras al worker y el detector de latidos se queda
+ * sin señal. Antes se pagó ese precio con `ctx.filter` por franja. Ahora el
+ * número de franjas se ajusta solo con el coste medido del propio bucle, con un
+ * máximo de 48 y un mínimo de 16 (donde el borde ya no se nota escalonado).
+ */
+const STRIP_BUDGET_MAX = 48;
+const STRIP_BUDGET_MIN = 16;
+const STRIP_TARGET_MS = 2.5;
+let stripBudget = STRIP_BUDGET_MAX;
+let stripCostEma = STRIP_TARGET_MS;
+
 function drawFloorWarpedVideo(
   ctx: CanvasRenderingContext2D,
   source: HTMLVideoElement,
@@ -697,13 +712,9 @@ function drawFloorWarpedVideo(
   const sx = (source.videoWidth - cropSide) / 2;
   const sy = (source.videoHeight - cropSide) / 2;
   const screenH = Math.max(1, nearY - farY);
-  // Franjas finas = menos escalones verticales en el borde del trapecio. El coste
-  // está acotado (48 drawImage por frame). NO se usa `ctx.filter`: aplicarlo a
-  // cada franja de un canvas escalado por devicePixelRatio fuerza a Chrome a
-  // salir de la ruta GPU y el bucle de dibujo se come el frame, dejando al
-  // `<video>` sin muestras para el worker (→ no se detectan latidos). La
-  // claridad se consigue con menos velo, no con filtros caros.
-  const step = Math.max(1.5, screenH / 48);
+  // NO se usa `ctx.filter`: aplicarlo a cada franja de un canvas escalado por
+  // devicePixelRatio fuerza a Chrome a salir de la ruta GPU y hunde el frame.
+  const step = Math.max(1.5, screenH / stripBudget);
 
   ctx.save();
   quadPath(ctx, quad);
@@ -711,6 +722,7 @@ function drawFloorWarpedVideo(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'low';
 
+  const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
   for (let y = farY; y < nearY; y += step) {
     const y1 = Math.min(nearY, y + step);
     // La fila más ancha del par define el rectángulo; el clip al trapecio
@@ -728,8 +740,17 @@ function drawFloorWarpedVideo(
       left, y, width, (y1 - y) + 0.5,
     );
   }
-
   ctx.restore();
+
+  if (t0) {
+    const cost = performance.now() - t0;
+    stripCostEma = stripCostEma * 0.88 + cost * 0.12;
+    if (stripCostEma > STRIP_TARGET_MS) {
+      stripBudget = Math.max(STRIP_BUDGET_MIN, stripBudget - 2);
+    } else if (stripCostEma < STRIP_TARGET_MS * 0.6) {
+      stripBudget = Math.min(STRIP_BUDGET_MAX, stripBudget + 1);
+    }
+  }
 }
 
 /**
