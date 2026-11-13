@@ -38,6 +38,7 @@ interface HeartBeatProcessorAPI {
     timestamp?: number,
     fingerConfirmed?: boolean,
     ppgQuality?: { sqi: number; perfusionIndex?: number; motionScore?: number },
+    sampleValid?: boolean,
   ) => {
     bpm: number;
     confidence: number;
@@ -161,7 +162,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const lastPressureHapticAtRef = useRef(0);
   const lastContactSeenAtRef = useRef(0);
   const noContactSessionFramesRef = useRef(0);
-  const lastHbInputRef = useRef(0);
   const displayFilterRef = useRef(new VitalDisplayFilter());
   const displaySnapshotRef = useRef(vitalSigns);
   const lastHrFilterInputRef = useRef('');
@@ -244,7 +244,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     vitalSignsRef.current = createDefaultVitalSignsResult();
     displaySnapshotRef.current = vitalSignsRef.current;
     setVitalSigns(displaySnapshotRef.current);
-    lastHbInputRef.current = 0;
     lastHrPushRef.current = 0;
     lastVitalsPushRef.current = 0;
     lastRrPushRef.current = 0;
@@ -358,28 +357,33 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         ? diag.sqm.sqi
         : lastSignal.quality) || 0;
 
-    let hbInput = 0;
-    if (fingerConfirmed) {
-      if (Math.abs(signalValue) > 1e-7) {
-        lastHbInputRef.current = signalValue;
-        hbInput = signalValue;
-      } else if (Math.abs(lastHbInputRef.current) > 1e-7) {
-        hbInput = lastHbInputRef.current;
-      }
-    } else {
-      lastHbInputRef.current = 0;
-    }
-
+    // Los cruces reales por cero son muestras PPG legítimas; jamás los
+    // reemplazamos por la muestra anterior. Las ventanas físicamente inválidas
+    // se excluyen por estado del frame, no por su amplitud numérica.
+    const statusForHeartbeat = typeof diag?.status === 'string' ? diag.status : '';
+    const sampleValid =
+      hasUsableContact &&
+      Number.isFinite(signalValue) &&
+      !lastSignal.motionArtifact &&
+      statusForHeartbeat !== 'SATURATED' &&
+      statusForHeartbeat !== 'UNDEREXPOSED' &&
+      statusForHeartbeat !== 'LOW_FPS' &&
+      statusForHeartbeat !== 'NO_FINGER';
+    const frameTimeMs =
+      Number.isFinite(lastSignal.timestamp) && lastSignal.timestamp > 0
+        ? lastSignal.timestamp
+        : nowT;
     const heartBeatResult = processHeartBeat.processSignal(
-      hbInput,
+      sampleValid ? signalValue : 0,
       contactState,
-      nowT,
+      frameTimeMs,
       fingerConfirmed,
       {
-        sqi: rawSqi,
+        sqi: sampleValid ? rawSqi : 0,
         perfusionIndex: lastSignal.perfusionIndex ?? 0,
         motionScore: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
       },
+      sampleValid,
     );
 
     const mergedDiag =
@@ -442,10 +446,11 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const stab = updateStabilization(stabilizationRef.current, {
       hasContact: hasUsableContact,
       bpm: bpmLive,
-      sqi: rawSqi,
+      sqi: sampleValid ? rawSqi : 0,
       perfusionIndex: lastSignal.perfusionIndex ?? 0,
       periodicity: typeof sqm.periodicity === 'number' ? sqm.periodicity : 0,
       motionScore: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
+      confirmedRrCount: rrForBpm.length,
       nowMs: nowT,
     });
     if (stab.stabilized) acqReadyLatchRef.current = true;

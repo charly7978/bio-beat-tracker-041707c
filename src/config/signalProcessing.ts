@@ -77,7 +77,11 @@ export const PEAK_DETECTION_DEFAULTS = {
   /** Ventana para emitir pico respecto al frame actual (ms) — ~½ RR @ 45 BPM */
   peakEmitWindowMs: 720,
   /** Mínimo de muestras en ventana para correr ensemble */
-  minSamplesEnsemble: 72,
+  minSamplesEnsemble: 48,
+  /** Ejecutar el ensemble cada 2 muestras válidas: menor carga de CPU principal. */
+  ensembleRunStrideFrames: 2,
+  /** Ventana suficiente para varias pulsaciones sin recorrer 10 s de historial. */
+  ensembleMaxWindowSamples: 180,
   /** Ventana de integración para detección (~180 ms de pulso sistólico típico a 30 Hz) */
   integrationWindowMs: 180,
   /** Refractario máximo derivado de maxBpm */

@@ -94,6 +94,30 @@ describe('signalStabilization (convergencia, no timer)', () => {
     expect(r.stage).toBe('READY');
   });
 
+  it('does not declare READY from repeated BPM alone before two real RR intervals', () => {
+    const st = createStabilizationState();
+    const first = feed(st, 100, () => ({
+      bpm: 72,
+      sqi: 95,
+      perfusionIndex: 0.008,
+      periodicity: 0.9,
+      motionScore: 0,
+      confirmedRrCount: 1,
+    }));
+    expect(first.stabilized).toBe(false);
+
+    const next = updateStabilization(st, base(101, {
+      bpm: 72,
+      sqi: 95,
+      perfusionIndex: 0.008,
+      periodicity: 0.9,
+      motionScore: 0,
+      confirmedRrCount: 2,
+    }));
+    expect(next.stabilized).toBe(true);
+    expect(next.stage).toBe('READY');
+  });
+
   it('tolerancia adaptativa a la variabilidad (HRV saludable) con buena señal', () => {
     const st = createStabilizationState();
     // Oscilación de BPM de 72 a 81 (spread = 9).

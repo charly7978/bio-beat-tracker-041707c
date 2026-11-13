@@ -26,6 +26,8 @@ export interface StabilizationSample {
   periodicity: number;
   /** Movimiento (IMU + señal) 0..~2. */
   motionScore: number;
+  /** Intervalos RR emitidos a partir de latidos detectados (sin repetición por frame). */
+  confirmedRrCount?: number;
   nowMs: number;
 }
 
@@ -110,8 +112,8 @@ export function updateStabilization(
 
   if (fStability > 0.65) {
     const scale = (fStability - 0.65) / 0.35; // 0..1
-    minWindowMs = Math.round(C.MIN_WINDOW_MS - 1200 * scale); // hasta 1800ms
-    minSamples = Math.round(C.MIN_SAMPLES - 20 * scale); // hasta 20 muestras
+    minWindowMs = Math.round(C.MIN_WINDOW_MS - 600 * scale); // hasta 1200ms, con dos RR confirmados
+    minSamples = Math.round(C.MIN_SAMPLES - 8 * scale); // hasta 12 muestras
     bpmSpreadMax = Math.round(C.BPM_SPREAD_MAX + 4 * scale); // hasta 10 bpm para tolerar HRV saludable
     progressRise = C.PROGRESS_RISE + 0.03 * scale; // sube más rápido (hasta 0.08)
     progressFall = C.PROGRESS_FALL - 0.01 * scale; // más resistente a caídas (hasta 0.02)
@@ -130,8 +132,9 @@ export function updateStabilization(
     if (v > bmax) bmax = v;
   }
   const spread = n > 0 ? bmax - bmin : Infinity;
+  const enoughRealBeats = s.confirmedRrCount === undefined || s.confirmedRrCount >= 2;
   const converged =
-    n >= minSamples && span >= minWindowMs && spread <= bpmSpreadMax;
+    n >= minSamples && span >= minWindowMs && spread <= bpmSpreadMax && enoughRealBeats;
   const qualitySustained = state.qualityStreak >= C.QUALITY_DWELL_FRAMES;
 
   if (converged && qualitySustained) state.stabilized = true; // latch

@@ -173,7 +173,7 @@ export class HeartBeatProcessor {
     return this.cameraHints.constrained ? base * 2.2 : base;
   }
 
-  processSignal(filteredValue: number, timestamp?: number): {
+  processSignal(filteredValue: number, timestamp?: number, sampleValid = true): {
     bpm: number;
     confidence: number;
     isPeak: boolean;
@@ -190,21 +190,35 @@ export class HeartBeatProcessor {
   } {
     const now = timestamp ?? (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
-    if (Math.abs(filteredValue) > 1e-6) {
+    // Los ceros de una onda PPG filtrada incluyen cruces de fase genuinos.
+    // No reusar el último valor ni inventar muestras en un frame descartado.
+    const validObservation = sampleValid && Number.isFinite(filteredValue);
+    if (validObservation) {
       this.signalBuffer.push(filteredValue);
       this.timestampBuffer.push(now);
       if (this.signalBuffer.length > DSP_CONSTANTS.BUFFER_SIZE) {
         this.signalBuffer.shift();
         this.timestampBuffer.shift();
       }
-    } else if (
-      this.fingerContactConfirmed &&
-      this.signalBuffer.length > 0 &&
-      this.signalBuffer.length < DSP_CONSTANTS.BUFFER_SIZE
-    ) {
-      const hold = this.signalBuffer[this.signalBuffer.length - 1]! * 0.999;
-      this.signalBuffer.push(hold);
-      this.timestampBuffer.push(now);
+    }
+
+    if (!validObservation) {
+      const peakAgeMs = this.lastPeakTime > 0 ? now - this.lastPeakTime : Infinity;
+      const heldBpm =
+        this.fingerContactConfirmed && peakAgeMs >= 0 && peakAgeMs < this.BPM_PUBLISH_HOLD_MS
+          ? bpmFromEmittedRr(this.rrIntervals)
+          : 0;
+      return {
+        bpm: heldBpm,
+        confidence: 0,
+        isPeak: false,
+        filteredValue: 0,
+        sqi: 0,
+        internalSqi: this.internalSqi,
+        externalSqi: this.ppgSqi,
+        rrData: { intervals: [...this.rrIntervals], lastPeakTime: this.lastPeakTime },
+        ensembleDiagnostics: { emitReason: 'INVALID_CAPTURE_FRAME' },
+      };
     }
 
     if (this.signalBuffer.length < 20) {
@@ -235,8 +249,11 @@ export class HeartBeatProcessor {
     const sampleRate = this.estimateSampleRate();
     let ensembleConf = 0;
 
+    const firstValidTs = this.timestampBuffer[0] ?? now;
     const peakStallMs =
-      this.lastEmittedPeakTime > 0 ? now - this.lastEmittedPeakTime : 0;
+      this.lastEmittedPeakTime > 0
+        ? now - this.lastEmittedPeakTime
+        : Math.max(0, now - firstValidTs);
     const autoGateRelax =
       this.fingerContactConfirmed && peakStallMs > 1600
         ? clamp(1 - (peakStallMs - 1600) / 7000, 0.45, 1)
@@ -247,12 +264,16 @@ export class HeartBeatProcessor {
       (this.ppgPerfusionIndex > 0 && this.ppgPerfusionIndex < 0.004 ? 0.68 : 1);
     const gateOk =
       this.cachedGateRange >= this.gateRangeMin() * gateScale;
+    // Elgendi incluye filtrado offline y normalización: hacerlo cada 2 frames
+    // baja el costo en hilo UI sin modificar la captura ni los datos observados.
+    // Un pico sigue admitiéndose solo tras confirmación temporal y refractario.
     const runEnsemble =
       this.signalBuffer.length >= PEAK_DETECTION_DEFAULTS.minSamplesEnsemble &&
+      this.frameTick % PEAK_DETECTION_DEFAULTS.ensembleRunStrideFrames === 0 &&
       (gateOk || this.fingerContactConfirmed);
 
     if (runEnsemble) {
-      const win = Math.min(DSP_CONSTANTS.BUFFER_SIZE, this.signalBuffer.length);
+      const win = Math.min(PEAK_DETECTION_DEFAULTS.ensembleMaxWindowSamples, this.signalBuffer.length);
       const sigRaw = this.signalBuffer.slice(-win);
       const ts = this.timestampBuffer.slice(-win);
       const sig = this.normalizeWindow(sigRaw, Math.min(150, sigRaw.length));
