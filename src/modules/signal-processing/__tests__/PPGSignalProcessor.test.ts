@@ -93,4 +93,54 @@ describe('PPGSignalProcessor', () => {
     const posVal = rawProc.sourceBuffers.POS.tail(1)[0];
     expect(Number.isFinite(posVal)).toBe(true);
   });
+
+  describe('guía de presión al usuario (bucle cerrado)', () => {
+    it('emite evidencia de colocación incluso sin contacto válido', () => {
+      // El usuario acaba de apoyar el dedo y la cámara aún no converge: es el
+      // momento en que más necesita la instrucción "apoya el dedo en la lente".
+      // Si la evidencia se anulara en cada rechazo, no recibiría ninguna guía.
+      for (let i = 0; i < 10; i++) proc.processFrame(makeFrame(64, 64, 5, 5, 5));
+
+      const last = signals[signals.length - 1];
+      const evidence = last.diagnostics?.placementEvidence as
+        | { guidance?: { headline: string; action: string } }
+        | undefined;
+
+      expect(evidence).toBeDefined();
+      expect(evidence?.guidance).toBeDefined();
+      expect(typeof evidence?.guidance?.headline).toBe('string');
+      expect(evidence!.guidance!.headline.length).toBeGreaterThan(0);
+    });
+
+    it('expone sellado y perfusión en los diagnósticos del frame', () => {
+      for (let i = 0; i < 60; i++) {
+        const pulse = Math.round(180 + 6 * Math.sin(2 * Math.PI * 1.2 * (i / 30)));
+        proc.processFrame(makeFrame(64, 64, pulse, 95, 75));
+      }
+
+      const last = signals[signals.length - 1];
+      expect(typeof last.diagnostics?.sealRatio).toBe('number');
+      expect(typeof last.diagnostics?.perfusedFraction).toBe('number');
+      expect(Number.isFinite(last.diagnostics?.sealRatio)).toBe(true);
+    });
+
+    it('con dedo bien apoyado y pulso real, la guía no pide corregir la presión', () => {
+      for (let i = 0; i < 180; i++) {
+        const pulse = Math.round(180 + 8 * Math.sin(2 * Math.PI * 1.2 * (i / 30)));
+        proc.processFrame(makeFrame(64, 64, pulse, 95, 75));
+      }
+
+      const last = signals[signals.length - 1];
+      const guidance = (
+        last.diagnostics?.placementEvidence as
+          | { guidance?: { action: string; headline: string } }
+          | undefined
+      )?.guidance;
+
+      expect(guidance).toBeDefined();
+      // No debe ordenar "suelta" con un apoyo normal y pulso estable.
+      expect(guidance!.action).not.toBe('RELEASE');
+      expect(guidance!.headline).not.toMatch(/SUELTA/i);
+    });
+  });
 });

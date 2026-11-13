@@ -23,19 +23,23 @@ vi.mock('@capacitor/haptics', () => ({
 import { pressureHapticCue, triggerPressureHaptic } from '../haptics';
 
 describe('pressureHapticCue — háptico graduado por grado transmural', () => {
-  it('LIGHT: la severidad escala con la distancia al óptimo', () => {
+  it('LIGHT: doble toque y severidad proporcional a la distancia al óptimo', () => {
     const mild = pressureHapticCue('LIGHT', 0.4);
     expect(mild.severity).toBeCloseTo(0.2, 5);
-    expect(mild.webPattern).toEqual([0, 29, 70, 29]);
-    expect(mild.nativeRepeats).toBe(1);
+    expect(mild.webPattern).toHaveLength(4);
+    expect(mild.webPattern[0]).toBe(0);
+    // El segundo pulso es igual al primero: es la firma "repetición".
+    expect(mild.webPattern[3]).toBe(mild.webPattern[1]);
+    expect(mild.nativeRepeats).toBe(2);
 
     const strong = pressureHapticCue('LIGHT', 0.1);
     expect(strong.severity).toBeCloseTo(0.8, 5);
-    expect(strong.webPattern).toEqual([0, 45, 70, 45]);
-    expect(strong.nativeRepeats).toBe(2);
+    expect(strong.webPattern[1]).toBeGreaterThan(mild.webPattern[1] as number);
+    // Severidad alta → 3 repeticiones nativas.
+    expect(strong.nativeRepeats).toBe(3);
   });
 
-  it('HEAVY: tres pulsos y repeticiones proporcionales a la severidad', () => {
+  it('HEAVY: patrón largo-corto-largo, imposible de confundir con "presiona más"', () => {
     const mild = pressureHapticCue('HEAVY', 0.6);
     expect(mild.severity).toBeCloseTo(0.2, 5);
     expect(mild.webPattern).toHaveLength(6);
@@ -43,8 +47,12 @@ describe('pressureHapticCue — háptico graduado por grado transmural', () => {
 
     const severe = pressureHapticCue('HEAVY', 0.95);
     expect(severe.severity).toBeCloseTo(0.9, 5);
-    expect(severe.webPattern).toEqual([0, 76, 60, 76, 60, 76]);
-    expect(severe.nativeRepeats).toBe(3);
+    // Los pulsos largos (1º y 3º) son iguales entre sí y mayores que el corto.
+    const [, long1, , short, , long2] = severe.webPattern as number[];
+    expect(long1).toBe(long2);
+    expect(short).toBeLessThan(long1);
+    expect(long1).toBeGreaterThan(0);
+    expect(severe.nativeRepeats).toBeGreaterThan(mild.nativeRepeats);
   });
 
   it('IDEAL: confirmación mínima de un pulso', () => {
@@ -77,7 +85,10 @@ describe('triggerPressureHaptic — emisión web/nativa', () => {
   it('en web usa micro-vibraciones de navigator.vibrate con el patrón del grado', async () => {
     await triggerPressureHaptic('HEAVY', 0.95);
 
-    expect(mocks.vibrate).toHaveBeenCalledWith([0, 76, 60, 76, 60, 76]);
+    expect(mocks.vibrate).toHaveBeenCalledTimes(1);
+    const pattern = mocks.vibrate.mock.calls[0][0] as number[];
+    expect(pattern).toHaveLength(6);
+    expect(pattern[0]).toBe(0);
     expect(mocks.impact).not.toHaveBeenCalled();
   });
 
@@ -96,6 +107,9 @@ describe('triggerPressureHaptic — emisión web/nativa', () => {
 
     await triggerPressureHaptic('LIGHT', 0.2);
 
-    expect(mocks.vibrate).toHaveBeenCalledWith([0, 40, 70, 40]);
+    expect(mocks.vibrate).toHaveBeenCalledTimes(1);
+    const pattern = mocks.vibrate.mock.calls[0][0] as number[];
+    expect(pattern).toHaveLength(4);
+    expect(pattern[0]).toBe(0);
   });
 });

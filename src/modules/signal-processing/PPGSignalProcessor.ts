@@ -356,6 +356,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const motionArtifact =
       this.motionScore > this.MOTION_THRESHOLD ||
       roi.displacementPenalty >= 0.85;
+
+    // ── Evidencia de colocación: se calcula ANTES de las puertas de rechazo ──
+    // La guía más importante ("apoya el dedo en la lente") es precisamente la que
+    // hace falta cuando NO hay señal válida. Si la evidencia se anulara en cada
+    // rechazo, el usuario no recibiría ninguna instrucción al colocar el dedo.
+    this.updatePlacementEvidence(roi, motionArtifact);
     const fingerEnsemble = updateFingerDetection(
       { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
       { red: this.smoothedRed, green: this.smoothedGreen, blue: this.smoothedBlue, coverage: this.smoothedCoverage, fingerScore: this.smoothedFingerScore },
@@ -384,9 +390,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.consecutiveNoContactFrames++;
       this.signalQuality = 0;
       this.displaySqiEma = 0;
-      // Sin dedo no hay evidencia vigente: nunca dejar un veredicto de presión
-      // viejo alimentando el gauge ni los hápticos.
-      this.lastPlacementEvidence = null;
       Object.assign(this.diagStatusState, createDiagnosticStatusState());
       this.stepAcquisition(false);
       this.onSignalReady({
@@ -428,7 +431,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     else if (this.frameCount < 28) rejectionStatus = "WARMUP";
 
     if (rejectionStatus && rejectionStatus !== "WARMUP" && rejectionStatus !== "MOTION_ARTIFACT") {
-      this.lastPlacementEvidence = null;
+      // La evidencia de colocación ya está actualizada (arriba): un rechazo de
+      // exposición no debe borrar la guía, porque el usuario necesita saber qué
+      // hacer con el dedo aunque la cámara aún no esté lista.
       this.onSignalReady({
         timestamp,
         rawValue: 0, filteredValue: 0, quality: 0,
@@ -470,22 +475,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const acPi = this.calculatePerfusionIndex();
     const pulsePi = this.estimatePulsePiFromRoi();
     this.cachedPI = Math.max(acPi, pulsePi);
-
-    // Evidencia de colocacion fisica REAL (presion, ubicacion, movimiento,
-    // pulso) — alimenta la ventana 3D y la guia de UI. Cada frame con dedo.
-    // `sealRatio` es el sellado por tejido (no la máscara AC/DC): con el flash
-    // encendido el rojo satura y la máscara fisiológica colapsa, lo que hacía
-    // que el modelo leyera "poco dedo" con el dedo bien apoyado.
-    this.lastPlacementEvidence = computePlacementEvidence({
-      sealRatio: roi.sealRatio,
-      perfusedFraction: roi.perfusedFraction,
-      centroidX: roi.centroidX,
-      centroidY: roi.centroidY,
-      motionScore: Math.max(this.motionScore, this.signalMotionScore),
-      perfusionIndex: this.cachedPI,
-      dcLevel: roi.tissueRed > 0 ? roi.tissueRed : this.redDC > 0 ? this.redDC : this.smoothedRed,
-      roiRedCv: this.lastRoiRedCv,
-    });
 
     const placementInstant = classifyFingerPlacement({
       coverageRatio: this.smoothedCoverage || roi.coverageRatio,
@@ -764,6 +753,35 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   // === ESTADO DE CONTACTO UNIFICADO ===
+/**
+   * Evidencia física de colocación: sellado de lente, perfusión, centrado y
+   * movimiento. Es la entrada del modelo transmural de presión y de la guía al
+   * usuario.
+   *
+   * Se calcula en TODO frame con ROI, no solo cuando la señal ya es válida: si
+   * se anulara en cada rechazo, el usuario no recibiría la instrucción "apoya el
+   * dedo en la lente" justo cuando más la necesita.
+   */
+  private updatePlacementEvidence(roi: ROIMetrics, motionArtifact: boolean): void {
+    // `sealRatio` es sellado por tejido (dominancia roja), NO la máscara AC/DC:
+    // con el flash encendido el rojo satura y la máscara fisiológica colapsa, lo
+    // que hacía que el modelo leyera "poco dedo" con el dedo bien apoyado.
+    const motionScore = motionArtifact
+      ? 1
+      : Math.max(this.motionScore, this.signalMotionScore);
+    this.lastPlacementEvidence = computePlacementEvidence({
+      sealRatio: roi.sealRatio,
+      perfusedFraction: roi.perfusedFraction,
+      centroidX: roi.centroidX,
+      centroidY: roi.centroidY,
+      motionScore,
+      // PI: se usa el último válido; con 0 el modelo no afirma nada.
+      perfusionIndex: this.cachedPI,
+      dcLevel: roi.tissueRed > 0 ? roi.tissueRed : this.redDC > 0 ? this.redDC : this.smoothedRed,
+      roiRedCv: this.lastRoiRedCv,
+    });
+  }
+
   private updateContactState(roi: ROIMetrics): void {
     const previousState = this.contactState;
     const hints = this.cameraHints;

@@ -68,9 +68,16 @@ const P = VITAL_THRESHOLDS.PRESSURE;
 const MOTION_BAD = 0.45;
 const MOTION_GOOD_MIN = 0.40;
 
-/** Fracción mínima de píxeles de tejido que deben estar perfundidos para que
- *  el blanqueo sea atribuido a isquemia y no a un dedo frío o mal apoyado. */
+/** Fracción mínima de píxeles de tejido que deben estar perfundidos: se usa
+ *  solo como contexto de guía, nunca para decidir el blanqueo. */
 const PERFUSED_FLOOR = 0.22;
+
+/**
+ * PI_GOOD expresado en la MISMA escala que `pulsatility` (normalizada contra
+ * PI_REF). Comparar la pulsatilidad normalizada contra el PI absoluto era un
+ * error de unidades que hacía que cualquier pulso débil pasara por "óptimo".
+ */
+const PULS_GOOD_NORM = P.PI_GOOD / P.PI_REF;
 
 export type TransmuralState = 'NONE' | 'LIGHT' | 'IDEAL' | 'HEAVY';
 export type TransmuralAxis = 'UNKNOWN' | 'UNDER' | 'OPTIMAL' | 'OVER';
@@ -78,6 +85,7 @@ export type TransmuralReason =
   | 'WARMUP'
   | 'NO_CONTACT'
   | 'MOTION'
+  | 'SETTLING'
   | 'NO_REFERENCE'
   | 'UNDER'
   | 'OPTIMAL'
@@ -244,6 +252,10 @@ function settle(state: TransmuralModelState, candidate: TransmuralState): void {
     state.candidateRun = 0;
     return;
   }
+  // La racha solo cuenta si el candidato INSISTE. Sin este reinicio, una
+  // secuencia LIGHT → IDEAL → HEAVY acumulaba racha mezclando candidatos y
+  // confirmaba un estado que nunca se sostuvo.
+  if (candidate !== state.candidate) state.candidateRun = 0;
   state.candidate = candidate;
   state.candidateRun += 1;
   const needed = candidate === 'HEAVY' ? P.HEAVY_ENTER_FRAMES : P.VERDICT_CONFIRM_FRAMES;
@@ -301,17 +313,18 @@ export function observeTransmuralPressure(
   const hasContact = state.seal >= P.COVER_MIN;
 
   // El sellado fija el DC de referencia del episodio: es el punto de "dedo
-  // apoyado sin fuerza extra". Se ancla una sola vez, cuando la lente se cubre
-  // por primera vez, para que la deriva del AE previa al contacto no falsee la
-  // lectura de fuerza (que es lo que hacía que "cualquier posición" pareciera
-  // presión alta).
-  if (!state.sealLearned && state.seal >= P.COVER_GOOD && state.dcSlow > 0) {
-    state.dcRef = state.dcSlow;
+  // apoyado sin fuerza extra". Se ancla al DC RÁPIDO del instante en que la
+  // lente se cubre — si se usara el EMA lento arrastraría el valor oscuro
+  // previo al contacto y cualquier apoyo posterior parecería presión excesiva.
+  if (!state.sealLearned && state.seal >= P.COVER_GOOD && state.dcFast > 0) {
+    state.dcRef = state.dcFast;
     state.sealLearned = true;
   }
 
   // El mejor PI del episodio define Pt ≈ 0. Se congela en HEAVY y con
-  // movimiento para no aprender un máximo espurio ni olvidar el colapso.
+  // movimiento para no aprender un máximo espurio ni olvidar el colapso. El DC
+  // que acompaña a ese máximo es la referencia de fuerza fisiológicamente
+  // correcta: "el DC con el que el pulso fue máximo".
   if (
     state.state !== 'HEAVY' &&
     !motionBad &&
@@ -320,7 +333,7 @@ export function observeTransmuralPressure(
     (!state.peakLearned || state.piFast > state.piPeak * (1 + P.PI_PEAK_MARGIN))
   ) {
     state.piPeak = Math.max(state.piPeak, state.piFast);
-    state.dcAtPeak = state.dcSlow;
+    state.dcAtPeak = state.dcFast;
     state.peakLearned = true;
   }
 
@@ -334,9 +347,11 @@ export function observeTransmuralPressure(
   const pulsatility = clamp01(state.piFast / Math.max(1e-6, P.PI_REF));
 
   // ── DC: eje monótono de la fuerza (Teng 2004, Sensors 2024) ────────────────
-  // Se compara contra el DC de referencia del sellado, no contra el mínimo del
-  // episodio: el mínimo puede ser un frame oscuro previo al contacto.
-  const dcBaseline = state.dcRef > 0 ? state.dcRef : state.dcMin;
+  // Se compara contra el DC con el que el pulso fue máximo (`dcAtPeak`), que es
+  // el Pt ≈ 0 fisiológico; antes de aprenderlo se usa el DC de sellado. Nunca se
+  // usa el mínimo del episodio: un frame oscuro previo al contacto falseaba toda
+  // la lectura de fuerza.
+  const dcBaseline = state.dcAtPeak > 0 ? state.dcAtPeak : state.dcRef;
   const dcBaselineValid = dcBaseline >= P.DC_MIN_BASELINE;
   const dcSpan = Math.max(dcBaseline * P.DC_DYNAMIC_SPAN, P.DC_MIN_SPAN);
   const forceProxy = dcBaselineValid
@@ -364,17 +379,20 @@ export function observeTransmuralPressure(
   const flat = 1 - clamp01(state.cv / Math.max(1e-6, P.CV_FLAT_REF));
 
   // ── Blanqueo microvascular ────────────────────────────────────────────────
-  // Solo se atribuye a isquemia si el tejido está sellado Y perfundido: un dedo
-  // frío o apoyado fuera de la lente da AC baja sin colapso por presión.
+  // Requiere evidencia de FUERZA (DC subiendo o alto). Sin ese requisito, un
+  // dedo frío con AC baja y DC normal se leería como "blanqueo 74%" en el gauge.
+  // Y con él, el caso extremo —isquemia total, cero píxeles perfundidos— sigue
+  // siendo detectable, porque el DC delata la fuerza: atar el blanqueo a la
+  // fracción perfundida lo apagaba justo cuando el colapso era completo.
   const couplingFactor = sealNorm;
-  const perfusedOk = perfusedFraction === null || perfusedFraction >= PERFUSED_FLOOR;
-  const blanchEligible = hasContact && perfusedOk;
+  const forceEvidence = Math.max(dcRise, dcHigh ? 1 : 0);
+  const blanchEligible = hasContact && forceEvidence > 0;
   const blanching = blanchEligible
     ? clamp01(
       couplingFactor * (
         P.BLANCH_AC_WEIGHT * piDeficit +
         P.BLANCH_FLAT_WEIGHT * flat +
-        P.BLANCH_DC_WEIGHT * Math.max(dcRise, dcHigh ? 1 : 0)
+        P.BLANCH_DC_WEIGHT * forceEvidence
       ),
     )
     : 0;
@@ -392,15 +410,23 @@ export function observeTransmuralPressure(
       perfusionRatio >= P.PI_RECOVER && blanching <= P.BLANCH_EXIT && !dcHigh
         ? 'IDEAL'
         : 'HEAVY';
-  } else if (blanchEligible && blanching >= P.BLANCH_ENTER && (dcHigh || dcRise >= P.DC_RISE_MIN)) {
+  } else if (blanchEligible && blanching >= P.BLANCH_ENTER && forceEvidence > 0) {
     candidate = 'HEAVY';
+  } else if (blanchEligible && blanching >= P.BLANCH_EXIT) {
+    // Banda de transición: hay evidencia de colapso incipiente (DC subiendo,
+    // AC cayendo, blanqueo por encima del umbral de salida) pero todavía no
+    // alcanza para CONFIRMAR la isquemia. Sin esta banda el veredicto caía a
+    // IDEAL y la guía afirmaba "presión óptima · mantén" justo cuando el usuario
+    // estaba apretando de más: el síntoma exacto de "dice cualquier cosa".
+    // Se declara "no confirmable" en lugar de afirmar el óptimo.
+    candidate = 'NONE';
   } else if (state.seal < P.COVER_GOOD) {
     // Lente no cubierta por la yema: es el caso más común de "apoya bien".
     candidate = 'LIGHT';
   } else if (!hasReference) {
     // Sin máximo de referencia el pulso no es comparable: solo el sellado
     // autoriza a afirmar que el apoyo es correcto.
-    candidate = pulsatility >= P.PI_GOOD ? 'IDEAL' : 'NONE';
+    candidate = pulsatility >= PULS_GOOD_NORM ? 'IDEAL' : 'NONE';
   } else if (piDeficit >= P.PI_DEFICIT_LIGHT && !dcHigh) {
     candidate = 'LIGHT';
   } else {
@@ -419,10 +445,10 @@ export function observeTransmuralPressure(
   } else if (state.seal < P.COVER_GOOD) {
     axis = 'UNDER';
   } else if (!hasReference) {
-    axis = pulsatility >= P.PI_GOOD ? 'OPTIMAL' : 'UNKNOWN';
+    axis = pulsatility >= PULS_GOOD_NORM ? 'OPTIMAL' : 'UNKNOWN';
   } else if (piDeficit <= P.PI_DEFICIT_OPTIMAL) {
     axis = 'OPTIMAL';
-  } else if (blanchEligible && blanching >= P.BLANCH_ENTER && (dcHigh || dcRise >= P.DC_RISE_MIN)) {
+  } else if (blanchEligible && blanching >= P.BLANCH_ENTER) {
     axis = 'OVER';
   } else if (dcDelta <= -P.DC_DISPLACE_MIN || !dcHigh) {
     axis = 'UNDER';
@@ -460,7 +486,9 @@ export function observeTransmuralPressure(
   }
   if (state.state === 'HEAVY') fraction = Math.max(fraction, 0.70);
   if (state.state === 'LIGHT') fraction = Math.min(fraction, 0.42);
-  if (state.state === 'NONE') fraction = 0.5;
+  // NONE ya no se fuerza a 0.5: con el eje conocido (OVER/UNDER) el cursor debe
+  // moverse aunque el veredicto aún no esté confirmado; solo el eje UNKNOWN
+  // (sin contacto o sin referencia) deja el cursor en el centro.
 
   // Durante movimiento se mantiene el último grado válido: la interfaz no debe
   // interpretar un artefacto como un cambio de presión.
@@ -472,14 +500,24 @@ export function observeTransmuralPressure(
   fraction = clamp01(fraction);
 
   // ── Motivo ────────────────────────────────────────────────────────────────
+  // Se deriva del veredicto ASENTADO, no del candidato instantáneo. Derivarlo del
+  // candidato hacía que el texto de guía cambiara 3 veces mientras la histéresis
+  // confirmaba un solo estado: el usuario veía "presiona más" → "mantén" →
+  // "suelta" en menos de medio segundo, sin que nada real hubiera cambiado.
   let reason: TransmuralReason;
   if (state.frame < P.MIN_EVIDENCE_FRAMES) reason = 'WARMUP';
   else if (state.seal < P.COVER_MIN) reason = 'NO_CONTACT';
   else if (motionBad) reason = 'MOTION';
-  else if (state.state === 'HEAVY' || axis === 'OVER') reason = 'OVER';
-  else if (state.state === 'LIGHT' || axis === 'UNDER') reason = 'UNDER';
+  else if (state.state === 'HEAVY') reason = 'OVER';
+  else if (state.state === 'LIGHT') reason = 'UNDER';
+  else if (state.state === 'IDEAL') {
+    // Urgencia: si hay un candidato correctivo pendiente, NO se afirma "mantén".
+    // Afirmar "presión óptima" mientras la presión ya es excesiva es el "dice
+    // cualquier cosa". Se muestra neutro hasta que el candidato se confirme.
+    reason = candidate === 'IDEAL' ? 'OPTIMAL' : 'SETTLING';
+  }
   else if (!hasReference) reason = 'NO_REFERENCE';
-  else reason = 'OPTIMAL';
+  else reason = 'SETTLING';
 
   const confidence = clamp01(
     0.34 * coupling +
@@ -497,7 +535,7 @@ export function observeTransmuralPressure(
     pulsatility,
     blanching,
     confidence,
-    perfusedOk,
+    perfusedOk: perfusedFraction === null || perfusedFraction >= PERFUSED_FLOOR,
   });
 
   return {
@@ -540,7 +578,7 @@ function buildGuidance(input: {
     input.state === 'HEAVY'
       ? 1 - input.blanching
       : input.state === 'LIGHT'
-        ? input.sealNorm * 0.5 + clamp01(input.pulsatility / Math.max(1e-6, P.PI_GOOD)) * 0.5
+        ? input.sealNorm * 0.5 + clamp01(input.pulsatility / Math.max(1e-6, PULS_GOOD_NORM)) * 0.5
         : input.state === 'IDEAL'
           ? 0.85 + 0.15 * clamp01(input.pulsatility)
           : 0.35,
@@ -577,6 +615,14 @@ function buildGuidance(input: {
         headline: 'PRESIONA UN POCO MÁS',
         detail: 'La lente está cubierta pero el pulso todavía no es aprovechable. Aumenta el apoyo de forma suave y constante.',
       };
+    case 'SETTLING':
+      // El estado aún no está confirmado: no se afirma ni se pide corregir.
+      return {
+        ...base,
+        action: 'WAIT',
+        headline: 'AJUSTANDO LA PRESIÓN',
+        detail: 'La señal todavía no permite confirmar la presión. Mantén el dedo quieto un instante.',
+      };
     case 'UNDER':
       return input.seal < P.COVER_GOOD
         ? {
@@ -596,9 +642,11 @@ function buildGuidance(input: {
         ...base,
         action: 'RELEASE',
         headline: input.state === 'HEAVY' ? 'SUELTA UN POCO EL DEDO' : 'PRESIONAS DE MÁS',
-        detail: input.blanching > 0.7
-          ? 'El flujo sanguíneo se está cortando (los capilares se colapsan). Relaja la presión.'
-          : 'La presión excede la del lecho capilar. Afloja hasta notar el pulso otra vez.',
+        detail: !input.perfusedOk
+          ? 'El riego ha desaparecido del lecho capilar: la presión es excesiva. Afloja de inmediato.'
+          : input.blanching > 0.7
+            ? 'El flujo sanguíneo se está cortando (los capilares se colapsan). Relaja la presión.'
+            : 'La presión excede la del lecho capilar. Afloja hasta notar el pulso otra vez.',
       };
     case 'OPTIMAL':
     default:

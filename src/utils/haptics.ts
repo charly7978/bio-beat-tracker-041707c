@@ -142,7 +142,7 @@ export function pressureHapticCue(
       severity,
       webPattern: [0, pulse, 70, Math.round(pulse * 0.45), 70, pulse],
       nativeStyle: ImpactStyle.Heavy,
-      nativeRepeats: 2 + Math.round(severity * 2),
+      nativeRepeats: severity >= severe ? 3 : 2,
     };
   }
 

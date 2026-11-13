@@ -209,8 +209,45 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
     expect(reading.guidance.action).not.toBe('RELEASE');
   });
 
+  it('dedo frío con DC normal no se lee como blanqueo en el gauge', () => {
+    // Con referencia establecida, AC baja y DC SIN subir: es baja perfusión por
+    // frío, no isquemia. El índice de blanqueo debe quedar en cero.
+    feed(state, 45);
+    const reading = feed(state, 30, {
+      sealRatio: 0.62,
+      perfusedFraction: 0.05,
+      perfusionIndex: 0.0006,
+      dcLevel: 150,
+      roiRedCv: 0.004,
+    });
+
+    expect(reading.blanching).toBe(0);
+    expect(reading.state).toBe('LIGHT');
+    expect(reading.guidance.action).toBe('PRESS_MORE');
+  });
+
+  it('isquemia extrema con cero perfusión se detecta igual (el DC delata la fuerza)', () => {
+    // Caso límite que una compuerta por "fracción perfundida" apagaba: cuando el
+    // colapso es total no queda ningún píxel perfundido, así que exigir perfusión
+    // para diagnosticar blanqueo dejaba pasar justo la isquemia más severa.
+    feed(state, 45);
+    const reading = feed(state, 20, {
+      sealRatio: 0.92,
+      perfusedFraction: 0,
+      perfusionIndex: 0.0002,
+      dcLevel: 220,
+      roiRedCv: 0.005,
+    });
+
+    expect(reading.blanching).toBeGreaterThan(0.5);
+    expect(reading.state).toBe('HEAVY');
+    expect(reading.guidance.action).toBe('RELEASE');
+  });
+
   it('exige histéresis para entrar y salir de HEAVY', () => {
     feed(state, 45);
+    // 4 frames de presión excesiva: la evidencia ya es clara, pero HEAVY aún no
+    // está confirmado. Lo esencial es que NUNCA afirme "óptimo" en este punto.
     const almost = feed(state, 4, {
       sealRatio: 0.9,
       perfusedFraction: 0.7,
@@ -218,9 +255,11 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
       dcLevel: 215,
       roiRedCv: 0.006,
     });
-    expect(almost.state).toBe('IDEAL');
+    expect(almost.state).not.toBe('HEAVY');
+    expect(almost.reason).not.toBe('OPTIMAL');
+    expect(almost.guidance.action).not.toBe('HOLD');
 
-    const confirmed = feed(state, 6, {
+    const confirmed = feed(state, 10, {
       sealRatio: 0.9,
       perfusedFraction: 0.7,
       perfusionIndex: 0.0005,
@@ -230,13 +269,38 @@ describe('transmuralPressureModel — fisiología de presión transmural', () =>
     expect(confirmed.state).toBe('HEAVY');
     expect(confirmed.guidance.action).toBe('RELEASE');
 
-    const stillHeavy = feed(state, 11, HEALTHY);
-    expect(stillHeavy.state).toBe('HEAVY');
+    // Un parpadeo breve de señal buena NO debe borrar el colapso (anti-flicker).
+    const afterBlip = feed(state, 2, HEALTHY);
+    expect(afterBlip.state).toBe('HEAVY');
+    expect(afterBlip.guidance.action).toBe('RELEASE');
 
-    const recovered = feed(state, 25, HEALTHY);
+    // Contacto sano SOSTENIDO sí debe recuperar: el usuario ya corrigió.
+    const recovered = feed(state, 20, HEALTHY);
     expect(recovered.state).toBe('IDEAL');
     expect(recovered.reason).toBe('OPTIMAL');
     expect(recovered.guidance.action).toBe('HOLD');
+  });
+
+  it('la guía no cambia de texto mientras el veredicto se confirma', () => {
+    // Defecto real observado: durante la histéresis de entrada la guía alternaba
+    // "presiona más" → "mantén" → "suelta" en ~0,2 s sin que el estado real
+    // hubiera cambiado. El texto debe seguir al veredicto asentado.
+    feed(state, 45);
+    const seen = new Set<string>();
+    for (let i = 0; i < 12; i++) {
+      const r = observeTransmuralPressure(state, {
+        sealRatio: 0.9,
+        perfusedFraction: 0.7,
+        motionScore: 0.05,
+        perfusionIndex: 0.0005,
+        dcLevel: 215,
+        roiRedCv: 0.006,
+      });
+      seen.add(r.guidance.headline);
+    }
+    // A lo sumo dos estados: "ajustando" y el veredicto final. Nunca tres.
+    expect(seen.size).toBeLessThanOrEqual(2);
+    expect(seen.has('PRESIÓN ÓPTIMA · MANTÉN')).toBe(false);
   });
 
   it('el grado crece de forma monótona al aumentar el DC (eje de fuerza)', () => {

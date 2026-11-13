@@ -87,7 +87,8 @@ export function PressureCoach({ evidence, isMonitoring }: PressureCoachProps) {
   return (
     <div
       className="pointer-events-none absolute left-2 right-2 z-20"
-      style={{ top: 'calc(136px + env(safe-area-inset-top, 0px))' }}
+      // Debajo de la cabecera (36 px) y de la barra de métricas (hasta ~108 px).
+      style={{ top: 'calc(150px + env(safe-area-inset-top, 0px))' }}
     >
       <div
         role="status"
