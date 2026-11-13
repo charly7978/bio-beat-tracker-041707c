@@ -393,8 +393,12 @@ function unitRidges(): RidgePoint[][] {
 /**
  * Alpha de cada capa que se pinta ENCIMA del vídeo. La suma de todas es lo que
  * el usuario percibe como "opacidad" de la ventana: el dedo (rojo oscuro sobre
- * negro) tiene que verse a través de ellas. Ninguna capa pasa de 0.20 y en la
- * banda del dedo el vídeo conserva ≥ 78 % de su luz.
+ * negro) tiene que verse a través de ellas. Ninguna capa pasa de 0.20.
+ *
+ * `VIDEO_ALPHA` es la opacidad del propio vídeo: el resto deja ver la grilla del
+ * piso a través del cristal, de modo que la ventana queda recostada DEBAJO de la
+ * grilla y no como un parche opaco encima de ella. Las líneas de la grilla se
+ * pintan después del pozo (ver drawGrid3DLines), así que también lo cruzan.
  */
 export const WELL_VEIL = {
   TINT_MIN: 0.02,
@@ -403,6 +407,7 @@ export const WELL_VEIL = {
   DEPTH_MID: 0.05,
   DEPTH_NEAR: 0.0,
   GLASS_FAR: 0.03,
+  VIDEO_ALPHA: 0.62,
 } as const;
 
 function depthVeilAt(v: number): number {

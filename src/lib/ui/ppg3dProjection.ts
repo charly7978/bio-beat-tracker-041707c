@@ -143,10 +143,28 @@ export function makeProjector(state: PpgRenderState): Projector {
 }
 
 /**
+ * Fondo negro del escenario 3D. Va ANTES del pozo de previsualización: la
+ * ventana se apoya sobre este fondo y las líneas de la grilla se pintan después,
+ * de modo que el pozo queda visualmente DEBAJO del piso.
+ */
+export function drawGrid3DBackdrop(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
+  const { plot } = state.layout;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(plot.x, plot.y, plot.w, plot.h);
+  ctx.clip();
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
+  ctx.restore();
+}
+
+/**
  * Dibuja la GRILLA-PISO en perspectiva (reemplaza `drawECGGrid` cuando 3D estÃ¡ activo).
  * Mantiene la semÃ¡ntica ECG (lÃ­neas mayores/menores) pero con profundidad real.
+ * Se pinta DESPUÉS de `drawPreviewWell3D` para que el pozo quede debajo de la
+ * grilla y las líneas del piso lo crucen por encima.
  */
-export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
+export function drawGrid3DLines(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const proj = makeProjector(state);
   const { plot } = state.layout;
 
@@ -154,10 +172,6 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.beginPath();
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
-
-  // Fondo NEGRO sÃ³lido detrÃ¡s de la grilla.
-  ctx.fillStyle = '#000000';
-  ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
 
   // LÃ­nea de horizonte (tenue, marca el punto de fuga).
   ctx.strokeStyle = `rgba(${C.gridMinor}, 0.35)`;
@@ -755,8 +769,9 @@ function drawFloorWarpedVideo(
 
 /**
  * Dibuja la VENTANA DE PREVISUALIZACIÓN ACOSTADA sobre la grilla 3D.
- * Debe llamarse DESPUÉS de `drawGrid3D` y ANTES de la onda (`drawSignal`), para
- * que las ondas cardíacas fluyan visualmente por delante de la ventana.
+ * Debe llamarse DESPUÉS de `drawGrid3DBackdrop` y ANTES de `drawGrid3DLines` y
+ * de la onda (`drawSignal`): el pozo queda debajo de la grilla, las líneas del
+ * piso lo cruzan por encima y las ondas cardíacas fluyen por delante.
  *
  * @param source  element de video de la cámara trasera (o null ? ventana vacía).
  */
@@ -806,18 +821,23 @@ export function drawPreviewWell3D(
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
-  // 1) CRISTAL: base oscura (oculta la grilla de debajo) con degradado
-  //    vertical, para que el borde lejano no sea una masa plana.
+  // 1) CRISTAL: base apenas oscurece el piso. La grilla se pinta DESPUÉS del
+  //    pozo, así que no hace falta taparla; una base opaca convertiría la
+  //    ventana en un parche y rompería la lectura de "recostada bajo la grilla".
   const body = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
-  body.addColorStop(0, 'rgba(4, 9, 16, 0.90)');
-  body.addColorStop(1, 'rgba(2, 5, 9, 0.96)');
+  body.addColorStop(0, 'rgba(4, 9, 16, 0.22)');
+  body.addColorStop(1, 'rgba(2, 5, 9, 0.10)');
   quadPath(ctx, quad);
   ctx.fillStyle = body;
   ctx.fill();
 
-  // 2) VIDEO real recortado al centro y proyectado sobre el piso.
+  // 2) VIDEO real recortado al centro y proyectado sobre el piso. Se pinta
+  //    translúcido para que el piso y las líneas se lean a través del cristal.
   if (hasVideo) {
+    ctx.save();
+    ctx.globalAlpha = WELL_VEIL.VIDEO_ALPHA;
     drawFloorWarpedVideo(ctx, source as HTMLVideoElement, geo);
+    ctx.restore();
   } else {
     // Sensor aún sin imagen: vetas de espera que respetan la perspectiva.
     ctx.save();

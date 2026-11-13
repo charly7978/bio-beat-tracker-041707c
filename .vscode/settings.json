@@ -6,5 +6,6 @@
     "https://json.schemastore.org/github-workflow.json": ".github/workflows/ci.yml"
   },
   "terminal.integrated.accessibleViewFocusOnCommandExecution": true,
-  "terminal.integrated.allowMnemonics": true
+  "terminal.integrated.allowMnemonics": true,
+  "CodeGPT.apiKey": "OpenAI"
 }

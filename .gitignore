@@ -41,3 +41,4 @@ android/capacitor-cordova-android-plugins/.gradle/
 *.apk
 *.aab
 *.patch
+.andromity/
