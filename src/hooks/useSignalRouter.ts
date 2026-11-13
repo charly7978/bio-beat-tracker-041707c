@@ -3,6 +3,7 @@ import type { ProcessedSignal, ContactState, FingerPlacementMode } from '@/types
 import type { VitalSignsResult, RGBData } from '@/modules/vital-signs/VitalSignsProcessor';
 import type { SignalQualityMetrics } from '@/types/measurements';
 import type { CameraRuntimeHints } from '@/lib/device/cameraDeviceProfile';
+import type { TimedSignalSample } from '@/lib/signal/timedSamples';
 
 import { SignalQualityIndex } from '@/modules/signal-quality/SignalQualityIndex';
 import {
@@ -80,7 +81,9 @@ interface VitalSignsProcessorAPI {
     faceBpm?: number,
     faceQuality?: number,
     accelRespiration?: { rpm: number; quality: number },
+    morphologyBatch?: TimedSignalSample[],
   ) => VitalSignsResult;
+  resetMorphologyWindow: () => void;
   setPlacementMode: (mode: FingerPlacementMode) => void;
   setRGBData: (data: RGBData) => void;
   getRGBStats: () => { redAC: number; redDC: number; greenAC: number; greenDC: number; blueAC?: number; blueDC?: number; rgRatio: number; ratioOfRatios: number };
@@ -140,6 +143,9 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
   // Signal routing internals
   const vitalSignsFrameCounter = useRef<number>(0);
+  // La morfología PPG se acumula en CADA frame; los signos se orquestan cada 3.
+  const morphologyBatchRef = useRef<TimedSignalSample[]>([]);
+  const morphologyStreamActiveRef = useRef(false);
   const unstableFrameCounter = useRef<number>(0);
   const measurementLatchRef = useRef(createMeasurementSessionLatch());
   const lastRrSnapshotRef = useRef<{ intervals: number[]; lastPeakTime: number | null } | null>(null);
@@ -242,9 +248,12 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastRrPushRef.current = 0;
     lastSignalPushRef.current = 0;
     lastDiagPushRef.current = 0;
+    morphologyBatchRef.current = [];
+    morphologyStreamActiveRef.current = false;
+    processVitalSigns.resetMorphologyWindow();
     ppgMeterRef?.current?.clearBuffer();
 
-  }, [processHeartBeat, ppgMeterRef]);
+  }, [processHeartBeat, processVitalSigns, ppgMeterRef]);
 
 
   const resetSessionRefs = useCallback(() => {
@@ -268,9 +277,12 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     sanityErrorRef.current = null;
     lastArrhythmiaData.current = null;
     arrhythmiaDetectedRef.current = false;
+    morphologyBatchRef.current = [];
+    morphologyStreamActiveRef.current = false;
+    processVitalSigns.resetMorphologyWindow();
     ppgMeterRef?.current?.clearBuffer();
 
-  }, [ppgMeterRef]);
+  }, [processVitalSigns, ppgMeterRef]);
 
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
     if (!isMonitoringRef.current) return;
@@ -519,6 +531,36 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       nowMs: nowT,
     });
     const { vitalsDspReady, fullVitalsReady, hrDisplayReady: hrReady } = readiness;
+
+    // Muestreamos morfología a la frecuencia de captura, no a la cadencia
+    // reducida de VitalSignsProcessor. Los timestamps provienen del frame real.
+    const morphologyValue = lastSignal.morphologyFiltered;
+    const morphologyFrameUsable =
+      vitalsDspReady &&
+      hasUsableContact &&
+      contactState === 'STABLE_CONTACT' &&
+      !lastSignal.motionArtifact &&
+      typeof morphologyValue === 'number' &&
+      Number.isFinite(morphologyValue) &&
+      Math.abs(morphologyValue) > 1e-9 &&
+      typeof lastSignal.timestamp === 'number' &&
+      Number.isFinite(lastSignal.timestamp);
+
+    if (morphologyFrameUsable) {
+      morphologyStreamActiveRef.current = true;
+      morphologyBatchRef.current.push({
+        value: morphologyValue,
+        timestampMs: lastSignal.timestamp,
+      });
+      // Mantener 6 s como máximo para resampleo y análisis de calidad.
+      if (morphologyBatchRef.current.length > 180) {
+        morphologyBatchRef.current.splice(0, morphologyBatchRef.current.length - 180);
+      }
+    } else if (morphologyStreamActiveRef.current || morphologyBatchRef.current.length > 0) {
+      morphologyBatchRef.current = [];
+      morphologyStreamActiveRef.current = false;
+      processVitalSigns.resetMorphologyWindow();
+    }
 
     const showWaveform = hasUsableContact;
 
@@ -770,6 +812,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       };
 
       const effectiveBpm = bpmOut || lastGoodBpmRef.current;
+      const morphologyBatch = morphologyBatchRef.current;
+      morphologyBatchRef.current = [];
 
       const vitals = processVitalSigns.processSignal(
         lastSignal.filteredValue,
@@ -779,7 +823,12 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         lastSignal.perfusionIndex,
         enrichedSqm,
         lastSignal.morphologyValue ?? lastSignal.filteredValue,
-        splitterChannels
+        splitterChannels,
+        undefined,
+        undefined,
+        undefined,
+        lastSignal.accelRespiration,
+        morphologyBatch
       );
 
       vitalSignsRef.current = vitals;
