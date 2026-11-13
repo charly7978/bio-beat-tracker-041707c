@@ -52,6 +52,27 @@ export class CircularBuffer {
   }
 
   /**
+   * Devuelve solo las muestras desde cutoffTime hasta la más reciente,
+   * en orden cronológico. El escaneo comienza en la cola y se detiene al salir
+   * de la ventana visible: evita copiar miles de puntos en cada frame del Canvas.
+   */
+  getRecentPointsSince(cutoffTime: number): readonly PPGDataPoint[] {
+    if (this.size === 0 || !Number.isFinite(cutoffTime)) return [];
+
+    const recent: PPGDataPoint[] = [];
+    for (let i = this.size - 1; i >= 0; i--) {
+      const idx = (this.head + i) % this.capacity;
+      const point = this.buffer[idx];
+      if (!point) continue;
+      if (point.time < cutoffTime) break;
+      recent.push(point);
+    }
+
+    recent.reverse();
+    return recent;
+  }
+
+  /**
    * Marca retroactivamente como arritmia todos los puntos
    * desde hace `durationMs` milisegundos hasta el presente.
    * Itera al revés desde la cola sin crear copia.
