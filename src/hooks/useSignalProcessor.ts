@@ -10,6 +10,11 @@ import { createLogger } from '../utils/logger';
 
 const log = createLogger('useSignalProcessor');
 
+interface PendingPpgFrame {
+  imageData: ImageData;
+  timestamp?: number;
+}
+
 /**
  * Hook que adapta el procesamiento de PPG a través de un Web Worker en un hilo separado.
  * Mantiene compatibilidad total con la interfaz del hilo principal de React.
@@ -42,6 +47,9 @@ export const useSignalProcessor = () => {
 
   // Hot-path callback: corre por cada frame SIN pasar por React.
   const realtimeCbRef = useRef<((s: ProcessedSignal) => void) | null>(null);
+  // Una imagen en proceso y, como máximo, la más reciente en espera.
+  const frameInFlightRef = useRef(false);
+  const pendingFrameRef = useRef<PendingPpgFrame | null>(null);
   // Throttle del snapshot UI (lastSignal): ~10 Hz es suficiente para HUD.
   const lastUiPushRef = useRef<number>(0);
   const UI_SNAPSHOT_INTERVAL_MS = 100;
