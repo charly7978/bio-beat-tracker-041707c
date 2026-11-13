@@ -1,5 +1,7 @@
+import { Capacitor } from '@capacitor/core';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 import type { PressureVerdict } from '@/lib/finger/fingerPlacementEvidence';
+import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import { logWarn } from './logger';
 
 const HAPTICS_SCOPE = 'Haptics';
@@ -86,35 +88,112 @@ export async function triggerSessionEndHaptic(): Promise<void> {
   );
 }
 
+export interface PressureHapticCue {
+  verdict: Exclude<PressureVerdict, 'NONE'>;
+  /** Severidad [0..1] derivada del grado continuo (no del veredicto). */
+  severity: number;
+  /** Patrón de micro-vibraciones para `navigator.vibrate` (ms). */
+  webPattern: number[];
+  /** Estilo del impacto nativo. */
+  nativeStyle: ImpactStyle;
+  /** Repeticiones del impacto nativo (la severidad escala el número). */
+  nativeRepeats: number;
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/**
+ * Traduce el veredicto + el grado continuo del modelo transmural a un patrón
+ * háptico graduado. La severidad es la distancia al óptimo (0.5), de modo que
+ * un "apoya un poco más" y un "apoya mucho más" se sienten distintos.
+ *
+ * La cadencia (settle + cooldown + repetición) vive en `useSignalRouter`; aquí
+ * solo se define la forma del aviso, igual que el resto de patrones.
+ */
+export function pressureHapticCue(
+  verdict: Exclude<PressureVerdict, 'NONE'>,
+  pressureScore: number,
+): PressureHapticCue {
+  const score = Number.isFinite(pressureScore) ? clamp01(pressureScore) : 0.5;
+  const severe = VITAL_THRESHOLDS.PRESSURE.HAPTIC_SEVERE_FRACTION;
+
+  if (verdict === 'LIGHT') {
+    const severity = clamp01((0.5 - score) / 0.5);
+    const pulse = Math.round(24 + 26 * severity);
+    return {
+      verdict,
+      severity,
+      webPattern: [0, pulse, 70, pulse],
+      nativeStyle: ImpactStyle.Medium,
+      nativeRepeats: severity >= severe ? 2 : 1,
+    };
+  }
+
+  if (verdict === 'HEAVY') {
+    const severity = clamp01((score - 0.5) / 0.5);
+    const pulse = Math.round(35 + 45 * severity);
+    return {
+      verdict,
+      severity,
+      webPattern: [0, pulse, 60, pulse, 60, pulse],
+      nativeStyle: ImpactStyle.Heavy,
+      nativeRepeats: 2 + Math.round(severity),
+    };
+  }
+
+  return {
+    verdict: 'IDEAL',
+    severity: 0,
+    webPattern: [0, 12],
+    nativeStyle: ImpactStyle.Light,
+    nativeRepeats: 1,
+  };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 /**
  * Bucle cerrado de presión (modelo transmural):
  *  - LIGHT : toque firme para pedir más apoyo (la señal es débil).
  *  - IDEAL : confirmación sutil de presión óptima.
  *  - HEAVY : advertencia de colapso capilar; liberar restaura la AC.
  *
- * La cadencia y el anti-rebote viven en `useSignalRouter`; aquí solo se
- * traduce el veredicto único a un patrón distinguible.
+ * En web se usan micro-vibraciones de `navigator.vibrate` (patrón graduado por
+ * severidad); en el dispositivo se usa el motor háptico nativo con repeticiones
+ * proporcionales a la severidad.
  */
 export async function triggerPressureHaptic(
   verdict: Exclude<PressureVerdict, 'NONE'>,
+  pressureScore: number,
 ): Promise<void> {
-  if (verdict === 'HEAVY') {
-    return fireHaptic(
-      'pressure high',
-      () => Haptics.impact({ style: ImpactStyle.Heavy }),
-      [180, 90, 180, 90, 180],
-    );
+  const cue = pressureHapticCue(verdict, pressureScore);
+
+  if (!Capacitor.isNativePlatform()) {
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      try {
+        navigator.vibrate(cue.webPattern);
+      } catch {
+        logWarn(HAPTICS_SCOPE, 'Pressure vibrate failed');
+      }
+    }
+    return;
   }
-  if (verdict === 'LIGHT') {
-    return fireHaptic(
-      'pressure low',
-      () => Haptics.impact({ style: ImpactStyle.Medium }),
-      [60, 60, 60],
-    );
+
+  for (let i = 0; i < cue.nativeRepeats; i++) {
+    try {
+      await Haptics.impact({ style: cue.nativeStyle });
+    } catch {
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate(cue.webPattern);
+      }
+      return;
+    }
+    if (i < cue.nativeRepeats - 1) await delay(55);
   }
-  return fireHaptic(
-    'pressure optimal',
-    () => Haptics.selectionChanged(),
-    15,
-  );
 }

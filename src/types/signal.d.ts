@@ -54,8 +54,9 @@ export interface ProcessedSignal {
     placementHint?: string;
     /**
      * Evidencia física de colocación (presión/ubicación/movimiento/pulso).
-     * Es la ÚNICA fuente de presión: el modelo canónico vive en
-     * fingerPlacementEvidence y no se admite un campo de presión paralelo.
+     * Es la ÚNICA fuente de presión: el modelo fisiológico canónico vive en
+     * `src/lib/pressure/transmuralPressureModel.ts` y `fingerPlacementEvidence`
+     * lo agrega con la colocación; no se admite un campo de presión paralelo.
      */
     placementEvidence?: import('../lib/finger/fingerPlacementEvidence').FingerPlacementEvidence;
     status?: import('./measurements').MeasurementStatus;

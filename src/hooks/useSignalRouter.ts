@@ -483,7 +483,9 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         }
         if (fire) {
           lastPressureHapticAtRef.current = nowT;
-          triggerPressureHaptic(verdict).catch(() => undefined);
+          // El grado continuo del modelo transmural gradúa el patrón: no es un
+          // aviso on/off, la severidad cambia con la distancia al óptimo.
+          triggerPressureHaptic(verdict, pressureEvidence.pressureScore).catch(() => undefined);
         }
         pressureVerdictRef.current = verdict;
       }

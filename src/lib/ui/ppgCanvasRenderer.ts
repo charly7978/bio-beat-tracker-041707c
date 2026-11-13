@@ -802,7 +802,7 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
 
   // Posición libre: arriba del tachograma, a la izquierda, para no solapar la
   // onda ni el panel rítmico (que ocupa plot.y+8..+64).
-  const gaugeW = Math.min(150, Math.max(110, plot.w * 0.32));
+  const gaugeW = Math.min(210, Math.max(168, plot.w * 0.46));
   const gaugeH = 8;
   const gaugeX = plot.x + 12;
   const gaugeY = plot.y + plot.h - RR_TACHO_H - 16;
@@ -811,21 +811,29 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
   ctx.font = `bold 9px ${FONT_MONO}`;
   ctx.textAlign = 'left';
 
-  let labelText = 'PRESIÓN · MIDIENDO';
-  let labelColor = COLORS.TEXT_INFO;
+  // Guía dinámica: la etiqueta y la dirección dependen del GRADO continuo, no
+  // solo del veredicto. "Suelta un poco" y "suelta más" son avisos distintos.
+  const scorePct = Math.round(targetPct * 100);
+  let labelText: string;
+  let labelColor: string;
+  let arrow: string;
 
   if (pressure === 'LIGHT') {
-    labelText = 'PRESIÓN BAJA · APOYA MÁS';
+    labelText = pressureScore < 0.25 ? 'PRESIÓN BAJA · APOYA MÁS' : 'PRESIÓN BAJA · APOYA UN POCO';
     labelColor = COLORS.TEXT_WARN;
+    arrow = '▲';
   } else if (pressure === 'IDEAL') {
-    labelText = 'PRESIÓN ÓPTIMA';
+    labelText = 'PRESIÓN ÓPTIMA · MANTÉN';
     labelColor = COLORS.SIGNAL;
+    arrow = '●';
   } else if (pressure === 'HEAVY') {
-    labelText = 'PRESIÓN ALTA · SUELTA';
+    labelText = pressureScore > 0.80 ? 'PRESIÓN ALTA · SUELTA MÁS' : 'PRESIÓN ALTA · SUELTA UN POCO';
     labelColor = COLORS.TEXT_DANGER;
-  } else if (pressure === 'NONE') {
-    labelText = 'PRESIÓN · SIN EVALUAR';
+    arrow = '▼';
+  } else {
+    labelText = 'PRESIÓN · AJUSTA EL DEDO';
     labelColor = COLORS.TEXT_DIM;
+    arrow = '·';
   }
 
   // Fondo translúcido para legibilidad sobre la onda.
@@ -833,7 +841,10 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
   ctx.fillRect(gaugeX - 4, gaugeY - 14, gaugeW + 8, gaugeH + 20);
 
   ctx.fillStyle = labelColor;
-  ctx.fillText(labelText, gaugeX, gaugeY - 4);
+  ctx.fillText(`${arrow} ${labelText}`, gaugeX, gaugeY - 4);
+  ctx.textAlign = 'right';
+  ctx.fillText(`${scorePct}`, gaugeX + gaugeW, gaugeY - 4);
+  ctx.textAlign = 'left';
 
   const grad = ctx.createLinearGradient(gaugeX, 0, gaugeX + gaugeW, 0);
   grad.addColorStop(0, '#f59e0b');
@@ -849,8 +860,17 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
   ctx.fillStyle = grad;
   ctx.fillRect(gaugeX, gaugeY, gaugeW, gaugeH);
 
+  // Banda objetivo (Pt ≈ 0): referencia visual del óptimo.
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(gaugeX + gaugeW * 0.42, gaugeY - 2, gaugeW * 0.16, gaugeH + 4);
+
   const cursorX = gaugeX + gaugeW * targetPct;
-  ctx.fillStyle = '#ffffff';
+  // En colapso el cursor late para reforzar el aviso sin añadir texto.
+  const cursorAlpha = pressure === 'HEAVY'
+    ? 0.55 + 0.45 * Math.abs(state.sweepPulse)
+    : 1;
+  ctx.fillStyle = `rgba(255,255,255,${cursorAlpha.toFixed(3)})`;
   ctx.beginPath();
   ctx.moveTo(cursorX, gaugeY - 2);
   ctx.lineTo(cursorX - 5, gaugeY - 8);

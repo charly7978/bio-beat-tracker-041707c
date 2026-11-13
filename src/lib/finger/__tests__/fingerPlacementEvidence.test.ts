@@ -228,6 +228,27 @@ describe('fingerPlacementEvidence — modelo de presión transmural', () => {
     expect(light.pressureScore).toBeLessThan(0.5);
   });
 
+  it('no convierte una caída de pulso sin DC alto en presión excesiva', () => {
+    feed(45);
+    const evidence = feed(25, {
+      coverage: 0.9,
+      perfusionIndex: 0.001,
+      dcLevel: 150,
+      roiRedCv: 0.05,
+    });
+
+    expect(evidence.pressure).toBe('LIGHT');
+    expect(evidence.blanching).toBeLessThan(0.5);
+    expect(evidence.pressureAxis).toBe('UNDER');
+    expect(evidence.failing.join(' ')).toMatch(/presiona (más|un poco más)/i);
+  });
+
+  it('expone el eje del modelo para guía e integración', () => {
+    const evidence = feed(45);
+    expect(evidence.pressureAxis).toBe('OPTIMAL');
+    expect(evidence.blanching).toBeLessThan(0.2);
+  });
+
   it('resetPlacementEvidence limpia el episodio y vuelve a NONE', () => {
     feed(45);
     resetPlacementEvidence();

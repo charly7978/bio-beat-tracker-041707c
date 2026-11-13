@@ -39,6 +39,7 @@ const REQUIRED_FILES = [
   'src/modules/HeartBeatProcessor.ts',
   'src/modules/signal-processing/PPGSignalProcessor.ts',
   'src/modules/vital-signs/CalibrationManager.ts',
+  'src/lib/pressure/transmuralPressureModel.ts',
 ];
 
 const SINGLETON_EXPORTS = [
@@ -103,8 +104,10 @@ for (const file of files) {
   }
 }
 
-// Modelo de presión transmural: un solo clasificador canónico. Cualquier
-// reapareición de un campo/clasificador paralelo rompe el build.
+// Modelo de presión transmural: un solo estimador fisiológico canónico
+// (`src/lib/pressure/transmuralPressureModel.ts`) y un solo agregador de
+// evidencia (`fingerPlacementEvidence.ts`). Cualquier clasificador o campo
+// paralelo rompe el build.
 const PRESSURE_DUPLICATE = /\b(estimateFingerPressure|fingerPressure)\b/;
 for (const file of files) {
   const rel = relative(ROOT, file).replace(/\\/g, '/');
@@ -113,6 +116,24 @@ for (const file of files) {
   if (PRESSURE_DUPLICATE.test(readFileSync(file, 'utf8'))) {
     errors.push(
       `DUPLICATE_PRESSURE  ${rel} (usar placementEvidence.pressure del modelo canónico)`,
+    );
+  }
+}
+
+// El tipo de veredicto y el estado del modelo solo pueden declararse en los dos
+// módulos canónicos; re-exportar/importar es la única forma permitida.
+const PRESSURE_TYPE_OWNER = [
+  'src/lib/pressure/transmuralPressureModel.ts',
+  'src/lib/finger/fingerPlacementEvidence.ts',
+];
+const PRESSURE_TYPE_DECL = /export\s+type\s+(PressureVerdict|TransmuralState)\b/;
+for (const file of files) {
+  const rel = relative(ROOT, file).replace(/\\/g, '/');
+  if (rel.includes('__tests__')) continue;
+  if (PRESSURE_TYPE_OWNER.includes(rel)) continue;
+  if (PRESSURE_TYPE_DECL.test(readFileSync(file, 'utf8'))) {
+    errors.push(
+      `DUPLICATE_PRESSURE_TYPE  ${rel} (importar desde transmuralPressureModel)`,
     );
   }
 }

@@ -514,15 +514,25 @@ export const VITAL_THRESHOLDS = {
   /**
    * PRESIÓN TRANSMURAL (microvascular blanching) — MODELO ÚNICO de presión.
    *
-   * La cámara no mide fuerza ni mmHg: solo se clasifica el estado RELATIVO del
-   * lecho capilar con señales ya medidas por el pipeline. La literatura muestra
-   * que al aumentar la fuerza de contacto el DC sube, mientras que la amplitud
-   * pulsátil (AC y AC/DC) sube hasta un óptimo y después se colapsa cuando la
-   * presión externa supera la arteriolar (Teng & Zhang, Physiol. Meas. 2004;
-   * Sensors 2020/2024; revisiones 2023 sobre presión transmural).
+   * La cámara no mide fuerza ni mmHg: el modelo estima el estado RELATIVO del
+   * lecho capilar (presión transmural Pt = Pa − Pe) con señales ya medidas por
+   * el pipeline. Anclas publicadas:
+   *  - Teng & Zhang, Physiol. Meas. 25(5):1323–1335 (2004): con 0.2–1.8 N el DC
+   *    sube de forma monótona; AC y AC/DC suben hasta un máximo (0.2–1.0 N, la
+   *    mayoría 0.2–0.4 N) y después caen.
+   *  - May, Mejía-Mejía et al., Sensors 21(24):8421 (2021): óptimo de SNR a
+   *    35.1–48.1 mmHg de presión de contacto.
+   *  - Biomed. Eng. Lett. (2024): 20–30 mmHg (presión leve) hasta la DBP da los
+   *    mejores índices; por encima de la MAP aparece sobrenormalización.
+   *  - Sensors 24(9):2692 (2024): el DC correlaciona con la fuerza de contacto,
+   *    con histéresis entre carga y descarga.
+   *  - IEEE TIM 2023 (tonometría MW-PPG): máxima pulsación en Pt≈0; al subir Pe
+   *    colapsan primero capilares/arteriolas superficiales y luego el lecho
+   *    profundo.
    *
    * PROHIBIDO crear otro clasificador de presión: este bloque y
-   * `src/lib/finger/fingerPlacementEvidence.ts` son la fuente única.
+   * `src/lib/pressure/transmuralPressureModel.ts` son la fuente única;
+   * `fingerPlacementEvidence.ts` solo agrega ubicación/cobertura/movimiento.
    */
   PRESSURE: {
     /** Cobertura mínima del ROI para considerar que hay apoyo del dedo. */
@@ -531,40 +541,76 @@ export const VITAL_THRESHOLDS = {
     COVER_GOOD: 0.62,
     /** Cobertura sellada: descarta fuga de luz como causa del pulso débil. */
     COVER_SEALED: 0.80,
-    /** PI normalizado (0..1) que representa pulso pleno. */
+
+    /** PI RAW (AC/DC) que representa pulso pleno en este sensor. */
     PI_REF: 0.004,
-    /** Mejor PI reciente mínimo para diagnosticar colapso relativo. */
+    /** Mejor PI reciente mínimo para poder diagnosticar colapso relativo. */
     AC_PEAK_MIN_PI: 0.0018,
-    AC_PEAK_MIN: 0.30,
-    /** Caída de PI frente al mejor reciente que indica colapso capilar. */
-    AC_COLLAPSE_HEAVY: 0.50,
-    /** Caída por debajo de la cual el pulso se considera pleno (no excesivo). */
-    AC_COLLAPSE_CLEAR: 0.20,
-    AC_COLLAPSE_RECOVER: 0.10,
+    /** Mejora relativa mínima para mover el PI de referencia (anti-deriva). */
+    PI_PEAK_MARGIN: 0.02,
     /** PI normalizado por debajo del cual el pulso está plano. */
     PULSE_FLAT: 0.18,
     /** PI normalizado mínimo para considerar apoyo óptimo. */
     PULSE_OK: 0.32,
-    /** CV temporal del rojo que marca el piso de pulsatilidad (ROI_RED_CV_MIN). */
+    /** CV temporal del rojo que marca el piso de pulsatilidad. */
     CV_FLAT_REF: 0.015,
-    /** Fracción de planitud (0..1) para la firma de colapso con lente sellada. */
-    FLAT_HEAVY: 0.45,
-    /** Subida relativa de DC (fracción del DC lento) que satura la evidencia. */
+
+    /** Suavizados de evidencia (misma base temporal que el pipeline). */
+    EMA_FAST: 0.22,
+    EMA_SLOW: 0.012,
+    /** EMA del grado continuo de presión (cursor del gauge). */
+    SCORE_ALPHA: 0.18,
+
+    /**
+     * Proxy de fuerza de contacto (eje DC, monótono según Teng 2004 y
+     * Sensors 2024). Se normaliza contra el recorrido dinámico del episodio:
+     * 30% del DC mínimo, con piso absoluto para no amplificar ruido.
+     */
+    DC_DYNAMIC_SPAN: 0.30,
+    DC_MIN_SPAN: 12,
+    /** DC mínimo del episodio para dar por válido el baseline de fuerza. */
+    DC_MIN_BASELINE: 10,
+    /** Piso del DC de referencia para comparar desplazamientos relativos. */
+    DC_REF_FLOOR: 24,
+    /** Desplazamiento relativo del DC (sobre el DC del mejor PI) que define
+     *  el lado del óptimo en la curva en U invertida. */
+    DC_DISPLACE_MIN: 0.08,
+    /** Subida relativa de DC (fracción del DC lento) que evidencia fuerza. */
     DC_RISE_MIN: 0.20,
+    /** DC por encima del mínimo del episodio: presión sostenida. */
     DC_HIGH_MIN: 0.15,
+    /** Subida relativa de DC que satura la evidencia de fuerza. */
     DC_RISE_FULL: 0.10,
+
+    /** Caída de PI que aún cae dentro del plateau óptimo (histeresis fina). */
+    PI_DEFICIT_OPTIMAL: 0.15,
+    /** Caída de PI que ya justifica pedir más apoyo. */
+    PI_DEFICIT_LIGHT: 0.25,
+    /** Fracción del PI de referencia que confirma la salida de colapso. */
+    PI_RECOVER: 0.85,
+
+    /**
+     * Índice de blanqueo (0..1). La AC colapsada es el signo primario; el DC y
+     * la planitud del CV solo lo confirman (evita confundir baja perfusión por
+     * frío con isquemia por presión).
+     */
+    BLANCH_ENTER: 0.50,
+    BLANCH_EXIT: 0.30,
+    BLANCH_AC_WEIGHT: 0.65,
+    BLANCH_FLAT_WEIGHT: 0.15,
+    BLANCH_DC_WEIGHT: 0.20,
+    /** Cobertura a partir de la cual el blanqueo es evaluable (sin fuga). */
+    BLANCH_COUPLING_MIN: 0.85,
+
     /** Frames de contacto antes de diagnosticar presión (AE asentado). */
     HEAVY_WARMUP_FRAMES: 15,
     /** Frames consecutivos para confirmar HEAVY (anti-parpadeo). */
     HEAVY_ENTER_FRAMES: 6,
     /** Frames consecutivos para confirmar cualquier otro veredicto. */
     VERDICT_CONFIRM_FRAMES: 8,
-    /** Decaimiento por frame del mejor PI reciente (~17 s @30 fps). */
-    PEAK_DECAY: 0.9995,
-    /** EMA lenta del DC para medir la tendencia de fuerza de contacto. */
-    DC_SLOW_ALPHA: 0.012,
-    /** EMA del score continuo de presión (cursor del gauge). */
-    SCORE_ALPHA: 0.18,
+    /** Frames mínimos de evidencia antes de afirmar un veredicto. */
+    MIN_EVIDENCE_FRAMES: 12,
+
     /** Contacto mínimo antes de habilitar el háptico de presión (AE asentado). */
     FEEDBACK_SETTLE_MS: 2000,
     /** Repetición del aviso háptico mientras persiste presión alta. */
@@ -573,7 +619,9 @@ export const VITAL_THRESHOLDS = {
     LIGHT_REPEAT_MS: 12000,
     /** Intervalo mínimo entre avisos hápticos de presión (anti-rebote global). */
     HAPTIC_MIN_INTERVAL_MS: 900,
-    /** Frames de contacto perdido antes de considerar salida real (anti-parpadeo). */
+    /** Grado a partir del cual el patrón háptico se considera severo. */
+    HAPTIC_SEVERE_FRACTION: 0.80,
+    /** Frames de contacto perdido antes de considerar salida real. */
     CONTACT_LOST_FRAMES: 6,
   },
 

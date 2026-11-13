@@ -529,21 +529,26 @@ const WELL_EASE_DOWN = 0.20;    // encogimiento rÃ¡pido y honesto
 let wellSizeEma = 0;
 
 interface WellTheme { edge: string; core: string; glow: string; tint: string; label: string; }
-function wellThemeFor(contactState?: string, pressure?: string): WellTheme {
+function wellThemeFor(contactState?: string, pressure?: string, pressureScore?: number): WellTheme {
   // El color/etiqueta del pozo siguen el veredicto de presión cuando existe,
   // para no mostrar verde "CONTACTO ÓPTIMO" mientras hay colapso capilar.
+  const score = typeof pressureScore === 'number' && Number.isFinite(pressureScore)
+    ? Math.max(0, Math.min(1, pressureScore))
+    : 0.5;
   if (pressure === 'HEAVY') {
+    const severe = score > 0.80;
     return {
       edge: 'rgba(239,68,68,0.95)', core: 'rgba(252,165,165,0.9)',
-      glow: 'rgba(239,68,68,0.40)', tint: '239,68,68',
-      label: 'PRESIÓN ALTA · SUELTA',
+      glow: `rgba(239,68,68,${(0.28 + 0.22 * score).toFixed(3)})`, tint: '239,68,68',
+      label: severe ? 'PRESIÓN ALTA · SUELTA MÁS' : 'PRESIÓN ALTA · SUELTA UN POCO',
     };
   }
   if (pressure === 'LIGHT') {
+    const severe = score < 0.25;
     return {
       edge: 'rgba(245,158,11,0.95)', core: 'rgba(253,230,138,0.9)',
       glow: 'rgba(245,158,11,0.35)', tint: '245,158,11',
-      label: 'PRESIÓN BAJA · APOYA MÁS',
+      label: severe ? 'PRESIÓN BAJA · APOYA MÁS' : 'PRESIÓN BAJA · APOYA UN POCO',
     };
   }
   if (pressure === 'IDEAL') {
@@ -618,8 +623,8 @@ export function drawPreviewWell3D(
 ): void {
   const proj = makeProjector(state);
   const { plot } = state.layout;
-  const pressure = state.props.diagnostics?.placementEvidence?.pressure;
-  const theme = wellThemeFor(contactState, pressure);
+  const pressureEvidence = state.props.diagnostics?.placementEvidence;
+  const theme = wellThemeFor(contactState, pressureEvidence?.pressure, pressureEvidence?.pressureScore);
 
   // AnimaciÃ³n del tamaÃ±o: sube suave, baja rÃ¡pido (feedback honesto).
   const target = wellScoreOf(state, contactState);
