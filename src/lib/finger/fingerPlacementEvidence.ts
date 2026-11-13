@@ -249,6 +249,7 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
     settled && (
       (hasPeak && acCollapse >= AC_COLLAPSE_CLEAR && ev.cover >= COVER_GOOD) ||
       (dcHigh && ev.pulse <= PULSE_FLAT && flat >= FLAT_HEAVY && ev.cover >= COVER_GOOD) ||
+      (ev.pulse <= PULSE_FLAT && flat >= FLAT_HEAVY * 0.75 && ev.cover >= COVER_GOOD) ||
       sealedFlat
     )
   ) {
@@ -283,16 +284,29 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
     0.15 * dcRise
   );
   if (sealedFlat) heavyScore = Math.max(heavyScore, 0.70);
+  const flatHeavyNoPeak = !sealedFlat && ev.pulse <= PULSE_FLAT && flat >= FLAT_HEAVY * 0.75 && ev.cover >= COVER_GOOD;
+  if (flatHeavyNoPeak) heavyScore = Math.max(heavyScore, 0.62);
   const underCover = 1 - norm(ev.cover, COVER_MIN, COVER_GOOD);
-  const weakPulse = (!sealedFlat && acCollapse < AC_COLLAPSE_CLEAR)
+  const heavyCandidate = settled && (
+    (hasPeak && acCollapse >= AC_COLLAPSE_CLEAR && ev.cover >= COVER_GOOD) ||
+    (dcHigh && ev.pulse <= PULSE_FLAT && flat >= FLAT_HEAVY && ev.cover >= COVER_GOOD) ||
+    (ev.pulse <= PULSE_FLAT && flat >= FLAT_HEAVY * 0.75 && ev.cover >= COVER_GOOD) ||
+    sealedFlat
+  );
+  const weakPulse = (!heavyCandidate && !sealedFlat && acCollapse < AC_COLLAPSE_CLEAR)
     ? 1 - norm(ev.pulse, PULSE_FLAT, PULSE_OK)
     : 0;
   const lightScore = Math.max(underCover, weakPulse);
   const scoreInstant = clamp(0.5 + 0.5 * (heavyScore - lightScore), 0, 1);
-  // Sin evidencia suficiente el cursor queda neutro.
+  // Sin evidencia suficiente el cursor queda neutro. En una transicion de
+  // veredicto se reinicia el cursor a scoreInstant para no arrastrar la EMA
+  // del estado anterior (evita un cursor incoherente con el nuevo veredicto).
+  const transitioned = prevVerdict !== pressure;
   ev.score = pressure === 'NONE'
     ? 0.5
-    : ev.score * (1 - SCORE_ALPHA) + scoreInstant * SCORE_ALPHA;
+    : transitioned
+      ? scoreInstant
+      : ev.score * (1 - SCORE_ALPHA) + scoreInstant * SCORE_ALPHA;
 
   let placement: PlacementVerdict;
   if (ev.frame < 12 || ev.cover < COVER_MIN) placement = 'NO_FINGER';
