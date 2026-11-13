@@ -337,6 +337,13 @@ function technicalCause(capture: CaptureCondition): SignalCauseId | null {
   return null;
 }
 
+/** Explica la tendencia del PI solo cuando es informativa (no inventa flechas). */
+function trendText(trend: -1 | 0 | 1, rising: string, falling: string): string {
+  if (trend > 0) return `, ${rising}`;
+  if (trend < 0) return `, ${falling}`;
+  return '';
+}
+
 /** Explicación generada con los números MEDIDOS, no con frases de tabla. */
 function explain(
   cause: SignalCauseId,
@@ -363,9 +370,9 @@ function explain(
     case 'INSUFFICIENT_CONTACT':
       return `La lente está cubierta al ${sealPct}% y el pulso está al ${pulsPct}% de lo normal. Falta superficie de contacto: apoya un poco más para sellar la lente.`;
     case 'EXCESS_PRESSURE':
-      return `El pulso cayó al ${pulsPct}% mientras el DC subió al ${dcPct}% del punto de mejor pulso de tu dedo. Eso es presión externa superando la del lecho capilar: los capilares se están colapsando. Suelta un poco.`;
+      return `El pulso cayó al ${pulsPct}%${trendText(e.piTrend, 'aunque ya está remontando al aflojar', 'y sigue cayendo')} mientras el DC subió al ${dcPct}% del punto de mejor pulso de tu dedo. Eso es presión externa superando la del lecho capilar: los capilares se están colapsando. Suelta un poco.`;
     case 'VASOCONSTRICTION':
-      return `El pulso está al ${pulsPct}% pero el DC sigue al ${dcPct}% del punto de mejor pulso: no estás apretando de más. Con el sello correcto y solo el ${perfPct}% del tejido con riego, la causa es vasoconstricción: el dedo está frío o hay tono simpático y los vasos están cerrados. Frótalo o tápalo con la otra mano; no aprietes más.`;
+      return `El pulso está al ${pulsPct}%${trendText(e.piTrend, 'y va subiendo a medida que el dedo se calienta', 'y no mejora con el calor')} pero el DC sigue al ${dcPct}% del punto de mejor pulso: no estás apretando de más. Con el sello correcto y solo el ${perfPct}% del tejido con riego, la causa es vasoconstricción: el dedo está frío o hay tono simpático y los vasos están cerrados. Frótalo o tápalo con la otra mano; no aprietes más.`;
     case 'OPTIMAL':
       return `Lente sellada al ${sealPct}%, pulso al ${pulsPct}% de lo normal y DC estable al ${dcPct}%. El lecho capilar está bien perfundido: mantén el dedo así.`;
     default:

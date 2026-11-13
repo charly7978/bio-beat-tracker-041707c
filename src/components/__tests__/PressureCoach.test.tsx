@@ -164,6 +164,60 @@ describe('PressureCoach — la guía llega al usuario', () => {
     expect(html.match(/SUELTA UN POCO EL DEDO/gi)?.length).toBe(1);
   });
 
+  it('declara la explicación alternativa cuando la evidencia es ambigua', () => {
+    const html = renderToStaticMarkup(
+      <PressureCoach
+        evidence={{
+          ...evidenceWith({
+            action: 'PRESS_MORE',
+            headline: 'APOYO INSUFICIENTE SOBRE LA LENTE',
+            confidence: 0.4,
+          }),
+          etiology: {
+            cause: 'INSUFFICIENT_CONTACT',
+            label: 'Apoyo insuficiente sobre la lente',
+            action: 'PRESS_MORE',
+            headline: 'APOYO INSUFICIENTE SOBRE LA LENTE',
+            explanation: 'La lente está cubierta al 18%.',
+            confidence: 0.4,
+            alternatives: [{ cause: 'OFF_CENTER', probability: 0.32 }],
+            supporting: [],
+            contradicting: [],
+          },
+        }}
+        isMonitoring
+      />,
+    );
+
+    expect(html).toContain('También encaja');
+    expect(html).toContain('dedo descentrado');
+    expect(html).toContain('32%');
+  });
+
+  it('no declara alternativa cuando la evidencia es concluyente', () => {
+    const html = renderToStaticMarkup(
+      <PressureCoach
+        evidence={{
+          ...evidenceWith({ action: 'HOLD', headline: 'CONTACTO ÓPTIMO', confidence: 0.9 }),
+          etiology: {
+            cause: 'OPTIMAL',
+            label: 'Contacto óptimo',
+            action: 'HOLD',
+            headline: 'CONTACTO ÓPTIMO',
+            explanation: 'Todo correcto.',
+            confidence: 0.9,
+            alternatives: [{ cause: 'VASOCONSTRICTION', probability: 0.12 }],
+            supporting: [],
+            contradicting: [],
+          },
+        }}
+        isMonitoring
+      />,
+    );
+
+    expect(html).not.toContain('También encaja');
+  });
+
   it('no renderiza nada si la monitorización no está activa', () => {
     const html = renderToStaticMarkup(
       <PressureCoach evidence={evidenceWith()} isMonitoring={false} />,

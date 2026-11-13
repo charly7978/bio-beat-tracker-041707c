@@ -102,6 +102,23 @@ const ACCENTS: Record<string, Accent> = {
   },
 };
 
+/**
+ * Etiquetas cortas de cada causa, para declarar la alternativa cuando la
+ * evidencia es ambigua. Se derivan del motor, no se reinventan aquí.
+ */
+const CAUSE_LABEL: Record<string, string> = {
+  NO_CONTACT: 'falta de contacto',
+  OFF_CENTER: 'dedo descentrado',
+  EXCESS_PRESSURE: 'presión excesiva',
+  INSUFFICIENT_CONTACT: 'apoyo insuficiente',
+  VASOCONSTRICTION: 'dedo frío',
+  MOTION: 'movimiento',
+  SATURATED: 'sensor saturado',
+  UNDEREXPOSED: 'poca luz',
+  LOW_FPS: 'cámara lenta',
+  OPTIMAL: 'contacto óptimo',
+};
+
 const FALLBACK: Accent = ACCENTS.WAIT;
 
 /**
@@ -138,6 +155,15 @@ export function PressureCoach({ evidence, isMonitoring }: PressureCoachProps) {
     (hint) => hint && !hint.toLowerCase().includes(guidance.headline.toLowerCase()),
   );
 
+  // Ambigüedad declarada: si la causa ganadora no domina, se dice qué otra
+  // explicación encaja y con qué peso. Ocultarlo sería afirmar más de lo que la
+  // señal sostiene.
+  const rival = evidence.etiology?.alternatives?.[0];
+  const rivalNote =
+    rival && rival.probability >= 0.18 && guidance.confidence < 0.6
+      ? `También encaja ${CAUSE_LABEL[rival.cause] ?? rival.cause} (${Math.round(rival.probability * 100)}%).`
+      : undefined;
+
   return (
     <div
       className="pointer-events-none absolute left-2 right-2 z-20"
@@ -169,6 +195,10 @@ export function PressureCoach({ evidence, isMonitoring }: PressureCoachProps) {
               <p className={`mt-1 text-[10px] font-semibold leading-snug ${accent.text} opacity-90`}>
                 → {secondary}
               </p>
+            ) : null}
+
+            {rivalNote ? (
+              <p className="mt-0.5 text-[9px] leading-snug text-zinc-400">{rivalNote}</p>
             ) : null}
 
             <div className="mt-1.5 flex items-center gap-2">

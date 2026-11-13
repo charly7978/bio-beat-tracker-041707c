@@ -205,6 +205,41 @@ describe('signalEtiology — razonamiento causal de la señal', () => {
       expect(cold.explanation).not.toBe(pressed.explanation);
     });
 
+    it('incluye la TENDENCIA del PI en la explicación cuando es decisiva', () => {
+      // El segundo signo que separa frío de presión mecánica debe estar en el
+      // texto: no basta con calcularlo.
+      const coldRising = infer({
+        seal: 0.65,
+        pulsatility: 0.25,
+        dcRatio: 1,
+        piTrend: 1,
+        perfusedFraction: 0.3,
+      });
+      expect(coldRising.explanation).toMatch(/va subiendo|se calienta/i);
+
+      const pressedFalling = infer({
+        seal: 0.9,
+        pulsatility: 0.12,
+        dcRatio: 1.5,
+        dcRise: 0.9,
+        blanching: 0.8,
+        piTrend: -1,
+      });
+      expect(pressedFalling.explanation).toMatch(/sigue cayendo/i);
+    });
+
+    it('no inventa una tendencia cuando el PI está estable', () => {
+      const stable = infer({
+        seal: 0.9,
+        pulsatility: 0.12,
+        dcRatio: 1.5,
+        dcRise: 0.9,
+        blanching: 0.8,
+        piTrend: 0,
+      });
+      expect(stable.explanation).not.toMatch(/sigue cayendo|va subiendo/i);
+    });
+
     it('expone alternativas cuando la evidencia es ambigua', () => {
       const r = infer({
         seal: 0.45,
