@@ -88,18 +88,41 @@ describe('PressureCoach — la guía llega al usuario', () => {
     expect(html).toContain('animate-pulse');
   });
 
-  it('sustituye la guía de presión por un aviso técnico si la captura está degradada', () => {
+  it('muestra el aviso de captura degradada que produce el motor', () => {
+    // Un sensor saturado no permite afirmar presión: el motor lo declara como
+    // causa y el coach muestra ese aviso en lugar de una guía de presión.
     const html = renderToStaticMarkup(
       <PressureCoach
-        evidence={evidenceWith({ action: 'HOLD', headline: 'PRESIÓN ÓPTIMA · MANTÉN' })}
+        evidence={evidenceWith({
+          action: 'FIX_SATURATION',
+          headline: 'SENSOR SATURADO',
+          detail: 'El sensor está saturado: el rojo llega al tope. Baja el brillo o apaga el flash.',
+          progress: 0,
+        })}
         isMonitoring
-        status="SATURATED"
       />,
     );
 
-    // No debe afirmar presión cuando el sensor está saturado.
     expect(html).not.toContain('PRESIÓN ÓPTIMA · MANTÉN');
-    expect(html).toContain('DEMOSTRE LA IMAGEN');
+    expect(html).toContain('SENSOR SATURADO');
+    expect(html).toContain('saturado');
+  });
+
+  it('muestra la guía de calentar el dedo (vasoconstricción)', () => {
+    const html = renderToStaticMarkup(
+      <PressureCoach
+        evidence={evidenceWith({
+          action: 'WARM',
+          headline: 'VASOCONSTRICCIÓN: DEDO FRÍO O ESTRÉS',
+          detail: 'El pulso está al 25% pero el DC sigue al 100%: no estás apretando de más. Frótalo o tápalo; no aprietes más.',
+          progress: 0.2,
+        })}
+        isMonitoring
+      />,
+    );
+
+    expect(html).toContain('VASOCONSTRICCIÓN');
+    expect(html).toContain('no aprietes más');
   });
 
   it('muestra el aviso secundario de centrado aunque el titular sea de presión', () => {

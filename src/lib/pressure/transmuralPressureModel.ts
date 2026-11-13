@@ -391,9 +391,11 @@ export function observeTransmuralPressure(
   const couplingFactor = sealNorm;
   const forceEvidence = Math.max(dcRise, dcHigh ? 1 : 0);
   // Acoplamiento suficiente: con sellado pobre la AC baja por fuga de luz, no por
-  // isquemia. Este es el umbral que antes quedaba definido y sin usar.
+  // isquemia. Y la fuerza debe superar el umbral: una oscilación mínima del DC no
+  // habilita el diagnóstico de colapso.
   const couplingOk = coupling >= P.BLANCH_COUPLING_MIN;
-  const blanchEligible = hasContact && couplingOk && forceEvidence > 0;
+  const forceOk = dcHigh || dcRise >= P.DC_RISE_MIN;
+  const blanchEligible = hasContact && couplingOk && forceOk;
   const blanching = blanchEligible
     ? clamp01(
       couplingFactor * (
@@ -417,7 +419,7 @@ export function observeTransmuralPressure(
       perfusionRatio >= P.PI_RECOVER && blanching <= P.BLANCH_EXIT && !dcHigh
         ? 'IDEAL'
         : 'HEAVY';
-  } else if (blanchEligible && blanching >= P.BLANCH_ENTER && forceEvidence > 0) {
+  } else if (blanchEligible && blanching >= P.BLANCH_ENTER) {
     // El colapso requiere que el auto-exposure ya se haya asentado: declararlo
     // durante el warm-up del AE producía veredictos que el usuario veía cambiar.
     candidate = state.frame >= P.HEAVY_WARMUP_FRAMES ? 'HEAVY' : 'NONE';

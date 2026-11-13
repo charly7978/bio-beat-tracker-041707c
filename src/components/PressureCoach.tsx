@@ -17,8 +17,6 @@ import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 interface PressureCoachProps {
   evidence?: FingerPlacementEvidence;
   isMonitoring: boolean;
-  /** Estado de rechazo del frame. Si hay rechazo, la presión no es evaluable. */
-  status?: string;
 }
 
 interface Accent {
@@ -74,6 +72,27 @@ const ACCENTS: Record<string, Accent> = {
     bar: 'bg-violet-400',
     glow: 'shadow-[0_0_24px_-6px_rgba(167,139,250,0.6)]',
   },
+  FIX_SATURATION: {
+    border: 'border-rose-500/60',
+    bg: 'bg-rose-950/85',
+    text: 'text-rose-300',
+    bar: 'bg-rose-400',
+    glow: 'shadow-[0_0_24px_-6px_rgba(244,63,94,0.6)]',
+  },
+  FIX_LIGHT: {
+    border: 'border-amber-500/60',
+    bg: 'bg-amber-950/85',
+    text: 'text-amber-300',
+    bar: 'bg-amber-400',
+    glow: 'shadow-[0_0_24px_-6px_rgba(245,158,11,0.6)]',
+  },
+  FIX_FPS: {
+    border: 'border-slate-600/60',
+    bg: 'bg-slate-950/85',
+    text: 'text-slate-300',
+    bar: 'bg-slate-400',
+    glow: '',
+  },
   WAIT: {
     border: 'border-slate-600/60',
     bg: 'bg-slate-950/85',
@@ -95,56 +114,8 @@ const FALLBACK: Accent = ACCENTS.WAIT;
  * "presión óptima · mantén" con la imagen saturada o subexpuesta sería otra vez
  * "decir cualquier cosa": el modelo no puede ver el lecho capilar.
  */
-const TECHNICAL_NOTICE: Record<string, { headline: string; detail: string; accent: string }> = {
-  SATURATED: {
-    headline: 'DEMOSTRE LA IMAGEN · APAGA EL FLASH',
-    detail: 'El sensor está saturado y no puede leer el pulso. Reduce el brillo o aleja el dedo del flash.',
-    accent: 'sky',
-  },
-  UNDEREXPOSED: {
-    headline: 'HAY POCA LUZ',
-    detail: 'El sensor no recibe suficiente señal. Acerca el dedo a la lente o activa el flash.',
-    accent: 'sky',
-  },
-  LOW_FPS: {
-    headline: 'LA CÁMARA VA LENTA',
-    detail: 'Los fotogramas llegan con retraso. Cierra otras apps o baja la resolución.',
-    accent: 'slate',
-  },
-  MOTION_ARTIFACT: {
-    headline: 'NO TE MUEVAS',
-    detail: 'El movimiento impide medir. Sostén el dedo quieto sobre la lente.',
-    accent: 'slate',
-  },
-};
-
-export function PressureCoach({ evidence, isMonitoring, status }: PressureCoachProps) {
+export function PressureCoach({ evidence, isMonitoring }: PressureCoachProps) {
   if (!isMonitoring || !evidence) return null;
-
-  // Rechazo de captura: la presión no es evaluable. Se sustituye la guía de
-  // presión por el aviso técnico que sí corresponde, en lugar de afirmar nada.
-  const notice = status ? TECHNICAL_NOTICE[status] : undefined;
-  if (notice) {
-    const accent = ACCENTS[notice.accent] ?? FALLBACK;
-    return (
-      <div
-        className="pointer-events-none absolute left-2 right-2 z-20"
-        style={{ top: 'calc(150px + env(safe-area-inset-top, 0px))' }}
-      >
-        <div
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          className={`rounded-xl border ${accent.border} ${accent.bg} px-3 py-2 backdrop-blur-md`}
-        >
-          <p className={`text-[12px] font-bold leading-tight tracking-wide ${accent.text}`}>
-            {notice.headline}
-          </p>
-          <p className="mt-0.5 text-[10px] leading-snug text-zinc-300">{notice.detail}</p>
-        </div>
-      </div>
-    );
-  }
 
   const guidance = evidence.guidance;
   if (!guidance) return null;

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * FINGER PLACEMENT EVIDENCE — Evidencia física REAL de la colocación del dedo.
  *
  * El razonamiento de PRESIÓN TRANSMURAL vive en
@@ -38,7 +38,7 @@ import {
 
 export type PressureVerdict = TransmuralState;
 export type PlacementVerdict = 'NO_FINGER' | 'EDGE' | 'OFF_CENTER' | 'CENTERED';
-export type { SignalAction as TransmuralAction, SignalEtiology };
+export type { SignalEtiology };
 
 /** Guía que consume la capa de presentación. */
 export interface TransmuralGuidance {
@@ -88,9 +88,7 @@ const EMA_A = 0.22;
 const {
   COVER_MIN,
   COVER_GOOD,
-  PULSE_FLAT,
   SCORE_ALPHA,
-  PI_PULSELESS,
 } = VITAL_THRESHOLDS.PRESSURE;
 
 /** Estado del modelo transmural (episodio de contacto actual). */
@@ -148,7 +146,7 @@ export interface EvidenceInput {
    * aporta evidencia fisiológica: el motor la trata como precondición, no como
    * una hipótesis que compita con las demás.
    */
-  capture?: import('@/lib/pressure/signalEtiology').CaptureCondition;
+  capture?: CaptureCondition;
 }
 
 export function computePlacementEvidence(input: EvidenceInput): FingerPlacementEvidence {
@@ -232,7 +230,7 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
   // Guía derivada de la causa inferida. El titular y el detalle son la
   // explicación generada por el motor con los números de ESTE frame.
   const guidance: TransmuralGuidance = {
-    action: guidanceAction(etiology.action),
+    action: etiology.action,
     headline: etiology.headline,
     detail: etiology.explanation,
     progress: clamp01(
@@ -276,32 +274,4 @@ export function computePlacementEvidence(input: EvidenceInput): FingerPlacementE
     stability: ev.stab,
     motion: reading.motion,
   };
-}
-
-/**
- * Traduce la acción inferida por el motor de etiología a la acción que espera la
- * capa de presentación. Es una traducción de vocabulario, no una decisión: si el
- * motor cambia de causa, la acción cambia con él.
- */
-function guidanceAction(action: SignalAction): SignalAction {
-  switch (action) {
-    case 'RELEASE':
-      return 'RELEASE';
-    case 'PRESS_MORE':
-      return 'PRESS_MORE';
-    case 'HOLD':
-      return 'HOLD';
-    case 'CENTER':
-    case 'REPOSITION':
-      return 'REPOSITION';
-    case 'WARM':
-      // El dedo frío necesita una instrucción propia: "calienta", no "aprieta".
-      return 'WARM';
-    case 'FIX_SATURATION':
-    case 'FIX_LIGHT':
-    case 'FIX_FPS':
-    case 'WAIT':
-    default:
-      return 'WAIT';
-  }
 }

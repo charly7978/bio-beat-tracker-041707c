@@ -144,7 +144,7 @@ describe('fingerPlacementEvidence — evidencia física de colocación', () => {
 
   it('un sensor saturado se declara como problema de captura, no de presión', () => {
     const evidence = feed(30, { ...GOOD, capture: 'SATURATED' });
-    expect(evidence.guidance.action).toBe('WAIT');
+    expect(evidence.guidance.action).toBe('FIX_SATURATION');
     expect(evidence.etiology.cause).toBe('SATURATED');
     expect(evidence.guidance.detail).toMatch(/saturado|brillo|flash/i);
   });

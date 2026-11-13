@@ -561,8 +561,6 @@ export const VITAL_THRESHOLDS = {
     COVER_MIN: 0.10,
     /** Lente cubierta por la yema. */
     COVER_GOOD: 0.42,
-    /** Sellado completo: descarta fuga de luz como causa de pulso débil. */
-    COVER_SEALED: 0.68,
 
     /*
      * ── PULSATILIDAD (AC/DC) ─────────────────────────────────────────────────
@@ -570,12 +568,6 @@ export const VITAL_THRESHOLDS = {
      */
     /** PI RAW (AC/DC) que representa pulso pleno en este sensor. */
     PI_REF: 0.004,
-    /** Por debajo de este PI no hay pulso útil (ruido del sensor). */
-    PI_PULSELESS: 0.0006,
-    /** PI a partir del cual el pulso se considera pleno. */
-    PI_GOOD: 0.0022,
-    /** PI normalizado por debajo del cual el pulso está plano. */
-    PULSE_FLAT: 0.18,
     /** PI normalizado mínimo para considerar apoyo óptimo. */
     PULSE_OK: 0.40,
     /** Mejor PI reciente mínimo para poder diagnosticar colapso relativo. */

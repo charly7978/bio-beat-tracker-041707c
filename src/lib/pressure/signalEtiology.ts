@@ -341,7 +341,6 @@ function technicalCause(capture: CaptureCondition): SignalCauseId | null {
 function explain(
   cause: SignalCauseId,
   e: EtiologyEvidence,
-  features: Record<string, number>,
 ): string {
   const pulsPct = Math.round(clamp01(e.pulsatility) * 100);
   const dcPct = Math.round((Number.isFinite(e.dcRatio) ? e.dcRatio : 1) * 100);
@@ -366,7 +365,7 @@ function explain(
     case 'EXCESS_PRESSURE':
       return `El pulso cayó al ${pulsPct}% mientras el DC subió al ${dcPct}% del punto de mejor pulso de tu dedo. Eso es presión externa superando la del lecho capilar: los capilares se están colapsando. Suelta un poco.`;
     case 'VASOCONSTRICTION':
-      return `El pulso está al ${pulsPct}% pero el DC sigue al ${dcPct}% del punto de mejor pulso: no estás apretando de más. Con el sello correcto y el pulso débil, la causa es vasoconstricción: el dedo está frío o hay tono simpático y los vasos están cerrados. Frótalo o tápalo con la otra mano; no aprietes más.`;
+      return `El pulso está al ${pulsPct}% pero el DC sigue al ${dcPct}% del punto de mejor pulso: no estás apretando de más. Con el sello correcto y solo el ${perfPct}% del tejido con riego, la causa es vasoconstricción: el dedo está frío o hay tono simpático y los vasos están cerrados. Frótalo o tápalo con la otra mano; no aprietes más.`;
     case 'OPTIMAL':
       return `Lente sellada al ${sealPct}%, pulso al ${pulsPct}% de lo normal y DC estable al ${dcPct}%. El lecho capilar está bien perfundido: mantén el dedo así.`;
     default:
@@ -396,7 +395,7 @@ export function inferSignalEtiology(e: EtiologyEvidence): SignalEtiology {
       label: spec.label,
       action: spec.action,
       headline: spec.label.toUpperCase(),
-      explanation: explain(tech, e, features),
+      explanation: explain(tech, e),
       confidence: 1,
       alternatives: [],
       supporting: [{ id: 'capture', value: 1, contribution: 1 }],
@@ -414,7 +413,7 @@ export function inferSignalEtiology(e: EtiologyEvidence): SignalEtiology {
       label: spec.label,
       action: spec.action,
       headline: spec.label.toUpperCase(),
-      explanation: explain('MOTION', e, features),
+      explanation: explain('MOTION', e),
       confidence: 1,
       alternatives: [],
       supporting: [{ id: 'motion', value: 1 - clamp01(e.stillness), contribution: 1 }],
@@ -449,7 +448,7 @@ export function inferSignalEtiology(e: EtiologyEvidence): SignalEtiology {
       label: spec.label,
       action: spec.action,
       headline: spec.label.toUpperCase(),
-      explanation: explain('NO_CONTACT', e, features),
+      explanation: explain('NO_CONTACT', e),
       confidence: 1,
       alternatives: [],
       supporting: [{ id: 'sealMissing', value: features.sealMissing, contribution: 1 }],
@@ -502,7 +501,7 @@ export function inferSignalEtiology(e: EtiologyEvidence): SignalEtiology {
     label: spec.label,
     action: spec.action,
     headline: spec.label.toUpperCase(),
-    explanation: explain(cause, e, features),
+    explanation: explain(cause, e),
     confidence,
     alternatives,
     supporting: cause === top.cause ? supporting : [],
