@@ -52,9 +52,18 @@ self.onmessage = async (event: MessageEvent) => {
         break;
 
       case 'processFrame': {
-        if (!processor || !processor.isProcessing) return;
+        if (!processor || !processor.isProcessing) {
+          self.postMessage({ type: 'frameProcessed' });
+          return;
+        }
         const { imageData, timestamp } = data as { imageData: ImageData; timestamp?: number };
-        processor.processFrame(imageData, timestamp);
+        try {
+          processor.processFrame(imageData, timestamp);
+        } finally {
+          // ACK único por frame: signalReady es dato, frameProcessed es control
+          // de flujo. Así un error accesorio nunca libera dos veces la misma imagen.
+          self.postMessage({ type: 'frameProcessed' });
+        }
         break;
       }
 
