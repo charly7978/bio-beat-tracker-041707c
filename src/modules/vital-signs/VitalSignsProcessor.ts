@@ -15,6 +15,7 @@ import { RingF32 } from '../../utils/RingBuffer';
 import { clamp } from '../../utils/math';
 import { estimateRespiratorySmartFusion } from '../../lib/vitals/respiratorySmartFusion';
 import type { FingerPlacementMode } from '../../types/signal';
+import { resampleTimedSignal, type TimedSignalSample } from '../../lib/signal/timedSamples';
 
 const log = createLogger('VitalSignsProcessor');
 
@@ -82,10 +83,19 @@ export class VitalSignsProcessor {
   private readonly HISTORY_SIZE = VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES;
   private signalHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
   private morphologyHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
+  /** Muestras morfológicas de cada frame, conservadas con su instante de captura. */
+  private morphologyTimedSamples: TimedSignalSample[] = [];
+  /** Frecuencia de la ventana morfológica uniforme; 0 significa que no hay ventana utilizable. */
+  private morphologySampleRateHz = 0;
+  private readonly MORPHOLOGY_TIMED_MAX_SAMPLES = VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES * 2;
   private placementMode: FingerPlacementMode = 'hybrid';
   /** Buffer más largo para modulación respiratoria (~10 Hz efectivos desde Index). */
   private readonly RESPIRATION_BUFFER = 320;
   private respirationHistory: RingF32 = new RingF32(this.RESPIRATION_BUFFER);
+  private signalTimedSamples: TimedSignalSample[] = [];
+  private respirationTimedSamples: TimedSignalSample[] = [];
+  private respirationSampleRateHz = 0;
+  /** Frecuencia objetivo de las series respiratorias; la tasa real puede ser menor. */
   private readonly VITAL_SIGNAL_ESTIMATE_HZ = 10;
   private frameCount = 0;  // Contador continuo para logging/diagnóstico
 
@@ -155,9 +165,8 @@ export class VitalSignsProcessor {
       lastArrhythmiaData: null,
       signalQuality: 0
     };
-    this.signalHistory.reset();
-    this.morphologyHistory.reset();
-    this.respirationHistory.reset();
+    this.resetRespirationWindow();
+    this.resetMorphologyWindow();
     this.lastRrIntervals = [];
     this.lastAccelRespiration = null;
     this.stableFramesCount = 0;
@@ -212,6 +221,10 @@ export class VitalSignsProcessor {
     faceQuality?: number,
     /** Respiración pre-estimada del acelerómetro (IMU) — 4ª modalidad de la Smart Fusion. */
     accelRespiration?: { rpm: number; quality: number },
+    /** Muestras morfológicas tomadas en cada frame, con timestamp de captura en ms. */
+    morphologyBatch?: TimedSignalSample[],
+    /** Timestamp del frame que alimenta las series lentas (ms, reloj monotónico). */
+    sampleTimestampMs?: number,
   ): VitalSignsResult {
     this.frameCount++;
     // Espeja el estado cacheado del acelerómetro (ya throttled en el procesador).
@@ -238,8 +251,7 @@ export class VitalSignsProcessor {
         ? morphologyValue
         : signalValue;
     })();
-    this.signalHistory.push(signalValue);
-    this.morphologyHistory.push(morphSample);
+    this.updateMorphologyWindow(morphSample, morphologyBatch);
 
     // Canal 4 (LP respiratorio): si disponible, usa señal pre-filtrada a banda respiratoria;
     // si no, usa signalValue (comportamiento previo — no rompe nada)
@@ -249,7 +261,7 @@ export class VitalSignsProcessor {
         ? fromSplitter
         : signalValue;
     })();
-    this.respirationHistory.push(respirationSample);
+    this.updateRespirationWindow(signalValue, respirationSample, sampleTimestampMs);
 
     // Guarda los RR para la modalidad RIFV de respiración (getFormattedResult no
     // recibe rrData en su firma).
@@ -313,6 +325,160 @@ export class VitalSignsProcessor {
     this.calculateVitalSigns(signalValue, effectiveSqi, fusedBpm, rrData);
 
     return this.getFormattedResult();
+  }
+
+  /**
+   * Mantiene la morfología a la frecuencia original de captura.
+   * El resto del motor puede ejecutarse a menor cadencia; la forma de onda
+   * usada para fiduciales no debe decimarse sin timestamps ni anti-aliasing.
+   */
+  private updateMorphologyWindow(
+    legacySample: number,
+    batch?: readonly TimedSignalSample[],
+  ): void {
+    // Compatibilidad para consumidores/tests antiguos que no proporcionan
+    // timestamps. La ruta productiva del router siempre envía batch, incluso vacío.
+    if (batch === undefined) {
+      this.morphologyHistory.push(legacySample);
+      this.morphologySampleRateHz = 30;
+      return;
+    }
+
+    for (const sample of batch) {
+      if (
+        !Number.isFinite(sample.value) ||
+        !Number.isFinite(sample.timestampMs) ||
+        sample.timestampMs <= 0
+      ) continue;
+
+      const previous = this.morphologyTimedSamples[this.morphologyTimedSamples.length - 1];
+      if (previous && sample.timestampMs <= previous.timestampMs) continue;
+      this.morphologyTimedSamples.push({
+        value: sample.value,
+        timestampMs: sample.timestampMs,
+      });
+    }
+
+    if (this.morphologyTimedSamples.length > this.MORPHOLOGY_TIMED_MAX_SAMPLES) {
+      this.morphologyTimedSamples.splice(
+        0,
+        this.morphologyTimedSamples.length - this.MORPHOLOGY_TIMED_MAX_SAMPLES,
+      );
+    }
+
+    const uniform = resampleTimedSignal(this.morphologyTimedSamples, {
+      targetRateHz: 30,
+      minRateHz: 20,
+      maxRateHz: 60,
+      maxGapMultiple: 2.25,
+      maxJitterRatio: 0.35,
+    });
+
+    this.morphologyHistory.reset();
+    if (!uniform) {
+      this.morphologySampleRateHz = 0;
+      this.bloodPressureProcessor.reset();
+      this.lastBPConfidence = 'INSUFFICIENT';
+      this.lastBPFeatureQuality = 0;
+      return;
+    }
+
+    this.morphologySampleRateHz = uniform.sampleRateHz;
+    for (const value of uniform.samples.slice(-this.HISTORY_SIZE)) {
+      this.morphologyHistory.push(value);
+    }
+  }
+
+  /**
+   * Descarta la ventana morfológica cuando se interrumpe el contacto o aparece
+   * movimiento. Evita concatenar ciclos de sesiones/condiciones distintas.
+   */
+  resetMorphologyWindow(): void {
+    this.morphologyTimedSamples = [];
+    this.morphologyHistory.reset();
+    this.morphologySampleRateHz = 0;
+    this.bloodPressureProcessor.reset();
+    this.lastBPConfidence = 'INSUFFICIENT';
+    this.lastBPFeatureQuality = 0;
+    this.measurements.systolicPressure = 0;
+    this.measurements.diastolicPressure = 0;
+    this.bpSysWeightedSum = 0;
+    this.bpDiaWeightedSum = 0;
+    this.bpTotalWeight = 0;
+  }
+
+  /**
+   * Mantiene uniformes las dos series lentas del motor respiratorio.
+   * processSignal se invoca con una cadencia reducida respecto de la cámara;
+   * por eso no se puede asumir que esa cadencia sea siempre 10 Hz.
+   */
+  private updateRespirationWindow(
+    signalSample: number,
+    respirationSample: number,
+    timestampMs?: number,
+  ): void {
+    // Compatibilidad para consumidores antiguos sin reloj de captura.
+    if (timestampMs === undefined) {
+      this.signalHistory.push(signalSample);
+      this.respirationHistory.push(respirationSample);
+      this.respirationSampleRateHz = this.VITAL_SIGNAL_ESTIMATE_HZ;
+      return;
+    }
+
+    if (!Number.isFinite(timestampMs) || timestampMs <= 0) {
+      this.resetRespirationWindow();
+      return;
+    }
+
+    const previous = this.signalTimedSamples[this.signalTimedSamples.length - 1];
+    if (previous && timestampMs <= previous.timestampMs) return;
+
+    this.signalTimedSamples.push({ value: signalSample, timestampMs });
+    this.respirationTimedSamples.push({ value: respirationSample, timestampMs });
+
+    if (this.signalTimedSamples.length > this.RESPIRATION_BUFFER) {
+      this.signalTimedSamples.splice(0, this.signalTimedSamples.length - this.RESPIRATION_BUFFER);
+      this.respirationTimedSamples.splice(0, this.respirationTimedSamples.length - this.RESPIRATION_BUFFER);
+    }
+
+    const options = {
+      targetRateHz: this.VITAL_SIGNAL_ESTIMATE_HZ,
+      minRateHz: 4,
+      maxRateHz: 40,
+      maxGapMultiple: 2.5,
+      maxJitterRatio: 0.5,
+    };
+    const uniformSignal = resampleTimedSignal(this.signalTimedSamples, options);
+    const uniformRespiration = resampleTimedSignal(this.respirationTimedSamples, options);
+
+    this.signalHistory.reset();
+    this.respirationHistory.reset();
+    if (!uniformSignal || !uniformRespiration) {
+      this.respirationSampleRateHz = 0;
+      return;
+    }
+
+    this.respirationSampleRateHz = Math.min(
+      uniformSignal.sampleRateHz,
+      uniformRespiration.sampleRateHz,
+    );
+    for (const value of uniformSignal.samples.slice(-this.HISTORY_SIZE)) {
+      this.signalHistory.push(value);
+    }
+    for (const value of uniformRespiration.samples.slice(-this.RESPIRATION_BUFFER)) {
+      this.respirationHistory.push(value);
+    }
+  }
+
+  /** Borra las ventanas lentas para no mezclar sesiones o huecos temporales. */
+  resetRespirationWindow(): void {
+    this.signalTimedSamples = [];
+    this.respirationTimedSamples = [];
+    this.signalHistory.reset();
+    this.respirationHistory.reset();
+    this.respirationSampleRateHz = 0;
+    this.lastRrIntervals = [];
+    this.lastAccelRespiration = null;
   }
 
   private validateRealPulse(rrData?: RRData): boolean {
@@ -406,6 +572,7 @@ export class VitalSignsProcessor {
     const respBuf = this.respirationHistory.tail(this.RESPIRATION_BUFFER);
     const respReady =
       vitalUiGate &&
+      this.respirationSampleRateHz >= 4 &&
       respBuf.length >= RESPIRATION_DEFAULTS.minBuffer * 0.55 &&
       this.stableFramesCount >= RESPIRATION_DEFAULTS.minStableFrames;
     // Smart Fusion multi-modalidad (Karlen 2013): RIAV (envolvente del pulso) +
@@ -416,7 +583,7 @@ export class VitalSignsProcessor {
       ? estimateRespiratorySmartFusion({
         pulseSeries: this.signalHistory.tail(this.HISTORY_SIZE),
         respBandSeries: respBuf,
-        fsHz: this.VITAL_SIGNAL_ESTIMATE_HZ,
+        fsHz: this.respirationSampleRateHz,
         rrIntervalsMs: this.lastRrIntervals,
         approxBpm: this.lastBPM,
         minRpm: RESPIRATION_DEFAULTS.minRpm,
@@ -669,7 +836,7 @@ export class VitalSignsProcessor {
       const bpEstimate = this.bloodPressureProcessor.estimate(
         this.morphologyHistory.tail(this.HISTORY_SIZE),
         validRR,
-        30,
+        this.morphologySampleRateHz,
         this.lastBPM > 0 ? this.lastBPM : undefined,
       );
 
@@ -761,9 +928,8 @@ export class VitalSignsProcessor {
         result.bloodPressure.value.diastolic = wAvgDia;
       }
     }
-    this.signalHistory.reset();
-    this.morphologyHistory.reset();
-    this.respirationHistory.reset();
+    this.resetRespirationWindow();
+    this.resetMorphologyWindow();
     this.lastRrIntervals = [];
     this.lastAccelRespiration = null;
     this.validPulseCount = 0;
@@ -780,9 +946,8 @@ export class VitalSignsProcessor {
   }
 
   fullReset(): void {
-    this.signalHistory.reset();
-    this.morphologyHistory.reset();
-    this.respirationHistory.reset();
+    this.resetRespirationWindow();
+    this.resetMorphologyWindow();
     this.lastRrIntervals = [];
     this.lastAccelRespiration = null;
     this.validPulseCount = 0;

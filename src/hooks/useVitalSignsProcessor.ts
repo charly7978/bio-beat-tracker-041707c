@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, useEffect } from 'react';
 import { VitalSignsProcessor, VitalSignsResult, RGBData } from '../modules/vital-signs/VitalSignsProcessor';
 import { createDefaultVitalSignsResult } from '../lib/vitals/defaultVitalSignsResult';
 import type { SignalQualityMetrics } from '../types/measurements';
+import type { TimedSignalSample } from '../lib/signal/timedSamples';
 
 /**
  * HOOK DE SIGNOS VITALES - OPTIMIZADO
@@ -68,6 +69,9 @@ export const useVitalSignsProcessor = () => {
         dcBlue?: number;
       };
     },
+    accelRespiration?: { rpm: number; quality: number },
+    morphologyBatch?: TimedSignalSample[],
+    sampleTimestampMs?: number,
   ): VitalSignsResult => {
     if (!processorRef.current) return createDefaultVitalSignsResult();
 
@@ -80,6 +84,12 @@ export const useVitalSignsProcessor = () => {
       sqmBundle,
       morphologyValue,
       splitterChannels,
+      undefined,
+      undefined,
+      undefined,
+      accelRespiration,
+      morphologyBatch,
+      sampleTimestampMs,
     );
     
     // Guardar la última ventana realmente válida para cierre/exportación en ref para evitar re-renderizados constantes
@@ -93,6 +103,14 @@ export const useVitalSignsProcessor = () => {
     }
     
     return result;
+  }, []);
+
+  const resetMorphologyWindow = useCallback(() => {
+    processorRef.current?.resetMorphologyWindow();
+  }, []);
+
+  const resetRespirationWindow = useCallback(() => {
+    processorRef.current?.resetRespirationWindow();
   }, []);
 
   const reset = useCallback(() => {
@@ -116,6 +134,8 @@ export const useVitalSignsProcessor = () => {
 
   return {
     processSignal,
+    resetMorphologyWindow,
+    resetRespirationWindow,
     setPlacementMode,
     setRGBData,
     reset,

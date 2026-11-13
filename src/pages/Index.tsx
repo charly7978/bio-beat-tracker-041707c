@@ -67,6 +67,8 @@ const Index = () => {
 
   const { 
     processSignal: processVitalSigns,
+    resetMorphologyWindow,
+    resetRespirationWindow,
     setPlacementMode: setVitalsPlacementMode,
     setRGBData,
     reset: resetVitalSigns,
@@ -101,6 +103,8 @@ const Index = () => {
     },
     processVitalSigns: {
       processSignal: processVitalSigns,
+      resetMorphologyWindow,
+      resetRespirationWindow,
       setPlacementMode: setVitalsPlacementMode,
       setRGBData,
       getRGBStats,

@@ -44,6 +44,39 @@ describe('VitalSignsProcessor', () => {
     expect(next.heartRate.value).toBe(72.375);
   });
 
+  it('uses the timestamp-derived morphology sample rate for BP features', () => {
+    const bp = vi.spyOn(BloodPressureProcessor.prototype, 'estimate').mockReturnValue({
+      systolic: 0, diastolic: 0, map: 0, pulsePressure: 0,
+      confidence: 'INSUFFICIENT', featureQuality: 0,
+    });
+    const proc = new VitalSignsProcessor();
+    const rr = { intervals: [830, 835, 829, 834], lastPeakTime: 1000, timestampNow: 1100 };
+    const morphology30Hz = Array.from({ length: 120 }, (_, i) => ({
+      value: Math.sin((2 * Math.PI * 1.2 * i) / 30),
+      timestampMs: 10_000 + (i * 1000) / 30,
+    }));
+
+    proc.processSignal(
+      1, 80, 72, rr, 0.005, { sqi: 80 }, 1,
+      undefined, undefined, undefined, undefined, undefined, morphology30Hz,
+    );
+    expect(bp).toHaveBeenCalled();
+    expect(bp.mock.calls[0][2]).toBeCloseTo(30, 0);
+
+    bp.mockClear();
+    proc.resetMorphologyWindow();
+    const morphology24Hz = Array.from({ length: 100 }, (_, i) => ({
+      value: Math.sin((2 * Math.PI * 1.2 * i) / 24),
+      timestampMs: 20_000 + (i * 1000) / 24,
+    }));
+    proc.processSignal(
+      1, 80, 72, rr, 0.005, { sqi: 80 }, 1,
+      undefined, undefined, undefined, undefined, undefined, morphology24Hz,
+    );
+    expect(bp).toHaveBeenCalled();
+    expect(bp.mock.calls[0][2]).toBeCloseTo(24, 0);
+  });
+
   it('retains the HR SQI acceptance boundary at 10', () => {
     const at = new VitalSignsProcessor().processSignal(1, 10, 72.375);
     const below = new VitalSignsProcessor().processSignal(1, 9.999, 72.375);
