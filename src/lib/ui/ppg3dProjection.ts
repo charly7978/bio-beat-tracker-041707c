@@ -831,14 +831,14 @@ export function drawPreviewWell3D(
   //    pozo, así que no hace falta taparla; una base opaca convertiría la
   //    ventana en un parche y rompería la lectura de "recostada bajo la grilla".
   const body = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
-  body.addColorStop(0, 'rgba(4, 9, 16, 0.06)');
-  body.addColorStop(1, 'rgba(2, 5, 9, 0.10)');
+  body.addColorStop(0, 'rgba(4, 9, 16, 0.025)');
+  body.addColorStop(1, 'rgba(2, 5, 9, 0.045)');
   quadPath(ctx, quad);
   ctx.fillStyle = body;
   ctx.fill();
 
-  // 2) VIDEO real recortado al centro y proyectado sobre el piso. Se pinta
-  //    translúcido para que el piso y las líneas se lean a través del cristal.
+  // 2) VIDEO real recortado al centro y proyectado sobre el piso. Su transparencia
+  //    permite que la grilla se lea a través, como un plano apoyado bajo el piso.
   if (hasVideo) {
     ctx.save();
     ctx.globalAlpha = WELL_VEIL.VIDEO_ALPHA;
