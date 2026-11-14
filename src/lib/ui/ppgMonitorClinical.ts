@@ -1,5 +1,5 @@
 /**
- * Etiquetas y umbrales clínicos para el monitor PPG (solo presentación).
+ * Etiquetas de presentación del pulso óptico; no acreditan diagnósticos ECG.
  */
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import { isPhysiologicalRR, calculateHRV } from '@/utils/physio';
@@ -16,28 +16,28 @@ const SPO2 = VITAL_THRESHOLDS.SPO2;
 
 export function hrZoneLabel(bpm: number): ClinicalLabel {
   if (bpm <= 0) return { text: '—', level: 'dim' };
-  if (bpm < 50) return { text: 'BRADICARDIA SEVERA', level: 'danger' };
-  if (bpm < 60) return { text: 'BRADICARDIA', level: 'warn' };
-  if (bpm <= 100) return { text: 'NORMAL (SINUSAL)', level: 'normal' };
-  if (bpm <= 120) return { text: 'TAQUICARDIA LEVE', level: 'warn' };
-  if (bpm <= 150) return { text: 'TAQUICARDIA', level: 'danger' };
-  return { text: 'TAQUICARDIA SEVERA', level: 'danger' };
+  if (bpm < 50) return { text: 'PULSO MUY BAJO', level: 'danger' };
+  if (bpm < 60) return { text: 'PULSO BAJO', level: 'warn' };
+  if (bpm <= 100) return { text: 'PULSO 60–100', level: 'normal' };
+  if (bpm <= 120) return { text: 'PULSO 101–120', level: 'warn' };
+  if (bpm <= 150) return { text: 'PULSO 121–150', level: 'danger' };
+  return { text: 'PULSO >150', level: 'danger' };
 }
 
 export function spo2ZoneLabel(spo2: number): ClinicalLabel {
   if (spo2 <= 0) return { text: '—', level: 'dim' };
-  if (spo2 >= 95) return { text: 'NORMOXIA', level: 'normal' };
-  if (spo2 >= 90) return { text: 'HIPOXEMIA LEVE', level: 'warn' };
-  if (spo2 >= 85) return { text: 'HIPOXEMIA MOD.', level: 'danger' };
-  return { text: 'HIPOXEMIA SEVERA', level: 'danger' };
+  if (spo2 >= 95) return { text: 'EST. ≥95%', level: 'normal' };
+  if (spo2 >= 90) return { text: 'EST. 90–94%', level: 'warn' };
+  if (spo2 >= 85) return { text: 'EST. 85–89%', level: 'danger' };
+  return { text: 'EST. <85%', level: 'danger' };
 }
 
 export function bpZoneLabel(sys: number, dia: number): ClinicalLabel {
   if (sys <= 0 || dia <= 0) return { text: '—', level: 'dim' };
-  if (sys >= 140 || dia >= 90) return { text: 'HIPERTENSIÓN', level: 'danger' };
-  if (sys >= 130 || dia >= 80) return { text: 'ELEVADA', level: 'warn' };
-  if (sys < 90 || dia < 60) return { text: 'HIPOTENSIÓN', level: 'warn' };
-  return { text: 'NORMAL', level: 'normal' };
+  if (sys >= 140 || dia >= 90) return { text: 'EST. ≥140/90', level: 'danger' };
+  if (sys >= 130 || dia >= 80) return { text: 'EST. ≥130/80', level: 'warn' };
+  if (sys < 90 || dia < 60) return { text: 'EST. <90/60', level: 'warn' };
+  return { text: 'EST. EN RANGO', level: 'normal' };
 }
 
 export function formatContactState(state?: string): string {
@@ -60,7 +60,7 @@ export function formatAcquisitionStatus(status?: string): string {
 
 export function formatArrhythmiaStatus(status?: string, count = 0): string {
   if (!status || status === 'NORMAL' || status === 'SINUS_RHYTHM') {
-    return count > 0 ? `RITMO REGULAR · ${count} eventos` : 'RITMO REGULAR';
+    return count > 0 ? `PULSO · ${count} eventos marcados` : 'SIN EVENTOS MARCADOS';
   }
   return `${status.replace(/_/g, ' ')}${count > 0 ? ` · ${count}` : ''}`;
 }
@@ -118,35 +118,45 @@ export function buildRhythmPanel(
 
   if (detected) {
     return {
-      title: 'ARRITMIA / RITMO IRREGULAR',
+      title: 'IRREGULARIDAD DEL PULSO',
       detail: [
         count > 0 ? `${count} latido(s) marcado(s)` : null,
-        irr !== null ? `CV-RR ${irr}% (referencia alerta ≥20%)` : null,
+        irr !== null ? `CV-IBI ${irr}%` : null,
         hrvLine || null,
       ]
         .filter(Boolean)
         .join(' · '),
       guidance:
-        'Segmentos en rojo = intervalos anómalos. Confirmar con ECG de 12 derivaciones si persiste.',
+        'Intervalos marcados por el detector. La PPG no confirma una arritmia; requiere evaluación con ECG.',
       level: 'danger',
       irregularityPct: irr,
     };
   }
 
+  if (calibrating || rrIntervals.filter(isPhysiologicalRR).length < 3) {
+    return {
+      title: 'ESPERANDO INTERVALOS',
+      detail: 'Aún sin intervalos suficientes',
+      guidance: 'Mantén un apoyo suave mientras se reúne señal válida.',
+      level: 'dim',
+      irregularityPct: null,
+    };
+  }
+
   if (irr !== null && irr >= 12) {
     return {
-      title: 'RITMO SINUSAL CON VARIACIÓN',
-      detail: `CV-RR ${irr}% · ${hrvLine || 'variabilidad fisiológica'}`,
-      guidance: 'Vigilar tendencia; aún sin criterio de arritmia sostenida.',
+      title: 'PULSO CON VARIACIÓN',
+      detail: `CV-IBI ${irr}% · ${hrvLine || 'variabilidad observada'}`,
+      guidance: 'Variación de intervalos ópticos; no identifica el origen del ritmo.',
       level: 'warn',
       irregularityPct: irr,
     };
   }
 
   return {
-    title: 'RITMO SINUSAL REGULAR',
-    detail: [irr !== null ? `CV-RR ${irr}%` : null, hrvLine || null].filter(Boolean).join(' · ') || 'Intervalos estables',
-    guidance: 'Morfología PPG coherente con pulso periódico.',
+    title: 'INTERVALOS DEL PULSO ESTABLES',
+    detail: [irr !== null ? `CV-IBI ${irr}%` : null, hrvLine || null].filter(Boolean).join(' · ') || 'Intervalos estables',
+    guidance: 'Periodos ópticos estables en esta ventana; no equivale a ritmo sinusal.',
     level: 'normal',
     irregularityPct: irr,
   };

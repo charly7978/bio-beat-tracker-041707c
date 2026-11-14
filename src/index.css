@@ -109,7 +109,7 @@
 @supports (color: oklch(70% 0.1 170)) {
   :root { --instrument-accent: oklch(84% .105 173); }
 }
-.monitor-shell { background: var(--instrument-bg); color: var(--instrument-ink); }
+.monitor-shell { background: var(--instrument-bg); color: var(--instrument-ink); isolation: isolate; }
 .monitor-canvas { touch-action: none; outline: none; }
 .monitor-canvas:focus-visible { outline: 2px solid var(--instrument-accent); outline-offset: -3px; }
 .monitor-toolbar { position: absolute; left: 16px; right: 16px; height: 48px; display: flex; align-items: center; justify-content: space-between; }
@@ -129,6 +129,35 @@
 .monitor-icon-button:focus-visible, .monitor-dimension-toggle:focus-visible, .app-top-action:focus-visible, .welcome-start:focus-visible { outline: 2px solid var(--instrument-accent); outline-offset: -3px; }
 .monitor-scale { font: 12px var(--font-mono); min-width: 46px; text-align: center; color: #e4edf1; }
 .monitor-scale small { color: #a3b6c4; }
+.monitor-analysis-mode { min-width: 54px; height: 44px; padding: 0 6px; color: #b4a6f4; font: 10px var(--font-mono); background: #b4a6f40a; }
+.monitor-analysis-mode:hover { background: #b4a6f41a; }
+.monitor-analysis-mode:focus-visible { outline: 2px solid #b4a6f4; outline-offset: -3px; }
+.monitor-model-info { position: absolute; width: 36px; height: 44px; display: grid; place-items: center; color: #e8c080; border-radius: 8px; background: #14202b; }
+.monitor-model-info:hover { background: #283542; }
+.monitor-model-info:focus-visible { outline: 2px solid #e8c080; outline-offset: -2px; }
+.model-dialog { padding: 0; width: min(600px, calc(100vw - 28px)); max-height: calc(100svh - 32px); overflow: auto; border: 1px solid #405365; border-radius: 18px; color: #e4edf1; background: #0f1c27; box-shadow: 0 32px 120px #0009; }
+.model-dialog::backdrop { background: #030a12d9; backdrop-filter: blur(6px); }
+.model-dialog-content { padding: clamp(20px, 4vw, 32px); }
+.model-dialog-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.model-dialog-top button { min-width: 44px; min-height: 44px; display: grid; place-items: center; border-radius: 8px; color: #adc3d1; }
+.model-dialog-top button:hover { background: #ffffff0d; }
+.model-dialog button:focus-visible, .model-dialog a:focus-visible { outline: 2px solid #e8c080; outline-offset: 2px; }
+.model-badge { font: 10px var(--font-mono); letter-spacing: .07em; color: #e8c080; }
+.model-dialog h2 { font-size: clamp(23px, 4vw, 32px); font-weight: 500; letter-spacing: -.035em; line-height: 1.2; margin: 18px 0; }
+.model-dialog h2 span { color: #92aebf; }
+.model-dialog p { font-size: 13px; line-height: 1.65; color: #bdced9; }
+.model-report-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 20px 0 12px; }
+.model-report-metrics div { background: #e8c08008; border: 1px solid #e8c08025; padding: 13px 10px; border-radius: 10px; }
+.model-report-metrics dt { font-size: 10px; color: #b8c8d4; }
+.model-report-metrics dd { font: 24px var(--font-mono); color: #e8c080; margin: 12px 0 0; }
+.model-report-metrics small { font-size: 12px; }
+.model-dialog .model-report-baseline { font-size: 11px; color: #96aebf; }
+.model-report-details { margin: 18px 0; font-size: 12px; }
+.model-report-details div { display: flex; justify-content: space-between; gap: 14px; padding: 12px 0; border-bottom: 1px solid #2d4050; }
+.model-report-details dt { color: #9fb5c4; flex: none; }.model-report-details dd { text-align: right; }
+.model-dialog .model-report-limit { padding: 12px 14px; border-left: 2px solid #e8c08088; background: #e8c08008; font-size: 12px; }
+.model-dialog a { color: #80e3ca; display: inline-flex; align-items: center; gap: 8px; font-size: 12px; min-height: 44px; margin-top: 12px; }
+.model-dialog code { display: block; font: 10px var(--font-mono); color: #8da7b9; overflow-wrap: anywhere; margin-top: 8px; }
 .monitor-feedback { position: absolute; left: 18px; right: 18px; height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #263a46; padding-bottom: 8px; pointer-events: none; }
 .monitor-eyebrow { font-size: 8px; letter-spacing: .1em; color: #91a7b7; }
 .monitor-feedback p { margin: 1px 0 0; color: #c8d9e2; font-size: 10px; line-height: 1.3; }
@@ -137,8 +166,21 @@
 .monitor-inspection-nav { position: absolute; left: 50%; transform: translateX(-50%); display: flex; gap: 3px; align-items: center; background: #14232ef2; border: 1px solid #405767; border-radius: 9px; }
 .monitor-inspection-nav span { font: 9px var(--font-mono); text-align: center; min-width: 112px; color: #c5d8e4; }
 .monitor-inspection-nav small { display: block; font: 9px var(--font-sans); margin-top: 3px; color: #a3b6c4; }
-.monitor-actions { background: #12202b; border-top: 1px solid #304451; }
+.monitor-actions { background: #0e1b25f5; border-top: 1px solid #304451; display: grid; grid-template-columns: 1fr 1fr; padding-left: 12px; padding-right: 12px; gap: 8px; align-items: center; box-shadow: 0 -8px 32px #0003; }
 .monitor-actions button { letter-spacing: .08em; font-size: 11px; }
+.monitor-actions button { height: 44px; border-radius: 10px; border: 1px solid #375063; }
+.monitor-actions button:first-of-type { border-color: #80e3ca55; }
+.monitor-actions button:focus-visible { outline: 2px solid var(--instrument-accent); outline-offset: 2px; }
+.monitor-session-state { display: none; }
+.monitor-modes { display: flex; align-items: center; gap: 8px; }
+.monitor-hybrid-toggle { display: flex; height: 44px; align-items: center; gap: 3px; padding: 4px; background: #0d1b26; border: 1px solid #304451; border-radius: 10px; color: #91a7b7; font: 10px var(--font-mono); }
+.monitor-hybrid-toggle span { padding: 8px 7px; border-radius: 6px; }
+.monitor-hybrid-toggle span.active { color: #b5f8e9; background: #80e3ca1c; box-shadow: inset 0 0 0 1px #80e3ca22; }
+.monitor-hybrid-toggle:focus-visible { outline: 2px solid var(--instrument-accent); outline-offset: 2px; }
+.monitor-hybrid-toggle:disabled { cursor: default; opacity: .6; }
+.monitor-toolbar .monitor-dimension-toggle { min-width: 56px; }
+.monitor-channel { font-size: 10px; }
+.monitor-quality { color: #b3c9d7; }
 .app-top-action { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 9px; color: #a3b6c4; }
 .app-top-action:hover { color: #e4edf1; background: #233541; }
 .monitor-beat-event { position: absolute; top: 36px; left: 55%; transform: translateX(-50%); display: flex; gap: 4px; color: var(--instrument-accent); font: 7px var(--font-mono); pointer-events: none; }
@@ -154,6 +196,7 @@
 .welcome-instrument div:nth-child(2) { width: 112px; height: 112px; border-color: #80e3ca50; transform: rotateX(50deg) rotateZ(25deg); }
 .welcome-instrument div:nth-child(3) { width: 76px; height: 76px; border-color: #80e3ca90; }
 .welcome-instrument span { color: var(--instrument-accent); font: 11px var(--font-mono); letter-spacing: .2em; }
+.welcome-instrument::before { content: ''; position: absolute; width: 200px; height: 110px; border-radius: 50%; background: #80e3ca0a; filter: blur(24px); }
 .welcome-kicker { color: var(--instrument-accent); font: 9px var(--font-mono); letter-spacing: .08em; margin-bottom: 16px; }
 .welcome-content h1 { font: 500 clamp(28px, 5vw, 39px)/1.17 var(--font-sans); letter-spacing: -.035em; }
 .welcome-content h1 span { color: #a4b9c6; }
@@ -168,6 +211,18 @@
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
 @media (max-height: 700px) { .welcome-instrument { height: 70px; margin: 16px 0; }.welcome-instrument div { width: 90px; height: 90px; }.welcome-instrument div:nth-child(2) { width: 68px; height: 68px; }.welcome-instrument div:nth-child(3) { width: 45px; height: 45px; } }
+@media (max-width: 359px) { .monitor-channel { gap: 5px; font-size: 9px; }.monitor-quality { padding-left: 5px; }.monitor-modes { gap: 4px; }.monitor-hybrid-toggle span { padding: 8px 5px; }.monitor-toolbar .monitor-dimension-toggle { min-width: 48px; gap: 4px; }.monitor-view-controls .monitor-icon-button { width: 42px; } }
+@media (orientation: landscape) and (max-height: 649px) and (max-width: 639px) { .monitor-channel { display: none; }.monitor-toolbar { justify-content: flex-start; }.monitor-view-controls .monitor-icon-button { width: 38px; }.monitor-view-controls button[aria-label="Mostrar u ocultar anotaciones de onda"] { display: none; }.monitor-view-controls .monitor-scale { min-width: 40px; } }
+@media (min-width: 1024px) and (min-height: 600px) {
+  .monitor-actions { grid-template-columns: 1fr 210px 150px; padding-left: 26px; padding-right: 24px; gap: 12px; }
+  .monitor-session-state { display: flex; gap: 12px; align-items: center; }
+  .monitor-session-state div { display: flex; flex-direction: column; gap: 5px; }
+  .monitor-session-state strong { font: 10px var(--font-mono); letter-spacing: .08em; color: #d0e1eb; }
+  .monitor-session-state div > span { font-size: 11px; color: #90a7b8; }
+  .monitor-toolbar { height: 48px; }
+  .monitor-channel { font-size: 11px; gap: 10px; }
+  .app-top-action { top: 10px; }
+}
 @supports (backdrop-filter: blur(6px)) {
   .monitor-control-group { backdrop-filter: blur(6px); }
 }

@@ -48,9 +48,10 @@ export function useMonitorViewport(buffer: MutableRefObject<CircularBuffer | nul
   }, []);
   const pointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const plot = layout.current.plot;
-    if (y < plot.y || y > plot.y + plot.h) return;
+    if (x < plot.x || x > plot.x + plot.w || y < plot.y || y > plot.y + plot.h) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.current.size === 1) {

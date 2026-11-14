@@ -2,6 +2,8 @@ interface PPGDataPoint {
   time: number;
   value: number;
   isArrhythmia: boolean;
+  /** Canal óptico lineal anterior al AGC, para representar derivadas observadas. */
+  sourceValue?: number;
 }
 
 /**

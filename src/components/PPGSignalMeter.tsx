@@ -28,6 +28,12 @@ import { ActionButtons } from './ActionButtons';
 import { MonitorControls } from './MonitorControls';
 import { useMonitorViewport } from '@/hooks/useMonitorViewport';
 import { PressureCoach } from './PressureCoach';
+import { computeMonitorLayout, splitMorphologyPlot } from '@/lib/ui/monitorLayout';
+import { drawPulseMorphology } from '@/lib/ui/pulseMorphologyRenderer';
+import { drawEstimatedEcg } from '@/lib/ui/estimatedEcgRenderer';
+import type { EcgEstimate } from '@/types/signal';
+import { Info } from 'lucide-react';
+import { EcgModelInfo } from './EcgModelInfo';
 
 export interface PPGSignalMeterProps {
   value: number;
@@ -61,7 +67,8 @@ export interface PPGSignalMeterProps {
 }
 
 export interface PPGSignalMeterHandle {
-  pushSignal: (value: number, timestamp: number) => void;
+  pushSignal: (value: number, timestamp: number, sourceValue?: number) => void;
+  pushEcgEstimate: (estimate: EcgEstimate) => void;
   clearBuffer: () => void;
 }
 
@@ -107,6 +114,9 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const animationRef = useRef<number | null>(null);
   const isRunningRef = useRef(false);
   const dataBufferRef = useRef<CircularBuffer | null>(null);
+  const ecgBufferRef = useRef<CircularBuffer | null>(null);
+  const ecgEstimateRef = useRef<EcgEstimate>();
+  const ecgInspectionRef = useRef<{ buffer: CircularBuffer; estimate?: EcgEstimate }>();
   /** <video> de la cámara cacheado para el pozo 3D (se re-resuelve si se desmonta). */
   const videoWellRef = useRef<HTMLVideoElement | null>(null);
 
@@ -145,30 +155,53 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const displaySysRef = useRef(0);
   const displayDiaRef = useRef(0);
   const waveGainRef = useRef(4.2);
+  // Una única traslación de reloj conserva los intervalos de captura originales.
+  const clockOffsetRef = useRef<number | null>(null);
 
   useImperativeHandle(ref, () => ({
-    pushSignal: (val: number, timestampMs: number) => {
+    pushSignal: (val: number, timestampMs: number, sourceValue?: number) => {
       if (!dataBufferRef.current) return;
       if (!hasSamplesRef.current) { hasSamplesRef.current = true; setHasSamples(true); }
       const scaledValue = val * waveGainRef.current;
       const now = Date.now();
       const perfNow = typeof performance !== 'undefined' ? performance.now() : 0;
+      clockOffsetRef.current ??= now - perfNow;
       // El procesador entrega reloj monotónico de captura; lo convertimos al
       // dominio de pared usado por el renderer sin volver a fechar al recibirlo.
       const sampleTime = Number.isFinite(timestampMs)
         ? (timestampMs > 100_000_000_000 || perfNow === 0
           ? timestampMs
-          : now - (perfNow - timestampMs))
+          : timestampMs + clockOffsetRef.current)
         : now;
       const isArrhythmia = now < arrActiveUntilRef.current;
       dataBufferRef.current.push({
         time: sampleTime,
         value: scaledValue,
+        sourceValue,
         isArrhythmia
       });
     },
+    pushEcgEstimate: (estimate: EcgEstimate) => {
+      ecgEstimateRef.current = estimate;
+      if (estimate.status !== 'AVAILABLE') {
+        ecgBufferRef.current?.clear();
+        return;
+      }
+      const offset = clockOffsetRef.current ?? Date.now() - performance.now();
+      for (const sample of estimate.samples) {
+        if (!Number.isFinite(sample.value) || !Number.isFinite(sample.timestamp)) continue;
+        ecgBufferRef.current?.push({
+          time: sample.timestamp > 100_000_000_000 ? sample.timestamp : sample.timestamp + offset,
+          value: sample.value,
+          isArrhythmia: false,
+        });
+      }
+    },
     clearBuffer: () => {
       dataBufferRef.current?.clear();
+      ecgBufferRef.current?.clear();
+      ecgEstimateRef.current = undefined;
+      clockOffsetRef.current = null;
       hasSamplesRef.current = false; setHasSamples(false);
     }
   }));
@@ -277,19 +310,41 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   useEffect(() => {
     if (!dataBufferRef.current) {
       dataBufferRef.current = new CircularBuffer(BUFFER_SIZE);
+      ecgBufferRef.current = new CircularBuffer(BUFFER_SIZE);
     }
   }, []);
 
   useEffect(() => {
     if (preserveResults && !isFingerDetected) {
       dataBufferRef.current?.clear();
+      ecgBufferRef.current?.clear();
       hasSamplesRef.current = false; setHasSamples(false);
     }
   }, [preserveResults, isFingerDetected]);
 
   const [layoutUi, setLayoutUi] = useState(layoutRef.current);
+  const [hybrid, setHybrid] = useState(true);
+  const [analysisMode, setAnalysisMode] = useState<'ecg' | 'derivatives'>('derivatives');
+  const analysisModeRef = useRef<'ecg' | 'derivatives'>('derivatives');
+  const [showModelInfo, setShowModelInfo] = useState(false);
+  const toggleAnalysisMode = useCallback(() => {
+    analysisModeRef.current = analysisModeRef.current === 'ecg' ? 'derivatives' : 'ecg';
+    setAnalysisMode(analysisModeRef.current);
+  }, []);
+  const hybridRef = useRef(true);
+  const toggleHybrid = useCallback(() => {
+    hybridRef.current = !hybridRef.current;
+    setHybrid(hybridRef.current);
+  }, []);
   const viewport = useMonitorViewport(dataBufferRef, amplitudeStatsRef, layoutRef, waveVisibilityRef);
   const viewportRef = viewport.view;
+  useLayoutEffect(() => {
+    if (!viewport.inspecting) { ecgInspectionRef.current = undefined; return; }
+    const points = ecgBufferRef.current?.getPoints() ?? [];
+    const copy = new CircularBuffer(Math.max(1, points.length));
+    for (const point of points) copy.push({ ...point });
+    ecgInspectionRef.current = { buffer: copy, estimate: ecgEstimateRef.current };
+  }, [viewport.inspecting]);
   const reducedMotionRef = useRef(false);
   useEffect(() => {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -303,7 +358,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const container = containerRef.current;
     if (!canvas || !container) return;
     const rect = container.getBoundingClientRect();
-    const maxDpr = isNative() ? 1.25 : 2.0;
+    // Mantener nitidez en pantallas densas, con un presupuesto total de píxeles.
+    const maxDpr = Math.max(1, Math.min(3, Math.sqrt(8_000_000 / Math.max(1, rect.width * rect.height))));
     const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
     const cssW = Math.max(320, Math.floor(rect.width));
     const cssH = Math.max(320, Math.floor(rect.height));
@@ -314,30 +370,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const ctx = canvas.getContext('2d', { alpha: false });
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const shortScreen = cssH < 650;
-    const focused = viewportRef.current.focus || shortScreen;
-    const header = { x: 0, y: 0, w: cssW, h: shortScreen ? 48 : 56 };
-    const metricsH = shortScreen && cssW > cssH ? 0 : focused ? 58 : 114;
-    const metrics = { x: 0, y: header.h, w: cssW, h: metricsH };
-
-    const lowerH = focused ? 0 : 76;
-    const footerH = shortScreen ? 0 : 50;
-    const safeAreaBottom = getSafeAreaBottom();
-    const buttonsH = 64 + safeAreaBottom;
-    const plotY = header.h + metricsH + 48;
-    const plotH = cssH - plotY - lowerH - footerH - buttonsH - 88;
-
-    const plotX = 12;
-    const plotW = cssW - plotX * 2;
-    const plot = { x: plotX, y: plotY + 3, w: plotW, h: Math.max(70, plotH - 3), centerY: 0 };
-    plot.centerY = plot.y + plot.h / 2;
-
-    const lowerY = plot.y + plot.h + 86;
-    const trend = { x: plotX, y: lowerY, w: plotW, h: lowerH };
-
-    const footer = { x: 0, y: cssH - buttonsH - footerH, w: cssW, h: footerH };
-
-    layoutRef.current = { width: cssW, height: cssH, header, metrics, plot, trend, footer };
+    layoutRef.current = computeMonitorLayout(cssW, cssH, getSafeAreaBottom(), viewportRef.current.focus);
     setLayoutUi(layoutRef.current);
   }, [viewportRef]);
 
@@ -361,8 +394,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const targetFps = isNative() || window.matchMedia('(pointer: coarse)').matches ? 30 : TARGET_FPS;
     const frameTime = 1000 / targetFps;
     let lastRenderTime = 0;
-    let wallClockOffset = Date.now() - performance.now();
-    let lastOffsetRefresh = 0;
+    const initialClockOffset = Date.now() - performance.now();
 
     const render = (rafTimestamp: number) => {
       if (!isRunningRef.current) return;
@@ -383,11 +415,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         return;
       }
       lastRenderTime = rafTimestamp;
-      if (rafTimestamp - lastOffsetRefresh >= 1000) {
-        wallClockOffset = Date.now() - rafTimestamp;
-        lastOffsetRefresh = rafTimestamp;
-      }
-      const now = rafTimestamp + wallClockOffset;
+      const now = rafTimestamp + (clockOffsetRef.current ?? initialClockOffset);
 
       const p = propsRef.current;
       const fingerOn = p.isFingerDetected;
@@ -466,15 +494,11 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);
       drawHeader(ctx, renderState);
       drawMetricsBar(ctx, renderState);
+      const fullLayout = renderState.layout;
+      const channels = splitMorphologyPlot(fullLayout.plot, hybridRef.current);
+      renderState.layout = { ...fullLayout, plot: channels.main };
       if (renderState.threeD?.enabled) {
-        // Escenario 3D en tres capas: fondo → pozo de previsualización → grilla.
-        // El pozo se apoya DEBAJO de la grilla y las líneas del piso lo cruzan;
-        // la onda se dibuja después y fluye por delante de ambos.
         drawGrid3DBackdrop(ctx, renderState);
-        if (!videoWellRef.current || !videoWellRef.current.isConnected) {
-          videoWellRef.current = document.querySelector('video');
-        }
-        drawPreviewWell3D(ctx, renderState, videoWellRef.current, p.contactState);
         drawGrid3DLines(ctx, renderState);
       } else {
         drawECGGrid(ctx, renderState);
@@ -484,6 +508,27 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       // háptico. Va DESPUÉS de la onda — antes quedaba debajo y no se veía.
       drawPressureGauge(ctx, renderState);
       drawAcquisitionOverlay(ctx, renderState);
+      if (!videoWellRef.current || !videoWellRef.current.isConnected) {
+        videoWellRef.current = document.querySelector('video');
+      }
+      const mainLayout = renderState.layout;
+      if (channels.morphology.h > 0) {
+        renderState.layout = { ...fullLayout, plot: channels.morphology };
+        if (analysisModeRef.current === 'ecg') {
+          const frozen = renderState.inspection ? ecgInspectionRef.current : undefined;
+          drawEstimatedEcg(ctx, renderState,
+            renderState.inspection ? frozen?.buffer ?? null : ecgBufferRef.current,
+            renderState.inspection ? frozen?.estimate : ecgEstimateRef.current,
+          );
+        } else {
+          drawPulseMorphology(ctx, renderState);
+        }
+      }
+      // En horizontal, la guía ocupa una columna propia y conserva su altura.
+      const capture = fullLayout.capturePreview;
+      renderState.layout = capture ? { ...fullLayout, plot: { ...capture, centerY: capture.y + capture.h / 2 } } : mainLayout;
+      drawPreviewWell3D(ctx, renderState, videoWellRef.current, p.contactState);
+      renderState.layout = fullLayout;
       if (layoutRef.current.trend.h > 0) drawTrendStrip(ctx, renderState);
       if (layoutRef.current.footer.h > 0) drawFooter(ctx, renderState);
 
@@ -510,6 +555,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const handleReset = useCallback(() => {
     returnLive();
     dataBufferRef.current?.clear();
+    ecgBufferRef.current?.clear();
+    ecgEstimateRef.current = undefined;
+    ecgInspectionRef.current = undefined;
+    clockOffsetRef.current = null;
     hasSamplesRef.current = false; setHasSamples(false);
     amplitudeStatsRef.current = { min: -50, max: 50, range: 100 };
     beatHistoryRef.current = [];
@@ -556,8 +605,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         }
         isMonitoring={isMonitoring}
       />
-      <MonitorControls viewport={viewport} layout={layoutUi} quality={quality} isMonitoring={isMonitoring} hasSamples={hasSamples} />
-      <div className="monitor-feedback" style={{ top: layoutUi.plot.y + layoutUi.plot.h + 54 }} role="status" aria-live="polite">
+      <MonitorControls viewport={viewport} layout={layoutUi} quality={quality} isMonitoring={isMonitoring} hasSamples={hasSamples} hybrid={hybrid} onToggleHybrid={toggleHybrid} analysisMode={analysisMode} onToggleAnalysisMode={toggleAnalysisMode} />
+      {hybrid && analysisMode === 'ecg' && splitMorphologyPlot(layoutUi.plot, true).morphology.h > 0 && <button type="button" className="monitor-model-info" aria-label="Ver evaluación del modelo PPG a ECG" title="Resultados reales de evaluación del modelo" onClick={() => setShowModelInfo(true)} style={{ top: splitMorphologyPlot(layoutUi.plot, true).morphology.y, left: layoutUi.plot.x + layoutUi.plot.w - 36 }}><Info size={16}/></button>}
+      {showModelInfo && <EcgModelInfo onClose={() => setShowModelInfo(false)}/>}
+      <div className="sr-only" role="status" aria-live="polite">
         <div><span className="monitor-eyebrow">{viewport.inspecting ? 'VISTA DE ANÁLISIS' : isMonitoring ? 'CONTACTO Y ADQUISICIÓN' : 'LISTO PARA COMENZAR'}</span>
           <p>{viewport.inspecting ? (isMonitoring ? 'Explora el registro; la medición sigue activa.' : 'Explora el registro de la sesión.') : isMonitoring ? diagnostics?.placementEvidence?.guidance?.headline || 'Apoya la yema suavemente sobre la cámara.' : 'Apoya la mano. Inicia cuando estés cómodo.'}</p></div>
         <span className="monitor-seal">{Math.round((diagnostics?.placementEvidence?.seal ?? 0) * 100)}<small>% cobertura</small></span>

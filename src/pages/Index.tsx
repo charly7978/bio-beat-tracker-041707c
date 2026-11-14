@@ -384,9 +384,9 @@ const Index = () => {
           <div className="welcome-content">
             <div className="welcome-brand"><span className="brand-mark" aria-hidden="true"><i/><i/><i/><i/></span>BIO / BEAT<span className="welcome-edition">OPTICAL MONITOR</span></div>
             <div className="welcome-instrument" aria-hidden="true"><div/><div/><div/><span>PPG</span></div>
-            <p className="welcome-kicker">UNA NUEVA PERSPECTIVA DE TU PULSO</p>
-            <h1>Una buena señal.<br/><span>Una visión más clara.</span></h1>
-            <p className="welcome-description">Explora tu señal óptica en tiempo real, con control táctil y una guía que te acompaña en cada medición.</p>
+            <p className="welcome-kicker">MORFOLOGÍA ÓPTICA EN TIEMPO REAL</p>
+            <h1>Tu pulso.<br/><span>En otra dimensión.</span></h1>
+            <p className="welcome-description">Señal óptica, morfología y estimación ECG con un modelo entrenado. Un monitor inmersivo con guía de captura en cada paso.</p>
             <div className="welcome-steps">
               <p><b>01</b><span>Apoya el teléfono y la mano en una superficie cómoda.</span></p>
               <p><b>02</b><span>Cubre suavemente la cámara trasera y el flash con la yema, sin apretar.</span></p>
@@ -469,7 +469,11 @@ const Index = () => {
                 (lastSignal?.fingerDetected ? 'UNSTABLE_CONTACT' : 'NO_CONTACT')
               }
               acquisitionStatus={acquisitionStatusLabel}
-              diagnostics={router.currentDiagnostics as unknown as import('@/components/PPGSignalMeter').PPGSignalMeterProps['diagnostics']}
+              diagnostics={{
+                ...(router.currentDiagnostics as import('@/components/PPGSignalMeter').PPGSignalMeterProps['diagnostics']),
+                roi: lastSignal?.roi,
+                frameSize: { width: canvasRef.current?.width ?? 320, height: canvasRef.current?.height ?? 240 },
+              }}
             />
           </div>
 

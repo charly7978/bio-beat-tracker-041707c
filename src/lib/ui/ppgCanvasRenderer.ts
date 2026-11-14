@@ -265,6 +265,8 @@ export const AMP_RELEASE = CARDIAC_WAVE_CONFIG.AMP_RELEASE;
 export const RR_TACHO_H = 34;
 
 export interface PpgLayout {
+  /** En horizontal, la captura tiene su propio espacio junto a los canales. */
+  capturePreview?: { x: number; y: number; w: number; h: number };
   width: number;
   height: number;
   header: { x: number; y: number; w: number; h: number };
@@ -335,7 +337,10 @@ export interface PpgRenderProps {
     hasPulsatility?: boolean;
     acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY';
     acquisitionProgress?: number;
-    sqm?: { fpsEffective?: number; timestampJitterMs?: number; underexposureRatio?: number };
+    /** Región observada en las coordenadas reales del cuadro de procesamiento. */
+    roi?: { x: number; y: number; width: number; height: number };
+    frameSize?: { width: number; height: number };
+    sqm?: { fpsEffective?: number; timestampJitterMs?: number; underexposureRatio?: number; saturationRatio?: number; motionScore?: number; frameDropRatio?: number };
     peakDetection?: {
       confidence?: number;
       agreement?: { elgendi?: number };
@@ -384,81 +389,130 @@ export interface PpgRenderState {
   threeD?: { enabled: boolean; intensity?: number };
 }
 
+/** Reduce sólo el tamaño tipográfico: nunca recorta una lectura ni sus unidades. */
+function fitLabel(ctx: CanvasRenderingContext2D, text: string, width: number, size: number, weight = '500'): void {
+  ctx.font = `${weight} ${size}px ${FONT_MONO}`;
+  const measured = ctx.measureText(text).width;
+  if (measured > width && measured > 0) ctx.font = `${weight} ${size * width / measured}px ${FONT_MONO}`;
+}
+
 export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: number): void {
   const background = ctx.createLinearGradient(0, 0, W, H);
-  background.addColorStop(0, '#101b25');
-  background.addColorStop(0.5, '#09121a');
-  background.addColorStop(1, '#070e15');
+  background.addColorStop(0, '#0d1c29');
+  background.addColorStop(0.45, '#070f1b');
+  background.addColorStop(1, '#040a12');
   ctx.fillStyle = background;
+  ctx.fillRect(0, 0, W, H);
+  // Iluminación estática de la superficie: no introduce actividad fisiológica.
+  const light = ctx.createRadialGradient(W * .28, H * .35, 0, W * .28, H * .35, Math.max(W, H) * .7);
+  light.addColorStop(0, 'rgba(40, 119, 131, 0.085)');
+  light.addColorStop(1, 'rgba(40, 119, 131, 0)');
+  ctx.fillStyle = light;
   ctx.fillRect(0, 0, W, H);
 }
 
 export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { header } = state.layout;
-  ctx.fillStyle = 'rgba(10,19,28,0.85)';
+  const wide = header.w >= 1024;
+  const brandY = wide ? 29 : 23;
+  ctx.save();
+  ctx.fillStyle = 'rgba(7,16,26,0.8)';
   ctx.fillRect(0, 0, header.w, header.h);
+  ctx.strokeStyle = 'rgba(139,191,205,0.13)';
+  ctx.beginPath(); ctx.moveTo(16, header.h - .5); ctx.lineTo(header.w - 16, header.h - .5); ctx.stroke();
+  ctx.fillStyle = COLORS.TEXT_PRIMARY;
+  for (let i = 0; i < 4; i++) {
+    const h = [8, 20, 13, 8][i];
+    ctx.fillRect(18 + i * 5, brandY - h + 2, 2, h);
+  }
   ctx.textAlign = 'left';
-  ctx.font = `600 15px system-ui, sans-serif`;
-  ctx.fillStyle = '#e4edf1';
-  ctx.fillText('BIO / BEAT', 18, 25);
-  ctx.font = `9px ${FONT_MONO}`;
-  ctx.fillStyle = '#91a7b7';
-  ctx.fillText('MONITOR ÓPTICO', 18, 41);
-  const t = Math.max(0, Math.floor(state.props.elapsedTime || 0));
-  ctx.textAlign = 'center';
-  ctx.fillStyle = state.props.isMonitoring ? COLORS.TEXT_PRIMARY : COLORS.TEXT_SECONDARY;
-  ctx.font = `12px ${FONT_MONO}`;
-  if (state.layout.metrics.h > 0) ctx.fillText(state.props.isMonitoring ? `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}` : 'EN ESPERA', header.w * 0.55, 30);
+  ctx.font = `600 ${wide ? 17 : 14}px system-ui, sans-serif`;
+  ctx.fillStyle = '#edf6fa';
+  ctx.fillText('BIO / BEAT', 46, brandY);
+  ctx.font = `10px ${FONT_MONO}`;
+  ctx.fillStyle = '#95adbf';
+  ctx.fillText('MONITOR ÓPTICO', 46, brandY + 16);
+  if (state.layout.metrics.h > 0) {
+    const t = Math.max(0, Math.floor(state.props.elapsedTime || 0));
+    const time = `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+    const status = state.props.isMonitoring ? time : state.props.preserveResults ? 'REGISTRO' : 'LISTO';
+    const x = Math.min(header.w - 112, wide ? header.w * .5 : header.w * .57);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = state.props.isMonitoring ? COLORS.TEXT_PRIMARY : '#a3b9c9';
+    ctx.font = `500 ${wide ? 14 : 11}px ${FONT_MONO}`;
+    ctx.fillText(status, x, wide ? 30 : 30);
+    if (wide) {
+      ctx.font = `10px ${FONT_MONO}`;
+      ctx.fillStyle = '#8ca4b7';
+      ctx.fillText(state.props.isMonitoring ? 'SESIÓN EN CURSO' : 'CAPTURA POR CÁMARA', x, 48);
+    }
+  }
+  ctx.restore();
 }
 
 export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { metrics } = state.layout;
-  const compact = metrics.h < 80;
+  const stacked = metrics.w <= 240 && metrics.h > 250;
   const rr = state.props.respirationRate ?? 0;
   const readings = [
-    { label: 'PULSO', value: state.displayBpm > 0 ? String(state.displayBpm) : '—', unit: 'BPM', color: state.displayBpm > 0 && (state.displayBpm < 50 || state.displayBpm > 120) ? COLORS.TEXT_DANGER : state.displayBpm > 0 && (state.displayBpm < 60 || state.displayBpm > 100) ? COLORS.TEXT_WARN : COLORS.TEXT_PRIMARY, note: state.displayBpm > 0 && state.displayBpm < 60 ? 'Pulso bajo' : state.displayBpm > 100 ? 'Pulso elevado' : 'Frecuencia' },
-    { label: 'SpO₂', value: state.displaySpo2 > 0 ? String(state.displaySpo2) : '—', unit: '%', color: state.displaySpo2 > 0 && state.displaySpo2 < 90 ? COLORS.TEXT_DANGER : state.displaySpo2 > 0 && state.displaySpo2 < 95 ? COLORS.TEXT_WARN : '#83cce4', note: 'Estimación' },
-    { label: 'PRESIÓN', value: state.displaySys > 0 && state.displayDia > 0 ? `${state.displaySys}/${state.displayDia}` : '—/—', unit: 'mmHg', color: state.displaySys >= 140 || state.displayDia >= 90 ? COLORS.TEXT_DANGER : state.displaySys > 0 && (state.displaySys >= 130 || state.displayDia >= 80 || state.displaySys < 90 || state.displayDia < 60) ? COLORS.TEXT_WARN : '#b7b4ed', note: state.props.bpStatus === 'REQUIRES_CALIBRATION' ? 'Calibrar' : 'Estimación' },
-    { label: 'RESP.', value: rr > 0 ? String(Math.round(rr)) : '—', unit: 'rpm', color: '#c2d6e1', note: rr > 0 ? 'Estimación' : state.props.isMonitoring ? 'Adquiriendo' : 'En espera' },
+    { label: 'PULSO', short: 'PULSO', value: state.displayBpm > 0 ? String(state.displayBpm) : '—', unit: 'BPM', color: COLORS.TEXT_PRIMARY, note: 'Frecuencia del pulso' },
+    { label: 'SpO₂ · EXPERIMENTAL', short: 'SpO₂ EXP.', value: state.displaySpo2 > 0 ? String(state.displaySpo2) : '—', unit: '%', color: '#88d8ed', note: 'Sin validación clínica' },
+    { label: 'PRESIÓN · EXPERIMENTAL', short: 'PA EXP.', value: state.displaySys > 0 && state.displayDia > 0 ? `${state.displaySys}/${state.displayDia}` : '—/—', unit: 'mmHg', color: '#bdbaf6', note: state.props.bpStatus === 'REQUIRES_CALIBRATION' || state.props.bpStatus === 'CALIBRATION_EXPIRED' ? 'Requiere calibración' : 'Sin validación clínica' },
+    { label: 'RESPIRACIÓN', short: 'RESP.', value: rr > 0 ? String(Math.round(rr)) : '—', unit: 'rpm', color: '#d0e0ed', note: rr > 0 ? 'Estimación desde PPG' : state.props.isMonitoring ? 'Adquiriendo señal' : 'En espera' },
   ];
+  ctx.save();
+  ctx.textAlign = 'left';
   if (metrics.h === 0) {
-    const width = Math.max(80, (metrics.w - 320) / 4);
+    // En horizontal bajo, las lecturas comparten cabecera con marca y acciones.
+    const start = 190;
+    const available = Math.max(240, metrics.w - start - 108);
+    const width = available / 4;
     readings.forEach((r, i) => {
-      const x = 196 + i * width;
-      ctx.textAlign = 'left'; ctx.fillStyle = '#a3b6c4'; ctx.font = `9px system-ui, sans-serif`;
-      ctx.fillText(r.label, x, 17);
-      ctx.fillStyle = r.color; ctx.font = `16px ${FONT_MONO}`;
-      ctx.fillText(`${r.value} ${r.unit}`, x, 38);
+      const x = start + i * width;
+      ctx.fillStyle = '#b1c6d4';
+      fitLabel(ctx, r.short, width - 8, 10);
+      ctx.fillText(r.short, x, 17);
+      ctx.fillStyle = r.value.startsWith('—') ? '#7f96aa' : r.color;
+      fitLabel(ctx, `${r.value} ${r.unit}`, width - 8, i === 2 ? 15 : 17);
+      ctx.fillText(`${r.value} ${r.unit}`, x, 39);
     });
+    ctx.restore();
     return;
   }
-  const gap = 6;
-  const w = (metrics.w - 32 - gap * 3) / 4;
+  const gap = stacked ? 10 : 5;
+  const xInset = stacked ? 0 : 12;
+  const cardW = stacked ? metrics.w : (metrics.w - xInset * 2 - gap * 3) / 4;
+  const cardH = stacked ? (metrics.h - gap * 3) / 4 : metrics.h - 8;
   readings.forEach((r, i) => {
-    const x = 16 + i * (w + gap);
-    ctx.fillStyle = 'rgba(24,40,52,0.68)';
-    ctx.fillRect(x, metrics.y + 4, w, metrics.h - 10);
+    const x = metrics.x + xInset + (stacked ? 0 : i * (cardW + gap));
+    const y = metrics.y + (stacked ? i * (cardH + gap) : 4);
+    const pad = stacked ? 16 : 7;
+    ctx.fillStyle = 'rgba(19,35,50,0.75)';
+    ctx.beginPath(); ctx.roundRect(x, y, cardW, cardH, stacked ? 12 : 8); ctx.fill();
+    ctx.strokeStyle = 'rgba(135,177,199,0.15)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
     ctx.fillStyle = r.color;
-    ctx.fillRect(x, metrics.y + 4, w, 2);
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#a3b6c4';
-    ctx.font = `500 10px system-ui, sans-serif`;
-    ctx.fillText(r.label, x + 8, metrics.y + 23);
-    const valueSize = compact ? (i === 2 ? 16 : 24) : (i === 2 ? Math.min(24, w / 3.6) : Math.min(40, w / 2.2));
-    ctx.font = `500 ${valueSize}px ${FONT_MONO}`;
-    const measuredWidth = ctx.measureText(r.value).width;
-    if (measuredWidth > w - 14) ctx.font = `500 ${valueSize * (w - 14) / measuredWidth}px ${FONT_MONO}`;
-    ctx.fillStyle = r.value.startsWith('—') ? '#738a9b' : r.color;
-    ctx.fillText(r.value, x + 7, metrics.y + (compact ? 49 : 65));
-    if (!compact) {
-      ctx.font = `10px ${FONT_MONO}`;
-      ctx.fillStyle = '#a3b6c4';
-      ctx.fillText(r.unit, x + 8, metrics.y + 84);
-      ctx.font = `9px system-ui, sans-serif`;
-      ctx.fillStyle = '#91a7b7';
-      ctx.fillText(r.note, x + 8, metrics.y + 101);
+    ctx.fillRect(x + pad, y + (stacked ? 15 : 10), 2, stacked ? 12 : 7);
+    const label = stacked ? r.label : r.short;
+    ctx.fillStyle = '#b4c9d8';
+    fitLabel(ctx, label, cardW - pad * 2 - 7, stacked ? 10 : 9);
+    ctx.fillText(label, x + pad + 7, y + (stacked ? 25 : 16));
+    const valueSize = stacked ? (i === 2 ? 34 : 48) : (i === 2 ? 21 : 28);
+    const valueY = y + (stacked ? Math.min(cardH - 39, 82) : cardH < 60 ? 39 : 43);
+    fitLabel(ctx, r.value, cardW - pad * 2, valueSize, '500');
+    ctx.fillStyle = r.value.startsWith('—') ? '#7a92a6' : r.color;
+    ctx.fillText(r.value, x + pad, valueY);
+    ctx.font = `10px ${FONT_MONO}`;
+    ctx.fillStyle = '#a1bacb';
+    ctx.fillText(r.unit, x + pad, y + (stacked ? Math.min(cardH - 23, 102) : cardH - 6));
+    if (stacked && cardH >= 110) {
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillStyle = '#91a9bd';
+      ctx.fillText(r.note, x + pad, y + cardH - 12);
     }
   });
+  ctx.restore();
 }
 
 export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
@@ -568,7 +622,7 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
   // En el canvas mantenemos una barra lineal discreta en la base del gráfico.
   const p = state.props;
   const evidence = p.diagnostics?.placementEvidence;
-  if (!evidence) return;
+  if (!evidence || evidence.pressure === 'NONE' || !p.isMonitoring) return;
 
   const { plot } = state.layout;
   const score = typeof evidence.pressureScore === 'number'
@@ -590,7 +644,7 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
 
   // Cursor aguja
   const needleX = barX + barW * score;
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = evidence.pressure === 'HEAVY' ? '#fda4af' : evidence.pressure === 'LIGHT' ? '#fcd88a' : '#a2f1d9';
   ctx.beginPath();
   ctx.arc(needleX, barY + barH / 2, 3, 0, Math.PI * 2);
   ctx.fill();
@@ -945,7 +999,7 @@ export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: Ppg
   grad.addColorStop(0, 'rgba(104, 221, 192, 0.9)');
   grad.addColorStop(1, 'rgba(103, 232, 249, 0.95)');
   ctx.fillStyle = grad;
-  ctx.fillRect(barX, barY, Math.max(barH, barW * progress), barH);
+  ctx.fillRect(barX, barY, barW * progress, barH);
   ctx.restore();
 }
 
@@ -969,7 +1023,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.fillStyle = COLORS.TEXT_PRIMARY;
   ctx.textAlign = 'left';
   ctx.fillText(
-    compact ? 'TENDENCIA BPM · 60s' : 'TENDENCIA FRECUENCIA CARDÃACA · 60 s',
+    compact ? 'TENDENCIA BPM · 60s' : 'TENDENCIA DEL PULSO · 60 s',
     trend.x + 8,
     trend.y + (compact ? 12 : 14),
   );
@@ -979,7 +1033,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   const hrvBits: string[] = [];
   if (hrv.sdnn > 0) hrvBits.push(`SDNN ${hrv.sdnn}`);
   if (hrv.rmssd > 0) hrvBits.push(`RMSSD ${hrv.rmssd}`);
-  if (arrCnt > 0) hrvBits.push(`${arrCnt} arr`);
+  if (arrCnt > 0) hrvBits.push(`${arrCnt} marcas`);
   if (hrvBits.length > 0 && !compact) {
     ctx.fillText(hrvBits.join(' · '), trend.x + 8, trend.y + 26);
   } else if (hrvBits.length > 0) {
@@ -992,7 +1046,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.font = `9px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'center';
-    ctx.fillText('Acumulando…', trend.x + trend.w / 2, trend.y + trend.h / 2 + 4);
+    ctx.fillText(state.props.isMonitoring ? 'Acumulando lecturas válidas…' : 'La tendencia aparecerá al medir', trend.x + trend.w / 2, trend.y + trend.h / 2 + 4);
     return;
   }
 
@@ -1082,7 +1136,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.font = `8px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'center';
-    ctx.fillText(s === 0 ? 'ahora' : `âˆ’${s}s`, x, innerY + innerH + (compact ? 9 : 12));
+    ctx.fillText(s === 0 ? 'ahora' : `−${s}s`, x, innerY + innerH + (compact ? 9 : 12));
   }
 
   const coords: { x: number; y: number; isArr: boolean }[] = data.map((point) => ({
@@ -1165,92 +1219,48 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   if (!compact) {
     ctx.textAlign = 'right';
     ctx.fillStyle = 'rgba(251, 113, 133, 0.85)';
-    ctx.fillText('â— arrÃ­tmico', innerX + innerW, trend.y + trend.h - 4);
+    ctx.fillText('● intervalo marcado', innerX + innerW, trend.y + trend.h - 4);
   }
 }
 
 export function drawFooter(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { footer } = state.layout;
-  const { bpm, spo2, pressure, perfusionIndex: pi } = state.props;
-
-  ctx.fillStyle = 'rgba(6, 12, 22, 0.95)';
+  if (footer.h < 28) return;
+  ctx.save();
+  ctx.fillStyle = 'rgba(8,18,30,0.96)';
   ctx.fillRect(footer.x, footer.y, footer.w, footer.h);
-  ctx.strokeStyle = COLORS.PANEL_BORDER_DIM;
-  ctx.beginPath();
-  ctx.moveTo(0, footer.y);
-  ctx.lineTo(footer.w, footer.y);
-  ctx.stroke();
-
+  ctx.strokeStyle = 'rgba(125,169,194,0.18)';
+  ctx.beginPath(); ctx.moveTo(footer.x + 12, footer.y); ctx.lineTo(footer.x + footer.w - 12, footer.y); ctx.stroke();
   const hrv = state.hrv;
-  ctx.font = `10px ${FONT_MONO}`;
-  ctx.fillStyle = COLORS.TEXT_DIM;
-  ctx.textAlign = 'left';
-  ctx.fillText('HRV', footer.x + 12, footer.y + 12);
-
+  const enough = state.props.rrIntervals.filter(isPhysiologicalRR).length >= 3;
   const cells = [
-    { label: 'IBI', value: state.ibiDisplay > 0 ? `${state.ibiDisplay}ms` : '--', color: COLORS.TEXT_INFO },
-    { label: 'SDNN', value: hrv.sdnn > 0 ? `${hrv.sdnn}ms` : '--', color: COLORS.TEXT_SECONDARY },
-    { label: 'RMSSD', value: hrv.rmssd > 0 ? `${hrv.rmssd}ms` : '--', color: COLORS.TEXT_SECONDARY },
-    { label: 'pNN50', value: hrv.pnn50 > 0 ? `${hrv.pnn50}%` : '--', color: COLORS.TEXT_SECONDARY },
-    { label: 'CV', value: hrv.cv > 0 ? hrv.cv.toFixed(2) : '--', color: COLORS.TEXT_SECONDARY },
+    { label: 'IBI', value: state.ibiDisplay > 0 ? `${state.ibiDisplay} ms` : '—', color: '#9edeee' },
+    { label: 'SDNN', value: enough ? `${hrv.sdnn} ms` : '—', color: '#c0d0de' },
+    { label: 'RMSSD', value: enough ? `${hrv.rmssd} ms` : '—', color: '#c0d0de' },
+    { label: 'pNN50', value: enough ? `${hrv.pnn50}%` : '—', color: '#c0d0de' },
+    { label: 'CV', value: enough ? hrv.cv.toFixed(2) : '—', color: '#c0d0de' },
   ];
-
-  const hrvSectionWidth = footer.w * 0.55;
-  const cellW = hrvSectionWidth / cells.length;
+  const wide = footer.w >= 800;
+  const cellW = (wide ? Math.min(660, footer.w * .62) : footer.w - 24) / cells.length;
   cells.forEach((c, i) => {
-    const cx = footer.x + 12 + i * cellW;
-    ctx.font = `8px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_DIM;
+    const x = footer.x + 12 + i * cellW;
     ctx.textAlign = 'left';
-    ctx.fillText(c.label, cx, footer.y + 24);
-    ctx.font = `bold 11px ${FONT_MONO}`;
+    ctx.font = `9px ${FONT_MONO}`;
+    ctx.fillStyle = '#8fa9bd';
+    ctx.fillText(c.label, x, footer.y + 12);
+    fitLabel(ctx, c.value, cellW - 6, 11);
     ctx.fillStyle = c.color;
-    ctx.fillText(c.value, cx, footer.y + 38);
+    ctx.fillText(c.value, x, footer.y + 29);
   });
-
-  const map = pressure?.systolic && pressure?.diastolic
-    ? Math.round(pressure.diastolic + (pressure.systolic - pressure.diastolic) / 3)
-    : 0;
-  const alarms: string[] = [];
-  const rhythm = buildRhythmPanel(state.props.arrhythmiaStatus, state.props.arrhythmiaCount, state.props.rrIntervals, state.hrv);
-  if (rhythm.level === 'danger' || rhythm.level === 'warn') alarms.push('RITMO');
-  if (bpm != null && bpm > 0 && (bpm < 50 || bpm > 120)) alarms.push('HR');
-  if (spo2 > 0 && spo2 < 92) alarms.push('SpO₂');
-  if (map > 0 && (map < 65 || map > 110)) alarms.push('MAP');
-  if (pi > 0 && pi < 0.005) alarms.push('PI');
-
-  ctx.textAlign = 'right';
-  if (alarms.length > 0) {
-    ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_DANGER;
-    ctx.fillText(`⚠ ALARMA: ${alarms.join(' · ')}`, footer.x + footer.w - 12, footer.y + 16);
-  } else if (bpm != null && bpm > 0) {
-    ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_PRIMARY;
-    ctx.fillText('Sin alertas de umbral', footer.x + footer.w - 12, footer.y + 16);
-  }
-
-  const beats = state.beatHistory;
-  if (beats.length > 0) {
-    const showN = Math.min(beats.length, 18);
-    const dotSize = 3;
-    const gap = 3;
-    const totalW = showN * (dotSize * 2 + gap) - gap;
-    const startX = footer.x + footer.w - 12 - totalW;
-    const dy = footer.y + 36;
-    for (let i = 0; i < showN; i++) {
-      const beat = beats[beats.length - showN + i];
-      const cx = startX + i * (dotSize * 2 + gap) + dotSize;
-      ctx.beginPath();
-      ctx.arc(cx, dy, dotSize, 0, Math.PI * 2);
-      ctx.fillStyle = beat.isArrhythmia ? COLORS.SIGNAL_ARR : COLORS.SIGNAL;
-      ctx.fill();
-    }
-    ctx.font = `8px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_DIM;
+  if (wide) {
+    const rhythm = buildRhythmPanel(state.props.arrhythmiaStatus, state.props.arrhythmiaCount, state.props.rrIntervals, state.hrv);
     ctx.textAlign = 'right';
-    const arrCount = beats.filter(b => b.isArrhythmia).length;
-    ctx.fillText(`Últimos ${showN} · N:${beats.length - arrCount} A:${arrCount}`, footer.x + footer.w - 12, dy + 14);
+    ctx.font = `10px ${FONT_MONO}`;
+    ctx.fillStyle = rhythm.level === 'danger' ? '#fca5a5' : '#a9bdcc';
+    ctx.fillText(rhythm.title, footer.x + footer.w - 20, footer.y + 14);
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.fillStyle = '#839db2';
+    ctx.fillText('Variabilidad del pulso · sin diagnóstico ECG', footer.x + footer.w - 20, footer.y + 30);
   }
+  ctx.restore();
 }
-

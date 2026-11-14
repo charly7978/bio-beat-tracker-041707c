@@ -10,14 +10,16 @@ interface ActionButtonsProps {
 export function ActionButtons({ isMonitoring, onStartMeasurement, onReset }: ActionButtonsProps) {
   return (
     <div
-      className="monitor-actions fixed bottom-0 left-0 right-0 grid grid-cols-2 z-10"
+      className="monitor-actions fixed bottom-0 left-0 right-0 z-10"
       style={{
         height: 'calc(64px + env(safe-area-inset-bottom, 0px))',
         paddingBottom: 'env(safe-area-inset-bottom, 0px)',
       }}
     >
+      <div className="monitor-session-state" aria-hidden="true"><span className={isMonitoring ? 'signal-dot active' : 'signal-dot'} /><div><strong>{isMonitoring ? 'SESIÓN EN CURSO' : 'TODO EMPIEZA CON UNA BUENA SEÑAL'}</strong><span>{isMonitoring ? 'Mantén un apoyo suave y estable' : 'Captura óptica · análisis de morfología'}</span></div></div>
       <button
         type="button"
+        aria-label={isMonitoring ? 'Detener y guardar medición' : 'Iniciar medición'}
         onClick={onStartMeasurement}
         className={`group flex items-center justify-center gap-2 font-bold text-xs tracking-widest uppercase transition-all duration-200 border-r border-white/5 active:scale-[0.98] ${
           isMonitoring
@@ -40,6 +42,7 @@ export function ActionButtons({ isMonitoring, onStartMeasurement, onReset }: Act
 
       <button
         type="button"
+        aria-label="Reiniciar medición"
         onClick={onReset}
         className="flex items-center justify-center gap-2 font-semibold text-xs tracking-wider uppercase text-zinc-400 hover:text-white bg-white/[0.02] hover:bg-white/[0.06] active:scale-[0.98] transition-all duration-200"
       >

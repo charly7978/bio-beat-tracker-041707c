@@ -19,15 +19,7 @@
  */
 import { traceMeasuredPath } from './measuredTrace';
 import { WINDOW_MS, type PpgRenderState } from './ppgCanvasRenderer';
-import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import {
-  WELL_CROP_FRAC,
-  WELL_VEIL,
-  deriveWellGuide,
-  drawWellFingerprintGuide,
-  prefersReducedMotion,
-  wellTintAlpha,
-} from './fingerPlacementOverlay';
+import { deriveWellGuide } from './fingerPlacementOverlay';
 
 /** Fuente monoespaciada (misma familia que el renderer 2D). */
 const FONT = '"SF Mono", Consolas, "Roboto Mono", monospace';
@@ -537,89 +529,15 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-// === VENTANA DE PREVISUALIZACIÓN ACOSTADA SOBRE LA GRILLA 3D =================
-// La previsualización del dedo es una SUPERFICIE PLANA apoyada en el piso: se
-// proyecta como trapecio (keystone) sobre la misma grilla y el video se
-// muestrea fila a fila con correspondencia proyectiva exacta
-// (z = Z_NEAR · floorSpanY / (y - horizonY)). El borde LEJANO queda anclado a
-// la grilla y el CERCANO avanza hacia el observador al mejorar la colocación:
-// la ventana se abre acostada, nunca de pie. La cinta de la onda se dibuja
-// después y fluye por delante, como en el resto del escenario 3D.
-//
-// Nada de esto altera la medición: sólo cambia la proyección de presentación.
+// Geometría compartida del plano: la guía proyectiva sigue utilizando este
+// contrato. El visor operativo se presenta frontal para leer captura y ROI
+// sin la compresión vertical de la perspectiva del piso.
 
 const PREVIEW_D_FAR = 0.95;          // borde lejano (anclado, junto al horizonte)
 const PREVIEW_D_NEAR_OPEN = 0.19;    // borde cercano con colocación óptima
 const PREVIEW_D_NEAR_CLOSED = 0.56;  // borde cercano sin contacto (plegada)
 const PREVIEW_HALF_W_OPEN = 0.72;    // semiancho vs plot.w con colocación óptima
 const PREVIEW_HALF_W_CLOSED = 0.12;  // semiancho vs plot.w sin contacto
-const PREVIEW_EASE_UP = 0.055;       // apertura suave (~1 s a 60 fps)
-const PREVIEW_EASE_DOWN = 0.20;      // cierre rápido y honesto
-
-/** Tamaño animado persistente [0..1] (el render corre en rAF). */
-let previewOpenEma = 0;
-
-interface WellTheme { edge: string; core: string; glow: string; tint: string; }
-function wellThemeFor(contactState?: string, pressure?: string, pressureScore?: number): WellTheme {
-  // El color/etiqueta de la ventana siguen el veredicto de presión cuando existe,
-  // para no mostrar verde "CONTACTO ÓPTIMO" mientras hay colapso capilar. El
-  // TEXTO lo genera `deriveWellGuide` (una sola fuente de etiquetas).
-  const score = typeof pressureScore === 'number' && Number.isFinite(pressureScore)
-    ? Math.max(0, Math.min(1, pressureScore))
-    : 0.5;
-  if (pressure === 'HEAVY') {
-    return {
-      edge: 'rgba(239,68,68,0.95)', core: 'rgba(252,165,165,0.9)',
-      glow: `rgba(239,68,68,${(0.28 + 0.22 * score).toFixed(3)})`, tint: '239,68,68',
-    };
-  }
-  if (pressure === 'LIGHT') {
-    return {
-      edge: 'rgba(245,158,11,0.95)', core: 'rgba(253,230,138,0.9)',
-      glow: 'rgba(245,158,11,0.35)', tint: '245,158,11',
-    };
-  }
-  if (pressure === 'IDEAL') {
-    return {
-      edge: 'rgba(34,197,94,0.95)', core: 'rgba(134,239,172,0.9)',
-      glow: 'rgba(34,197,94,0.40)', tint: '34,197,94',
-    };
-  }
-  switch (contactState) {
-    case 'STABLE_CONTACT':
-      return {
-        edge: 'rgba(34,197,94,0.95)', core: 'rgba(134,239,172,0.9)',
-        glow: 'rgba(34,197,94,0.40)', tint: '34,197,94',
-      };
-    case 'UNSTABLE_CONTACT':
-      return {
-        edge: 'rgba(245,158,11,0.95)', core: 'rgba(253,230,138,0.9)',
-        glow: 'rgba(245,158,11,0.35)', tint: '245,158,11',
-      };
-    default:
-      return {
-        edge: 'rgba(148,163,184,0.55)', core: 'rgba(226,232,240,0.8)',
-        glow: 'rgba(148,163,184,0.15)', tint: '148,163,184',
-      };
-  }
-}
-
-/**
- * Score de colocación [0..1] SOLO con señales ya presentes en el render state
- * (cero cómputo nuevo del pipeline). El tamaño de la ventana es su feedback.
- */
-function wellScoreOf(state: PpgRenderState, _contactState?: string): number {
-  // EVIDENCIA FÍSICA REAL: score directo del módulo fingerPlacementEvidence
-  // (presión/ubicación/movimiento/pulso medidos por frame en el pipeline).
-  // Sin evidencia (pipeline parado, sin monitoreo, señal stale) -> 0:
-  // la ventana NUNCA queda abierta con datos viejos.
-  const evidence = state.props.diagnostics?.placementEvidence;
-  if (!evidence) return 0;
-  // Un score no finito (pipeline reiniciándose) no debe envenenar la animación.
-  if (!Number.isFinite(evidence.score)) return 0;
-  return clamp(evidence.score, 0, 1);
-}
-
 /** Cuatro esquinas de la ventana proyectadas sobre el piso en perspectiva. */
 export interface FloorPreviewQuad {
   nearLeft: ProjPoint;
@@ -687,314 +605,174 @@ export function computeFloorPreviewGeometry(
   return { proj, quad, farY, nearY, sourceVAt };
 }
 
-/** Path del trapecio de la ventana (orden: cercano izquierdo ? lejano izquierdo). */
-function quadPath(ctx: CanvasRenderingContext2D, quad: FloorPreviewQuad): void {
-  ctx.beginPath();
-  ctx.moveTo(quad.nearLeft.x, quad.nearLeft.y);
-  ctx.lineTo(quad.nearRight.x, quad.nearRight.y);
-  ctx.lineTo(quad.farRight.x, quad.farRight.y);
-  ctx.lineTo(quad.farLeft.x, quad.farLeft.y);
-  ctx.closePath();
+export interface CapturePreviewRect { x: number; y: number; w: number; h: number; }
+export interface CapturePreviewLayout {
+  card: CapturePreviewRect;
+  video: CapturePreviewRect;
+  text: CapturePreviewRect;
+  compact: boolean;
 }
 
-/**
- * Mapeo proyectivo del video sobre el plano del piso.
- *
- * Para cada fila de pantalla se recupera su profundidad exacta
- * (z = Z_NEAR · floorSpanY / (y - horizonY)), de ahí la fila del recorte
- * central del video y el ancho del trapecio en esa profundidad. Las franjas se
- * dibujan de a pocas filas (máx. ~48 por frame) y el clip al trapecio recorta
- * el sobrante ? bordes laterales exactos sin escalones, coste acotado en móvil.
- */
-/**
- * Presupuesto ADAPTATIVO de franjas del vídeo.
- *
- * El render compite con la captura: si el bucle de dibujo se come el frame, el
- * `<video>` entrega menos muestras al worker y el detector de latidos se queda
- * sin señal. Antes se pagó ese precio con `ctx.filter` por franja. Ahora el
- * número de franjas se ajusta solo con el coste medido del propio bucle, con un
- * máximo de 48 y un mínimo de 16 (donde el borde ya no se nota escalonado).
- */
-const STRIP_BUDGET_MAX = 48;
-const STRIP_BUDGET_MIN = 16;
-const STRIP_TARGET_MS = 2.5;
-let stripBudget = STRIP_BUDGET_MAX;
-let stripCostEma = STRIP_TARGET_MS;
+/** Una superficie frontal estable: una mala captura nunca encoge la ayuda. */
+export function computeCapturePreviewLayout(state: PpgRenderState): CapturePreviewLayout {
+  const { plot, width } = state.layout;
+  const compact = width < 760 || plot.h < 260;
+  const w = Math.min(compact ? 190 : 260, Math.max(0, plot.w - 16));
+  const h = Math.min(compact ? 136 : 170, Math.max(0, plot.h - 16));
+  const x = plot.x + plot.w - w - 8;
+  const y = compact ? plot.y + plot.h - h - 8 : plot.y + 12;
+  const videoW = compact ? 66 : 100;
+  const videoH = compact ? 50 : 75;
+  return {
+    card: { x, y, w, h },
+    video: { x: x + 10, y: y + 30, w: videoW, h: videoH },
+    text: { x: x + videoW + 19, y: y + 30, w: w - videoW - 29, h: videoH },
+    compact,
+  };
+}
 
-function drawFloorWarpedVideo(
-  ctx: CanvasRenderingContext2D,
-  source: HTMLVideoElement,
-  geo: FloorPreviewGeometry,
-): void {
-  const { quad, proj, farY, nearY, sourceVAt } = geo;
-  const cropSide = Math.min(source.videoWidth, source.videoHeight) * WELL_CROP_FRAC;
-  if (cropSide <= 0) return;
-  const sx = (source.videoWidth - cropSide) / 2;
-  const sy = (source.videoHeight - cropSide) / 2;
-  const screenH = Math.max(1, nearY - farY);
-  // NO se usa `ctx.filter`: aplicarlo a cada franja de un canvas escalado por
-  // devicePixelRatio fuerza a Chrome a salir de la ruta GPU y hunde el frame.
-  const step = Math.max(1.5, screenH / stripBudget);
+/** Mapea el ROI observado sobre el vídeo completo; no se inventa una diana. */
+export function mapCapturePreviewRoi(
+  roi: { x: number; y: number; width: number; height: number } | undefined,
+  frame: { width: number; height: number } | undefined,
+  video: CapturePreviewRect,
+): CapturePreviewRect | null {
+  if (!roi || !frame || ![roi.x, roi.y, roi.width, roi.height, frame.width, frame.height].every(Number.isFinite)
+    || frame.width <= 0 || frame.height <= 0 || roi.width <= 0 || roi.height <= 0) return null;
+  const left = clamp(roi.x / frame.width, 0, 1);
+  const top = clamp(roi.y / frame.height, 0, 1);
+  const right = clamp((roi.x + roi.width) / frame.width, 0, 1);
+  const bottom = clamp((roi.y + roi.height) / frame.height, 0, 1);
+  if (right <= left || bottom <= top) return null;
+  return { x: video.x + left * video.w, y: video.y + top * video.h,
+    w: (right - left) * video.w, h: (bottom - top) * video.h };
+}
 
-  ctx.save();
-  quadPath(ctx, quad);
-  ctx.clip();
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'low';
-
-  const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
-  for (let y = farY; y < nearY; y += step) {
-    const y1 = Math.min(nearY, y + step);
-    // La fila más ancha del par define el rectángulo; el clip al trapecio
-    // recorta el sobrante superior y mantiene el borde lateral exacto.
-    const scale = (y1 - proj.horizonY) / proj.floorSpanY;
-    const left = proj.vpX - quad.halfW * scale;
-    const width = quad.halfW * 2 * scale;
-    const v0 = sourceVAt(y);
-    const v1 = sourceVAt(y1);
-    const srcY = sy + v0 * cropSide;
-    const srcH = Math.max(0.01, (v1 - v0) * cropSide);
-    ctx.drawImage(
-      source,
-      sx, srcY, cropSide, srcH,
-      left, y, width, (y1 - y) + 0.5,
-    );
+function captureText(
+  ctx: CanvasRenderingContext2D, value: string, x: number, y: number,
+  width: number, lineHeight: number, maxLines: number,
+): number {
+  const words = value.split(/\s+/);
+  const lines: string[] = [];
+  let line = '';
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (line && ctx.measureText(candidate).width > width) { lines.push(line); line = word; }
+    else line = candidate;
   }
-  ctx.restore();
-
-  if (t0) {
-    const cost = performance.now() - t0;
-    stripCostEma = stripCostEma * 0.88 + cost * 0.12;
-    if (stripCostEma > STRIP_TARGET_MS) {
-      stripBudget = Math.max(STRIP_BUDGET_MIN, stripBudget - 2);
-    } else if (stripCostEma < STRIP_TARGET_MS * 0.6) {
-      stripBudget = Math.min(STRIP_BUDGET_MAX, stripBudget + 1);
+  if (line) lines.push(line);
+  for (let i = 0; i < Math.min(maxLines, lines.length); i++) {
+    let rendered = lines[i];
+    if (i === maxLines - 1 && lines.length > maxLines) {
+      while (rendered.length && ctx.measureText(`${rendered}…`).width > width) rendered = rendered.slice(0, -1);
+      rendered += '…';
     }
+    ctx.fillText(rendered, x, y + i * lineHeight, width);
   }
+  return Math.min(maxLines, lines.length) * lineHeight;
 }
 
 /**
- * Dibuja la VENTANA DE PREVISUALIZACIÓN ACOSTADA sobre la grilla 3D.
- * Debe llamarse DESPUÉS de `drawGrid3DBackdrop` y ANTES de `drawGrid3DLines` y
- * de la onda (`drawSignal`): el pozo queda debajo de la grilla, las líneas del
- * piso lo cruzan por encima y las ondas cardíacas fluyen por delante.
- *
- * @param source  element de video de la cámara trasera (o null ? ventana vacía).
+ * Previsualizador operativo dentro del monitor, común a 2D y 3D.
+ * Se pinta después de la onda: ninguna grilla cruza las instrucciones.
+ * Su iluminación responde a evidencia actual; el vídeo se dibuja una sola vez.
  */
 export function drawPreviewWell3D(
   ctx: CanvasRenderingContext2D,
   state: PpgRenderState,
   source: HTMLVideoElement | null,
-  contactState?: string,
+  _contactState?: string,
 ): void {
-  const pressureEvidence = state.props.diagnostics?.placementEvidence;
-  const hasVideo = !!source && source.readyState >= 2 && source.videoWidth > 0;
-
-  // Guía de colocación: se deriva UNA vez por frame y la usan el tamaño, el
-  // color, el texto y la huella. Así la ventana no puede decir una cosa y
-  // dibujar otra.
-  const view = deriveWellGuide({
-    evidence: pressureEvidence,
-    acquisitionStage: state.props.diagnostics?.acquisitionStage,
-    hasVideo,
-    nowMs: state.now,
-    beatPulse: state.sweepPulse,
-    reducedMotion: prefersReducedMotion(),
-  });
-
-  // El veredicto de color manda sobre la presión cuando el registro ya está
-  // conseguido: "SEÑAL ESTABLE" no puede ir en ámbar.
-  const theme = view.phase === 'LOCKED'
-    ? wellThemeFor('STABLE_CONTACT', 'IDEAL', 1)
-    : wellThemeFor(contactState, pressureEvidence?.pressure, pressureEvidence?.pressureScore);
-
-  // Apertura animada: sube suave, baja rápido (feedback honesto). Mientras hay
-  // imagen la ventana no se pliega por debajo del suelo de guía: sin diana
-  // visible no hay colocación posible.
-  const rawTarget = wellScoreOf(state, contactState);
-  const floor = hasVideo ? VITAL_THRESHOLDS.PLACEMENT.OVERLAY.GUIDE_FLOOR : 0;
-  const target = Math.max(rawTarget, floor);
-  const ease = target > previewOpenEma ? PREVIEW_EASE_UP : PREVIEW_EASE_DOWN;
-  previewOpenEma += (target - previewOpenEma) * ease;
-  const size = clamp(previewOpenEma, 0, 1);
-
-  const geo = computeFloorPreviewGeometry(state, size);
-  const { proj, quad } = geo;
-  const { plot } = state.layout;
+  const { card, video, text, compact } = computeCapturePreviewLayout(state);
+  if (card.w < 160 || card.h < 120) return;
+  const p = state.props;
+  const hasVideo = p.isMonitoring && !!source && source.readyState >= 2
+    && source.videoWidth > 0 && source.videoHeight > 0;
+  const evidence = p.isMonitoring && hasVideo ? p.diagnostics?.placementEvidence : undefined;
+  const view = deriveWellGuide({ evidence, acquisitionStage: p.diagnostics?.acquisitionStage,
+    hasVideo, nowMs: state.now, beatPulse: state.sweepPulse, reducedMotion: true });
+  const guidance = evidence?.guidance;
+  const critical = guidance?.action === 'RELEASE' || guidance?.action === 'FIX_SATURATION';
+  const ready = view.phase === 'LOCKED';
+  const accent = critical ? '#ff9d98' : ready ? '#83e6c9' : evidence ? '#f1d299' : '#9cb8cd';
+  const title = !p.isMonitoring ? 'Prepara tu captura' : !hasVideo ? 'Esperando cámara'
+    : !evidence ? 'Cubre cámara + flash' : view.instruction;
+  const detail = !p.isMonitoring ? 'Inicia y cubre cámara + flash.'
+    : !hasVideo ? 'Revisa el permiso de cámara.' : !evidence ? 'Apoya la yema sin apretar.' : view.detail;
 
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(plot.x, plot.y, plot.w, plot.h);
-  ctx.clip();
-
-  // 1) CRISTAL: base apenas oscurece el piso. La grilla se pinta DESPUÉS del
-  //    pozo, así que no hace falta taparla; una base opaca convertiría la
-  //    ventana en un parche y rompería la lectura de "recostada bajo la grilla".
-  const body = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
-  body.addColorStop(0, 'rgba(4, 9, 16, 0.025)');
-  body.addColorStop(1, 'rgba(2, 5, 9, 0.045)');
-  quadPath(ctx, quad);
+  ctx.beginPath(); ctx.rect(state.layout.plot.x, state.layout.plot.y, state.layout.plot.w, state.layout.plot.h); ctx.clip();
+  const body = ctx.createLinearGradient(card.x, card.y, card.x + card.w, card.y + card.h);
+  body.addColorStop(0, 'rgba(20, 38, 52, .97)'); body.addColorStop(1, 'rgba(7, 17, 28, .97)');
+  ctx.beginPath(); ctx.roundRect(card.x, card.y, card.w, card.h, 12);
   ctx.fillStyle = body;
-  ctx.fill();
+  ctx.shadowColor = 'rgba(0, 0, 0, .45)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 5; ctx.fill();
+  ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  ctx.strokeStyle = 'rgba(144, 188, 215, .34)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(card.x + 14, card.y + .5); ctx.lineTo(card.x + card.w - 14, card.y + .5);
+  ctx.strokeStyle = ready ? 'rgba(131,230,201,.7)' : 'rgba(169,205,226,.4)'; ctx.stroke();
 
-  // 2) VIDEO real recortado al centro y proyectado sobre el piso. Su transparencia
-  //    permite que la grilla se lea a través, como un plano apoyado bajo el piso.
-  if (hasVideo) {
-    ctx.save();
-    ctx.globalAlpha = WELL_VEIL.VIDEO_ALPHA;
-    drawFloorWarpedVideo(ctx, source as HTMLVideoElement, geo);
-    ctx.restore();
+  ctx.font = `500 11px ${FONT}`; ctx.textAlign = 'left'; ctx.fillStyle = '#c4d9e7';
+  ctx.fillText('GUÍA DE CAPTURA', card.x + 11, card.y + 18);
+  const fps = p.isMonitoring ? p.diagnostics?.sqm?.fpsEffective : undefined;
+  ctx.font = `11px ${FONT}`; ctx.textAlign = 'right'; ctx.fillStyle = '#93aec1';
+  ctx.fillText(Number.isFinite(fps) ? `${Math.round(fps!)} fps` : '— fps', card.x + card.w - 11, card.y + 18);
+  ctx.textAlign = 'left';
+
+  ctx.save(); ctx.beginPath(); ctx.roundRect(video.x, video.y, video.w, video.h, 6); ctx.clip();
+  ctx.fillStyle = '#040c14'; ctx.fillRect(video.x, video.y, video.w, video.h);
+  let imageRect = video;
+  if (hasVideo && source) {
+    const scale = Math.min(video.w / source.videoWidth, video.h / source.videoHeight);
+    const w = source.videoWidth * scale; const h = source.videoHeight * scale;
+    imageRect = { x: video.x + (video.w - w) / 2, y: video.y + (video.h - h) / 2, w, h };
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(source, imageRect.x, imageRect.y, w, h);
+    const roi = mapCapturePreviewRoi(p.diagnostics?.roi, p.diagnostics?.frameSize, imageRect);
+    if (roi) {
+      ctx.strokeStyle = accent; ctx.lineWidth = 1.5;
+      ctx.strokeRect(roi.x, roi.y, roi.w, roi.h);
+      ctx.fillStyle = '#05121de6'; ctx.fillRect(video.x + 2, video.y + video.h - 16, 29, 15);
+      ctx.fillStyle = '#d6f5ee'; ctx.font = `11px ${FONT}`;
+      ctx.fillText('ROI', video.x + 5, video.y + video.h - 5);
+    }
   } else {
-    // Sensor aún sin imagen: vetas de espera que respetan la perspectiva.
-    ctx.save();
-    quadPath(ctx, quad);
-    ctx.clip();
-    ctx.strokeStyle = 'rgba(148,163,184,0.14)';
-    ctx.lineWidth = 1;
-    for (let i = 1; i <= 3; i++) {
-      const y = geo.farY + (geo.nearY - geo.farY) * (i / 4);
-      const s = (y - proj.horizonY) / proj.floorSpanY;
-      ctx.beginPath();
-      ctx.moveTo(proj.vpX - quad.halfW * s, y);
-      ctx.lineTo(proj.vpX + quad.halfW * s, y);
-      ctx.stroke();
-    }
-    ctx.restore();
+    // Un sensor sin imagen muestra ausencia explícita, sin vídeo ni pulso retenidos.
+    ctx.strokeStyle = '#345065'; ctx.lineWidth = 1;
+    ctx.strokeRect(video.x + video.w * .28, video.y + video.h * .25, video.w * .44, video.h * .40);
+    ctx.beginPath(); ctx.arc(video.x + video.w / 2, video.y + video.h * .45, 5, 0, Math.PI * 2); ctx.stroke();
+    ctx.font = `11px ${FONT}`; ctx.fillStyle = '#9cb4c5'; ctx.textAlign = 'center';
+    ctx.fillText('Sin imagen', video.x + video.w / 2, video.y + video.h - 5, video.w - 4); ctx.textAlign = 'left';
   }
-
-  // 3) TINTE del veredicto: lo justo para leer el estado. El contrato de
-  //    transparencia está en `wellVeilAt` (testeado); aquí sólo se aplica.
-  quadPath(ctx, quad);
-  ctx.fillStyle = `rgba(${theme.tint}, ${wellTintAlpha(size).toFixed(3)})`;
-  ctx.fill();
-
-  // 4) SOMBRA de distancia: la pantalla se funde hacia el horizonte.
-  const depthShade = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
-  depthShade.addColorStop(0, `rgba(0,0,0,${WELL_VEIL.DEPTH_FAR})`);
-  depthShade.addColorStop(0.6, `rgba(0,0,0,${WELL_VEIL.DEPTH_MID})`);
-  depthShade.addColorStop(1, `rgba(0,0,0,${WELL_VEIL.DEPTH_NEAR})`);
-  quadPath(ctx, quad);
-  ctx.fillStyle = depthShade;
-  ctx.fill();
-
-  // 5) CRISTAL: reflejo del horizonte + brillo del canto superior.
-  const glass = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
-  glass.addColorStop(0, `rgba(255,255,255,${WELL_VEIL.GLASS_FAR})`);
-  glass.addColorStop(0.3, 'rgba(255,255,255,0.012)');
-  glass.addColorStop(1, 'rgba(255,255,255,0)');
-  quadPath(ctx, quad);
-  ctx.fillStyle = glass;
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.moveTo(quad.farLeft.x, quad.farLeft.y + 0.6);
-  ctx.lineTo(quad.farRight.x, quad.farRight.y + 0.6);
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-  ctx.stroke();
-
-  // 6) Barrido del sensor (sutil: no compite con la guía).
-  ctx.save();
-  quadPath(ctx, quad);
-  ctx.clip();
-  const phase = state.reducedMotion ? 0.5 : (state.now / 2600) % 1;
-  const scanY = geo.farY + (geo.nearY - geo.farY) * phase;
-  const scanH = Math.max(4, (geo.nearY - geo.farY) * 0.06);
-  const scan = ctx.createLinearGradient(0, scanY, 0, scanY + scanH);
-  scan.addColorStop(0, `rgba(${theme.tint}, 0)`);
-  scan.addColorStop(0.5, `rgba(${theme.tint}, 0.05)`);
-  scan.addColorStop(1, `rgba(${theme.tint}, 0)`);
-  ctx.fillStyle = scan;
-  ctx.fillRect(plot.x, scanY, plot.w, scanH);
   ctx.restore();
+  ctx.fillStyle = accent; ctx.font = `600 ${compact ? 12 : 13}px system-ui, sans-serif`;
+  const titleH = captureText(ctx, title, text.x, text.y + 11, text.w, compact ? 14 : 16, 2);
+  ctx.font = '11px system-ui, sans-serif'; ctx.fillStyle = '#b0c6d5';
+  captureText(ctx, detail, text.x, text.y + titleH + 14, text.w, 13, compact ? 2 : 3);
 
-  // 7) GUÍA DE COLOCACIÓN: diana + fantasma + haz + zócalo de texto, TODO
-  //    dentro del cristal. Aquí es donde la app le dice al usuario qué hacer.
-  //    Sin evidencia (monitor parado) no se dibuja: no hay nada que alinear.
-  if (view.phase !== 'INACTIVE') {
-    drawWellFingerprintGuide(
-      ctx,
-      geo,
-      view,
-      {
-        tint: theme.tint,
-        accent: view.phase === 'PRESSURE' ? '251, 146, 60' : '125, 211, 252',
-      },
-      FONT,
-    );
-  }
-
-  // 8) CANTO frontal: grosor físico de la pantalla apoyada en el piso.
-  const lip = clamp(2 + 2.5 * size, 2, 5);
-  ctx.beginPath();
-  ctx.moveTo(quad.nearLeft.x, quad.nearLeft.y);
-  ctx.lineTo(quad.nearRight.x, quad.nearRight.y);
-  ctx.lineTo(quad.nearRight.x, quad.nearRight.y + lip);
-  ctx.lineTo(quad.nearLeft.x, quad.nearLeft.y + lip);
-  ctx.closePath();
-  ctx.fillStyle = `rgba(${theme.tint}, 0.12)`;
-  ctx.fill();
-
-  // 9) BISEL con brillo: el mismo borde que tenía el visor, ahora acostado.
-  const bez = ctx.createLinearGradient(0, geo.farY, 0, geo.nearY);
-  bez.addColorStop(0, theme.core);
-  bez.addColorStop(1, theme.edge);
-  quadPath(ctx, quad);
-  ctx.strokeStyle = bez;
-  ctx.lineWidth = 1.2 + 0.7 * size;
-  ctx.shadowColor = theme.glow;
-  ctx.shadowBlur = 2 + 3 * size
-    + (view.phase === 'LOCKED' ? 3 * Math.max(state.sweepPulse, 0) : 0);
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  // 10) BRACKETES de visor en las 4 esquinas, alineados a los lados convergentes.
-  const bracket = (c: ProjPoint, a: ProjPoint, b: ProjPoint): void => {
-    const lenA = Math.hypot(a.x - c.x, a.y - c.y);
-    const lenB = Math.hypot(b.x - c.x, b.y - c.y);
-    if (lenA < 1 || lenB < 1) return;
-    const len = Math.min(16, Math.max(7, Math.min(lenA, lenB) * 0.22));
-    const ax = (a.x - c.x) / lenA;
-    const ay = (a.y - c.y) / lenA;
-    const bx = (b.x - c.x) / lenB;
-    const by = (b.y - c.y) / lenB;
-    ctx.moveTo(c.x + ax * len, c.y + ay * len);
-    ctx.lineTo(c.x, c.y);
-    ctx.lineTo(c.x + bx * len, c.y + by * len);
-  };
-  ctx.beginPath();
-  bracket(quad.nearLeft, quad.nearRight, quad.farLeft);
-  bracket(quad.nearRight, quad.farRight, quad.nearLeft);
-  bracket(quad.farLeft, quad.farRight, quad.nearLeft);
-  bracket(quad.farRight, quad.farLeft, quad.nearRight);
-  ctx.strokeStyle = theme.core;
-  ctx.lineWidth = 2 + size * 0.8;
-  ctx.lineCap = 'round';
-  ctx.stroke();
-
-  // 11) PULSO al latir: anillo proyectado sobre el plano de la pantalla.
-  if (view.phase === 'LOCKED' && size > 0.35) {
-    const pulse = state.reducedMotion ? 0.04 : Math.max(state.sweepPulse, 0.04);
-    const cz = (quad.zn + quad.zf) / 2;
-    const rPx = quad.halfW * (0.5 + 0.42 * pulse);
-    const rZ = rPx / proj.floorSpanY;
-    ctx.save();
-    quadPath(ctx, quad);
-    ctx.clip();
-    ctx.beginPath();
-    for (let i = 0; i <= 48; i++) {
-      const t = (i / 48) * Math.PI * 2;
-      const pt = proj.floorPoint(rPx * Math.cos(t), cz + rZ * Math.sin(t));
-      if (i === 0) ctx.moveTo(pt.x, pt.y);
-      else ctx.lineTo(pt.x, pt.y);
-    }
-    ctx.strokeStyle = `rgba(${theme.tint}, ${(0.30 * (1 - pulse)).toFixed(3)})`;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    ctx.restore();
-  }
-
+  const sqm = p.isMonitoring && hasVideo ? p.diagnostics?.sqm : undefined;
+  const light = typeof sqm?.saturationRatio === 'number' && typeof sqm?.underexposureRatio === 'number'
+    ? clamp(1 - sqm.saturationRatio - sqm.underexposureRatio, 0, 1) : undefined;
+  const meters = [
+    { label: 'Cubre', value: evidence?.seal },
+    { label: 'Quietud', value: evidence?.motion },
+    { label: 'Pulso', value: evidence?.pulsatility },
+    { label: 'Luz útil', value: light },
+  ];
+  const cellW = (card.w - 20) / meters.length;
+  const meterY = card.y + card.h - 36;
+  ctx.beginPath(); ctx.moveTo(card.x + 10, meterY - 9); ctx.lineTo(card.x + card.w - 10, meterY - 9);
+  ctx.strokeStyle = 'rgba(142,181,206,.18)'; ctx.stroke();
+  meters.forEach((meter, i) => {
+    const x = card.x + 10 + i * cellW;
+    const measured = typeof meter.value === 'number' && Number.isFinite(meter.value);
+    const level = measured ? clamp(meter.value!, 0, 1) : 0;
+    ctx.font = '11px system-ui, sans-serif'; ctx.fillStyle = '#99b3c6'; ctx.fillText(meter.label, x, meterY, cellW - 3);
+    ctx.font = `11px ${FONT}`; ctx.fillStyle = measured ? '#e1edf3' : '#7892a5';
+    ctx.fillText(measured ? `${Math.round(level * 100)}%` : '—', x, meterY + 15, cellW - 3);
+    ctx.fillStyle = '#2a4050'; ctx.fillRect(x, meterY + 23, cellW - 7, 2);
+    if (measured) { ctx.fillStyle = accent; ctx.fillRect(x, meterY + 23, (cellW - 7) * level, 2); }
+  });
   ctx.restore();
 }
-
 

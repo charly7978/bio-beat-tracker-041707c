@@ -138,6 +138,9 @@ Tests relevantes: `Detectors.test.ts`, `PPGSignalProcessor.test.ts`, `adaptivePi
 
 ## Referencias internas
 
+- `docs/ppg-to-ecg-model.md` — entrenamiento PPG→ECG real y evaluación insuficiente. La inferencia accesoria vive en el Worker canónico, separada de los estimadores de signos vitales. `ProcessedSignal.ecgEstimate` transporta lotes históricos con sus tiempos; la UI no los convierte en valores eléctricos o diagnósticos. El informe visible del modelo usa una ficha ligera; los pesos sólo se incluyen en el Worker.
+- `docs/monitor-visual-design.md` — distribución inmersiva, previsualización con ROI y vistas PPG/VPG/APG y salida aprendida.
+
 - `docs/repository-cleanup.md` — depuración previa y mapa histórico
 - `docs/no-simulation-audit.md` — política anti-simulación en runtime
 

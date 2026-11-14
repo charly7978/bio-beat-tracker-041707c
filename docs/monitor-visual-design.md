@@ -1,34 +1,53 @@
-# Monitor óptico: diseño visual e interacción
+# Monitor inmersivo y visualización híbrida
 
-## Dirección implementada
+Actualizado el 14 de noviembre de 2026.
 
-El monitor pasa a ser el centro de la interfaz: grafito y azul de baja saturación, jade para pulso, cian para SpO₂, lavanda para presión y tonos claros para respiración. Las advertencias mantienen rojo/ámbar. La portada, los controles, los paneles de aviso/ajustes/resultados y las superficies comparten tipografía, espaciado y colores; el pulso medido sustituye la animación decorativa del corazón.
+## Experiencia implementada
 
-Los cuatro valores provienen de los procesadores existentes. La respiración se conecta al resultado canónico y sus estados; los valores ausentes siguen indicando ausencia de lectura. La presentación no convierte la estimación en una medición clínicamente validada.
+El instrumento ocupa la pantalla completa. En escritorio las cuatro métricas se agrupan en una columna derecha; el área de señal recibe el espacio central. En móvil las métricas forman una banda compacta y se eliminan los paneles inferiores que reducían el gráfico. La ampliación aumenta también el área disponible en el teléfono. En horizontal la guía de captura dispone de una columna propia para conservar su legibilidad junto a los canales.
 
-La onda tiene menos halo y un mapeo lineal de amplitud relativa. Curvas cúbicas monótonas unen las muestras observadas: pasan por ellas y acotan cada segmento a sus extremos. No se añade suavizado a los estimadores ni se altera el tiempo de las observaciones. La misma curva se aplica a crestas y caras de la cinta 3D. La previsualización conserva la perspectiva del piso, con vídeo a opacidad 0.62 y velos tenues; las líneas se pintan por encima.
+La presentación combina superficies azul profundo, iluminación fija discreta, acentos jade/cian, controles translúcidos y cinta óptica en perspectiva. La nueva instalación abre en 3D; se conserva la elección guardada de usuarios existentes. Los eventos de latido proceden de los detectores existentes. No se añadieron latidos decorativos ni ondas prediseñadas.
 
-## Interacciones reales
+El canvas adapta su densidad hasta 3 píxeles físicos por píxel CSS, con presupuesto aproximado de ocho millones de píxeles. La captura conserva su resolución de procesamiento y su reloj: aumentar la resolución del gráfico no se presenta como una mejora de la exactitud del sensor. La cadencia de presentación y el procesamiento en Worker permanecen separados.
 
-- Zoom temporal de 1 a 8 segundos, por botones o pellizco; escalas de tiempo recalculadas en 2D y 3D.
-- Tocar o pulsar Enter abre inspección en 2D. La copia conserva muestras, amplitud y evidencia visual aunque el flujo vivo cambie. La captura y los estimadores continúan.
-- Arrastrar, usar flechas o los botones anterior/posterior desplaza la ventana dentro del registro disponible. El cursor muestra una muestra real en unidades relativas.
-- Botón de retorno en vivo, Escape o Enter cierran inspección. No se permite explorar más allá de la copia disponible.
-- Área ampliada, anotaciones visibles/ocultas y cambio 2D/3D. En pantallas bajas la distribución ya es compacta; en horizontal los cuatro signos pasan a la cabecera.
-- Retroalimentación de contacto con la guía canónica y cobertura observada. Se conservan hápticos y eventos de latido existentes. Se añaden foco visible, valores accesibles fuera del canvas y alternativas a los gestos.
+## Canales reales y salida aprendida
 
-## Consulta web y decisiones
+La vista HÍBRIDO ofrece dos bandas secundarias alternables:
 
-Fuentes oficiales consultadas el 13 de noviembre de 2026:
+- **VPG/APG**, opción inicial: primera y segunda derivadas temporales de la PPG lineal filtrada, anteriores al AGC y a la ganancia visual. Diferencias divididas de tres observaciones respetan los tiempos irregulares; los huecos, muestras inválidas y retrocesos de reloj cortan los segmentos. Las unidades son relativas por segundo y por segundo cuadrado, sin atribuir velocidades sanguíneas ni actividad eléctrica a esas curvas.
+- **ECG IA**, selección explícita: salida de un modelo realmente entrenado con PPG y ECG pareados de BIDMC. Su banda indica **concordancia baja**, carácter experimental, unidades relativas y retardo. Un botón de información abre las métricas y la procedencia del modelo.
 
-1. [MDN — Optimizing canvas](https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API/Tutorial/Optimizing_canvas). Mantener Canvas 2D con contexto opaco, limitar la densidad de píxeles y controlar el trabajo por frame evita añadir un motor 3D pesado. En dispositivos con puntero táctil y en nativo el render se limita a 30 fps; captura y procesamiento tienen su propio ritmo.
-2. [MDN — Pinch zoom gestures](https://developer.mozilla.org/en-US/docs/Web/API/Pointer_events/Pinch_zoom_gestures). Pointer Events unifica ratón, lápiz y multitáctil. Se manejan captura, liberación y cancelación; el gesto sólo se toma en la zona de gráfico.
-3. [MDN — OKLCH](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/color_value/oklch). Se utiliza como mejora progresiva para el acento CSS, con fallback hexadecimal. El canvas utiliza colores sRGB explícitos para compatibilidad.
-4. [MDN — backdrop-filter](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/backdrop-filter). Transparencia y blur local de 6 px en controles pequeños, con fallback opaco/translúcido y comprobación de soporte.
-5. [W3C — Animation from Interactions](https://www.w3.org/WAI/WCAG22/Understanding/animation-from-interactions.html) y [WCAG 2.2](https://www.w3.org/TR/WCAG22/). Se respeta movimiento reducido, se mantienen alternativas de teclado/botones se utilizan controles táctiles principales de 44 px y el zoom del navegador permanece habilitado fuera del gráfico. Esto no constituye una auditoría completa de conformidad WCAG.
+El modelo final es una red `60 → 32 tanh → 15 lineal`. Se compararon ocho candidatos mediante pacientes de validación separados. La prueba final en ocho identidades fuente dio Pearson 0,173 y RMSE 0,979; la mejora de RMSE frente a predecir la media fue 1,32 %. Es insuficiente para interpretar el ECG individual. El entrenamiento hospitalario no valida su transferencia a la cámara. Informe, metodología, hashes y límites: [modelo PPG→ECG](ppg-to-ecg-model.md).
 
-## Verificación
+La inferencia reside en el Worker canónico y utiliza una ruta cuyo filtro y red se comprueban contra Python. No alimenta frecuencia cardíaca, intervalos de pulso, arritmias, presión, SpO₂, respiración ni resúmenes médicos. Los valores eléctricos PR/QRS/QT no se calculan.
 
-Pruebas de límites de interpolación y recorrido inverso; inspección independiente del buffer, escala y evidencia en vivo; límites de zoom y de navegación histórica. Chromium ejercita el componente real: opacidad y orden del piso, zoom por botón y pellizco, congelación visual ante muestras nuevas, retorno, ampliación y distribuciones 390×844, 320×568, 844×390 y 1440×900. Las imágenes de comprobación utilizan entradas de software controladas, no capturas de pacientes.
+La amplitud de la salida aprendida se representa tal como la produce la regresión. No se ajusta su posición temporal para aparentar una coincidencia mayor. Las últimas predicciones corresponden a un segmento histórico; el retardo mínimo de su muestra más reciente es aproximadamente 0,77 s y el del inicio de cada lote aproximadamente 1,23 s. Se necesitan aproximadamente siete segundos de contacto estable para disponer del primer segmento.
 
-Pendiente: evaluación de legibilidad, fluidez y uso con una mano en dispositivos físicos de varias gamas y Safari/iOS. La implementación utiliza React, Canvas, CSS y los iconos ya presentes.
+## Previsualización operativa
+
+La ventana permanece dentro del monitor en 2D y 3D. Su vídeo se dibuja completo, sin recorte, con una sola operación por frame. La superposición ROI corresponde a la región publicada por el procesador y a las dimensiones reales del frame de análisis; no es una diana fija.
+
+La guía prioriza el mensaje del modelo canónico de colocación. Expone cobertura, quietud, pulsación y fracción de imagen sin recorte/subexposición, además de FPS efectivos. Los indicadores no equivalen a fuerza de contacto ni a diagnósticos. La falta de imagen o evidencia se representa con ausencia de datos. Al detener captura se retiran el vídeo y los indicadores anteriores.
+
+Las instrucciones mantienen al menos 11 px en la ventana compacta. La onda y la grilla no se dibujan por encima del texto. Se retiraron el barrido decorativo, la apertura por calidad y la deformación del vídeo en decenas de franjas: consumían recursos y dificultaban interpretar la captura.
+
+## Interacciones y accesibilidad
+
+Se conservan zoom temporal, pellizco, inspección por copia congelada, navegación por flechas y retorno en vivo. La copia incluye la fuente lineal necesaria para derivadas y una copia independiente de la salida del modelo y sus metadatos. La captura continúa durante la inspección.
+
+Los botones tienen nombres accesibles y foco visible; existe alternativa de teclado a los gestos. La guía conserva un anuncio accesible fuera del canvas. El informe del modelo utiliza un diálogo nativo con cierre mediante Escape y recuperación de foco. Se respeta movimiento reducido. En alturas que no permiten una banda secundaria legible, la interfaz indica PPG y desactiva el cambio a HÍBRIDO con una explicación.
+
+## Fuentes consultadas
+
+- [AHA — Electrocardiogram](https://www.heart.org/en/health-topics/heart-attack/diagnosing-a-heart-attack/electrocardiogram): diferencia entre actividad eléctrica y señal óptica.
+- [AHA — Echocardiogram](https://www.heart.org/en/health-topics/heart-attack/diagnosing-a-heart-attack/echocardiogram): una imagen cardíaca diagnóstica requiere una modalidad que mida anatomía y función; la perspectiva de este monitor es una visualización de datos.
+- [Suboh et al., 2022](https://www.frontiersin.org/journals/public-health/articles/10.3389/fpubh.2022.920946/full): derivadas VPG/APG de PPG filtrada.
+- [Slapničar et al., 2024](https://www.mdpi.com/1424-8220/24/7/2100) y [Tang et al., 2023](https://www.mdpi.com/2306-5354/10/6/630): reconstrucción aprendida PPG→ECG y dificultades de tiempo/generalización.
+- [PhysioNet — BIDMC 1.0.0](https://physionet.org/content/bidmc/1.0.0/): datos pareados utilizados en el entrenamiento realizado para este cambio.
+- [MDN — Optimizing canvas](https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API/Tutorial/Optimizing_canvas): densidad y coste de renderizado.
+
+## Verificación y límites pendientes
+
+Se ejecuta `npm run check:all`: lint, tipos, higiene de imports, arquitectura, guardas contra datos inventados, pruebas, compilación y comprobación del bundle. Las pruebas incluyen derivadas con tiempos irregulares, ausencia de señal, continuidad, layouts, ROI, lectura de métricas, inferencia con pesos reales y paridad numérica Python/TypeScript.
+
+La automatización visual del navegador no pudo iniciarse: el entorno devuelve `the gaas-browser node_repl sandbox cannot be disabled`. No se presentan capturas ni una prueba física como realizadas. Falta evaluar legibilidad y fluidez en dispositivos reales, Safari/iOS y una captura pareada cámara/ECG. Los tests de software no acreditan exactitud clínica.

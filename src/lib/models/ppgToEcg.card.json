@@ -1,0 +1,32 @@
+{
+  "modelId": "bidmc-ppg-to-ecg-30hz-20261114",
+  "dataset": "BIDMC 1.0.0 · PhysioNet",
+  "subjects": {
+    "train": 30,
+    "validation": 8,
+    "test": 8
+  },
+  "records": {
+    "train": 31,
+    "validation": 11,
+    "test": 11
+  },
+  "test": {
+    "pearson": 0.17279339695432458,
+    "rmse": 0.9787776537876068,
+    "baselineRmse": 0.9918694856913285,
+    "improvementPercent": 1.319914776347486
+  },
+  "suitability": "insufficient",
+  "sampleRate": 30,
+  "inputLength": 60,
+  "outputLength": 15,
+  "latencyMs": 1233.3333333333335,
+  "sourceUrl": "https://physionet.org/content/bidmc/1.0.0/",
+  "artifactSha256": "e8a66faa05265633ca4dd64d5563fc105b7969a4cb3209b4aff9fc292f228776",
+  "notes": [
+    "Concordancia insuficiente para interpretar un ECG individual",
+    "Entrenado con pulsioxímetro hospitalario; sin evaluación pareada cámara/ECG",
+    "Salida en unidades relativas; no mide actividad eléctrica"
+  ]
+}

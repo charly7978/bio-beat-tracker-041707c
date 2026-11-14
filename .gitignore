@@ -42,3 +42,7 @@ android/capacitor-cordova-android-plugins/.gradle/
 *.aab
 *.patch
 .andromity/
+
+# Task scratch data and Python caches
+work/
+__pycache__/

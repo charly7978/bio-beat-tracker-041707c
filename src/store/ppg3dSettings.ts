@@ -28,7 +28,7 @@ export interface Ppg3DSettings {
 export const usePpg3dSettings = create<Ppg3DSettings>()(
   persist(
     (set) => ({
-      enabled: false,
+      enabled: true,
       intensity: 1,
       toggle: () => set((s) => ({ enabled: !s.enabled })),
       setEnabled: (v) => set({ enabled: v }),

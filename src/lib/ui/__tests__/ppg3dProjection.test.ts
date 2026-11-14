@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeFloorPreviewGeometry } from '../ppg3dProjection';
+import { computeFloorPreviewGeometry, computeCapturePreviewLayout, mapCapturePreviewRoi, drawPreviewWell3D } from '../ppg3dProjection';
 import type { PpgRenderState } from '../ppgCanvasRenderer';
 
 // Geometría real de un móvil de 390×844 (misma que `recomputeLayout`).
@@ -85,5 +85,56 @@ describe('computeFloorPreviewGeometry — ventana acostada sobre la grilla', () 
     // La cinta ocupa d∈[0.05..0.17]; su borde trasero es la referencia inferior.
     const waveBackY = geo.proj.horizonY + geo.proj.floorSpanY * geo.proj.scaleAt(0.17);
     expect(geo.nearY).toBeLessThan(waveBackY);
+  });
+});
+
+describe('visor de captura frontal', () => {
+  it('mantiene el visor legible dentro del plot en móvil, escritorio y horizontal', () => {
+    for (const [width, height, plotH] of [[390, 844, 440], [1440, 900, 580], [844, 390, 155]]) {
+      const state = makeState();
+      state.layout.width = width;
+      state.layout.height = height;
+      state.layout.plot = { x: 12, y: 80, w: width - 24, h: plotH, centerY: 80 + plotH / 2 };
+      const { card, video, text } = computeCapturePreviewLayout(state);
+      const plot = state.layout.plot;
+      expect(card.x).toBeGreaterThanOrEqual(plot.x);
+      expect(card.y).toBeGreaterThanOrEqual(plot.y);
+      expect(card.x + card.w).toBeLessThanOrEqual(plot.x + plot.w);
+      expect(card.y + card.h).toBeLessThanOrEqual(plot.y + plot.h);
+      expect(video.x + video.w).toBeLessThan(text.x);
+      expect(text.w).toBeGreaterThan(80);
+    }
+  });
+
+  it('superpone las coordenadas observadas al encuadre completo y acota el ROI', () => {
+    const video = { x: 100, y: 200, w: 80, h: 60 };
+    expect(mapCapturePreviewRoi({ x: 80, y: 60, width: 160, height: 120 }, { width: 320, height: 240 }, video))
+      .toEqual({ x: 120, y: 215, w: 40, h: 30 });
+    expect(mapCapturePreviewRoi({ x: -20, y: -30, width: 400, height: 300 }, { width: 320, height: 240 }, video))
+      .toEqual(video);
+    expect(mapCapturePreviewRoi(undefined, { width: 320, height: 240 }, video)).toBeNull();
+    expect(mapCapturePreviewRoi({ x: 0, y: 0, width: 20, height: 20 }, { width: 0, height: 240 }, video)).toBeNull();
+    expect(mapCapturePreviewRoi({ x: NaN, y: 0, width: 20, height: 20 }, { width: 320, height: 240 }, video)).toBeNull();
+    expect(mapCapturePreviewRoi({ x: 400, y: 0, width: 20, height: 20 }, { width: 320, height: 240 }, video)).toBeNull();
+  });
+
+  it('retira imagen y valores previos al detener la captura, aunque el vídeo conserve su último frame', () => {
+    const state = makeState();
+    state.props = { isMonitoring: false, diagnostics: { sqm: { fpsEffective: 30, saturationRatio: 0, underexposureRatio: 0 } } } as PpgRenderState['props'];
+    const texts: string[] = [];
+    let drawnVideo = 0;
+    const ctx = new Proxy({
+      measureText: (value: string) => ({ width: value.length * 5 }),
+      createLinearGradient: () => ({ addColorStop: () => undefined }),
+      fillText: (value: string) => texts.push(value),
+      drawImage: () => { drawnVideo++; },
+    }, { get: (target, key) => key in target ? target[key as keyof typeof target] : () => undefined }) as unknown as CanvasRenderingContext2D;
+    const source = { readyState: 4, videoWidth: 1920, videoHeight: 1080 } as HTMLVideoElement;
+    drawPreviewWell3D(ctx, state, source);
+    expect(drawnVideo).toBe(0);
+    expect(texts).toContain('Sin imagen');
+    expect(texts).toContain('— fps');
+    expect(texts.filter(value => value === '—')).toHaveLength(4);
+    expect(texts).not.toContain('100%');
   });
 });

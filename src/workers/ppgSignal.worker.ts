@@ -1,8 +1,10 @@
 import { PPGSignalProcessor } from '../modules/signal-processing/PPGSignalProcessor';
 import type { ProcessedSignal, ProcessingError } from '../types/signal';
 import type { CameraCaptureState, MotionObservation } from '../types/measurements';
+import { PpgToEcgEstimator } from '../lib/models/ppgToEcg';
 
 let processor: PPGSignalProcessor | null = null;
+let ecgEstimator: PpgToEcgEstimator | null = null;
 
 // Escuchar mensajes del hilo principal
 self.onmessage = async (event: MessageEvent) => {
@@ -11,7 +13,23 @@ self.onmessage = async (event: MessageEvent) => {
   try {
     switch (type) {
       case 'init': {
+        try {
+          ecgEstimator = new PpgToEcgEstimator();
+        } catch {
+          // El modelo accesorio no puede impedir que arranque la medición PPG.
+          ecgEstimator = null;
+        }
         const onSignalReady = (signal: ProcessedSignal) => {
+          try {
+            signal.ecgEstimate = ecgEstimator?.ingest(signal) ?? {
+              modelId: 'ppg-to-ecg', status: 'INSUFFICIENT', samples: [], latencyMs: 0, reason: 'MODEL_ERROR',
+            };
+          } catch {
+            ecgEstimator?.reset();
+            signal.ecgEstimate = {
+              modelId: 'ppg-to-ecg', status: 'INSUFFICIENT', samples: [], latencyMs: 0, reason: 'MODEL_ERROR',
+            };
+          }
           // Serializar el resultado junto con las estadísticas necesarias
           self.postMessage({
             type: 'signalReady',
@@ -40,6 +58,7 @@ self.onmessage = async (event: MessageEvent) => {
 
       case 'start':
         if (processor) {
+          ecgEstimator?.reset();
           processor.start();
           self.postMessage({ type: 'started' });
         }
@@ -47,6 +66,7 @@ self.onmessage = async (event: MessageEvent) => {
 
       case 'stop':
         if (processor) {
+          ecgEstimator?.reset();
           processor.stop();
           self.postMessage({ type: 'stopped' });
         }

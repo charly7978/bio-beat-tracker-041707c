@@ -37,5 +37,14 @@ it('la inspección conserva muestras, amplitud y evidencia visual mientras el fl
     act(() => viewport.returnLive());
     expect(viewport.view.current.inspection).toBeUndefined();
     expect(buffer.current.getPointsCount()).toBe(401);
+    const surface = {
+      getBoundingClientRect: () => ({ left: 0, top: 0 }),
+      setPointerCapture: vi.fn(), hasPointerCapture: () => false,
+    };
+    const outside = { currentTarget: surface, pointerId: 7, clientX: 500, clientY: 300 } as unknown as Parameters<typeof viewport.canvasHandlers.onPointerDown>[0];
+    act(() => viewport.canvasHandlers.onPointerDown(outside));
+    act(() => viewport.canvasHandlers.onPointerUp(outside));
+    expect(surface.setPointerCapture).not.toHaveBeenCalled();
+    expect(viewport.view.current.inspection).toBeUndefined();
   } finally { act(() => root.unmount()); vi.unstubAllGlobals(); }
 });

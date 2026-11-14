@@ -2,7 +2,18 @@
 
 export type FingerPlacementMode = 'tip' | 'pad' | 'hybrid';
 
+/** Salida de un modelo entrenado; estimación experimental en unidades relativas. */
+export interface EcgEstimate {
+  modelId: string;
+  status: 'WARMUP' | 'AVAILABLE' | 'INSUFFICIENT';
+  samples: { timestamp: number; value: number }[];
+  latencyMs: number;
+  reason?: string;
+  warmupProgress?: number;
+}
+
 export interface ProcessedSignal {
+  ecgEstimate?: EcgEstimate;
   timestamp: number;
   rawValue: number;
   filteredValue: number;
