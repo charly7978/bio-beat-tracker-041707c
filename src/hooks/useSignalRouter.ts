@@ -284,8 +284,14 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
   }, [processVitalSigns, ppgMeterRef]);
 
+  const acquisitionEpochRef = useRef<number | null>(null);
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
     if (!isMonitoringRef.current) return;
+    const epoch = lastSignal.diagnostics?.continuity?.epoch;
+    if (epoch !== undefined) {
+      if (acquisitionEpochRef.current !== null && acquisitionEpochRef.current !== epoch) resetFingerContactSession();
+      acquisitionEpochRef.current = epoch;
+    }
     const signalValue = lastSignal.filteredValue;
     const contactState: ContactState =
       lastSignal.contactState ??
@@ -359,6 +365,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     // se excluyen por estado del frame, no por su amplitud numérica.
     const statusForHeartbeat = typeof diag?.status === 'string' ? diag.status : '';
     const sampleValid =
+      diag?.continuity?.valid !== false &&
       hasUsableContact &&
       Number.isFinite(signalValue) &&
       !lastSignal.motionArtifact &&
@@ -570,7 +577,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const showWaveform = hasUsableContact;
 
     if (ppgMeterRef?.current) {
-      ppgMeterRef.current.pushSignal(showWaveform ? signalValue : 0, lastSignal.timestamp);
+      ppgMeterRef.current.pushSignal(showWaveform ? (lastSignal.displayValue ?? signalValue) : 0, lastSignal.timestamp);
     }
 
     if (hasUsableContact && nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {

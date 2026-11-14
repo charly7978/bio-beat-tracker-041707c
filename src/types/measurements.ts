@@ -122,3 +122,6 @@ export interface PeakDetectionResult {
   diagnostics: Record<string, unknown>;
 }
 
+
+/** Estado de adquisición ISP asociado al cuadro observado. */
+export interface CameraCaptureState { revision: number; settling: boolean }

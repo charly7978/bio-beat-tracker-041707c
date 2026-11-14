@@ -4,7 +4,7 @@
  *
  * Optimizado: sliding MA O(n) con suma acumulativa, arrays pre-asignados.
  */
-import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
+import { PEAK_DETECTION_DEFAULTS, minimumEnsembleSamples } from '../../../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
 import { clamp } from '../../../utils/math';
 import { skewness } from '../../../utils/stats';
@@ -28,6 +28,8 @@ export interface ElgendiPeakDetectorInput {
   minBpm?: number;
   maxBpm?: number;
   minProminence?: number;
+  /** The live PPG pipeline already applied its linear cardiac bandpass. */
+  preFiltered?: boolean;
 }
 
 export interface ElgendiPeakDetectorOutput {
@@ -71,7 +73,7 @@ export class ElgendiPeakDetector {
     const minProm = input.minProminence ?? PEAK_DETECTION_DEFAULTS.minProminence;
     const nSig = input.signal.length;
 
-    if (nSig !== input.timestampsMs.length || nSig < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
+    if (nSig !== input.timestampsMs.length || nSig < minimumEnsembleSamples(input.samplingRateHz)) {
       return {
         peaks: [], peakTimes: [], peakValues: [],
         confidence: 0, rejectedCandidates: [],
@@ -100,9 +102,10 @@ export class ElgendiPeakDetector {
     }
 
     const hampelWin = Math.max(5, Math.round(fs * 0.25) | 1);
-    const cleaned = hampel1D(sig, hampelWin, 3);
-    let x = bandpassOffline(detrendLinear(cleaned), fs);
-    x = robustNormalizeZeroCenter(x);
+    // Refiltering each growing live window moves its edge peaks and shortens
+    // early RR. A measured, already filtered stream keeps its original extrema.
+    const conditioned = input.preFiltered ? sig : bandpassOffline(detrendLinear(hampel1D(sig, hampelWin, 3)), fs);
+    const x = robustNormalizeZeroCenter(conditioned);
 
     // SQI por skewness (Elgendi 2016) sobre la señal filtrada — PPG limpio tiene
     // skewness positiva; ruido/movimiento, ≈0 o negativa. Se reporta para que el
@@ -289,3 +292,4 @@ export class ElgendiPeakDetector {
     };
   }
 }
+

@@ -1,7 +1,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ProcessedSignal, ProcessingError } from '../types/signal';
-import type { MotionObservation } from '../types/measurements';
+import type { CameraCaptureState, MotionObservation } from '../types/measurements';
 import {
   loadBackpressureConfig,
   saveBackpressureConfig,
@@ -14,6 +14,7 @@ const log = createLogger('useSignalProcessor');
 interface PendingPpgFrame {
   imageData: ImageData;
   timestamp?: number;
+  captureState?: CameraCaptureState;
 }
 
 /**
@@ -92,6 +93,7 @@ export const useSignalProcessor = () => {
             data: {
               imageData: frame.imageData,
               timestamp: frame.timestamp,
+              captureState: frame.captureState,
             }
           }, [buffer]);
         } catch (error) {
@@ -277,7 +279,7 @@ export const useSignalProcessor = () => {
     lastUiContactRef.current = { finger: false, contact: 'NO_CONTACT' };
   }, []);
 
-  const processFrame = useCallback((imageData: ImageData, frameTimestampMs?: number) => {
+  const processFrame = useCallback((imageData: ImageData, frameTimestampMs?: number, captureState?: CameraCaptureState) => {
     if (!workerRef.current || initializationState.current !== 'READY' || !isProcessingRef.current) {
       return;
     }
@@ -288,6 +290,7 @@ export const useSignalProcessor = () => {
       pendingFrameRef.current = {
         imageData,
         timestamp: frameTimestampMs,
+        captureState,
       };
       return;
     }
@@ -301,6 +304,7 @@ export const useSignalProcessor = () => {
         data: {
           imageData,
           timestamp: frameTimestampMs,
+        captureState,
         }
       }, [buffer]);
     } catch (error) {

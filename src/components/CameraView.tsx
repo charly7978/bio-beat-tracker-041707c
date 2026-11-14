@@ -6,19 +6,21 @@ import { isNative } from "@/lib/device/platform";
 import { startLensCoLocationScan, type LensScanResult } from "@/lib/device/lensCoLocation";
 import { toast } from "@/hooks/use-toast";
 import { FingerExposureRecovery, type FingerExposurePhotometry } from '@/lib/device/exposureRecovery';
+import type { CameraCaptureState } from '@/types/measurements';
 
 const log = createLogger("CameraView");
 
 export interface CameraViewHandle {
   getVideoElement: () => HTMLVideoElement | null;
   getDiagnostics: () => Record<string, unknown>;
+  getAcquisitionState: () => CameraCaptureState;
   /**
-   * Optimiza ACTIVAMENTE el hardware para el dedo ya colocado: bloquea foco cercano
-   * y balance de blancos (anti-deriva), y AJUSTA la exposición/ISO según el nivel
-   * REAL del rojo medido (`redLevel` 0–255) hacia la ventana óptima (sin saturar ni
-   * quedar oscuro). Una sola vez en STABLE_CONTACT (timing seguro vs deriva del AE).
+   * Fija los valores medidos ya convergidos, una vez en STABLE_CONTACT.
+   * El bloqueo no cambia la ganancia hacia un brillo objetivo.
    */
   optimizeForFinger: (redLevel: number) => void;
+  /** Restaura AE/AWB continuos al perder el contacto y cancela locks pendientes. */
+  resumeFingerAcquisition: () => void;
   /** Compensa recorte sostenido con AE automático, antes de fijar la escena. */
   recoverFingerExposure: (photometry: FingerExposurePhotometry, timestampMs: number) => void;
 }
@@ -98,85 +100,98 @@ function classifyCameraError(err: unknown): CameraErrorType {
   return 'unknown';
 }
 
-async function stabilizeTrack(track: MediaStreamTrack): Promise<void> {
-  const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
-  const constraints: AdvancedConstraint[] = [];
-
-  if (caps.frameRate) {
-    const maxFps = caps.frameRate.max ?? 30;
-    const targetFps = Math.min(30, maxFps);
-    constraints.push({ frameRate: targetFps });
-  }
-
-  // Exposición y WB en CONTINUO durante la COLOCACIÓN del dedo: el AE/AWB deben
-  // ADAPTARSE al dedo que baja, no congelarse sobre la escena vacía (flash sin
-  // dedo). El bloqueo anti-deriva se DIFIERE a optimizeForFinger(), que congela
-  // exposición/WB ya sobre la escena REAL del dedo en STABLE_CONTACT (ver doc de
-  // optimizeForFinger). Congelar acá la escena vacía retrasaba la convergencia
-  // (~25-30 s) porque el frame del dedo quedaba mal expuesto hasta STABLE_CONTACT.
-  if (caps.exposureMode?.includes("continuous")) {
-    constraints.push({ exposureMode: "continuous" });
-  }
-
-  if (caps.whiteBalanceMode?.includes("continuous")) {
-    constraints.push({ whiteBalanceMode: "continuous" });
-  }
-
-  // Foco cercano fijo desde el inicio: el dedo siempre está pegado al lente, así
-  // que el foco manual a mínima distancia es estable y correcto (no introduce
-  // deriva ni "hunting"). Es lo único que conviene fijar antes del dedo.
-  if (caps.focusMode?.includes("manual")) {
-    constraints.push({ focusMode: "manual", focusDistance: 0 });
-  } else if (caps.focusMode?.includes("continuous")) {
-    constraints.push({ focusMode: "continuous" });
-  }
-
-  if (constraints.length > 0) {
-    try {
-      await track.applyConstraints({ advanced: constraints });
-    } catch (e) {
-      log.warn("No se pudieron estabilizar parámetros de cámara", e);
-    }
+async function applyCameraStep(
+  track: MediaStreamTrack,
+  constraint: AdvancedConstraint,
+  what: string,
+  isCurrent: () => boolean,
+  markChange: () => void,
+): Promise<boolean> {
+  if (!isCurrent()) return false;
+  try {
+    markChange();
+    await track.applyConstraints({ advanced: [constraint] });
+    if (!isCurrent()) return false;
+    const settings = track.getSettings?.() as Record<string, unknown> | undefined;
+    const verified = settings && Object.entries(constraint).every(([key, value]) => {
+      const actual = settings[key];
+      return typeof value === 'number'
+        ? typeof actual === 'number' && Number.isFinite(actual) && Math.abs(actual - value) <= Math.max(1e-6, Math.abs(value) * 1e-6)
+        : actual === value;
+    });
+    if (!verified) log.warn(`${what} no confirmado por settings`);
+    return !!verified;
+  } catch (error) {
+    log.warn(`${what} no aceptado (best-effort)`, error);
+    return false;
   }
 }
 
-async function applyTorchDependentParams(track: MediaStreamTrack, torchOn: boolean): Promise<void> {
-  const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
-  const constraints: AdvancedConstraint[] = [];
+function measuredValue(value: unknown, range: { min?: number; max?: number } | undefined): number | undefined {
+  if (!range || typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const min = typeof range.min === 'number' && Number.isFinite(range.min) ? range.min : value;
+  const max = typeof range.max === 'number' && Number.isFinite(range.max) ? range.max : value;
+  return min <= max ? clamp(value, min, max) : undefined;
+}
 
-  if (torchOn) {
-    if (caps.iso) {
-      const minISO = caps.iso.min ?? 50;
-      const maxISO = caps.iso.max ?? 400;
-      const targetISO = Math.max(minISO, Math.min(maxISO, 140));
-      constraints.push({ iso: targetISO });
+async function restoreAutomatic(track: MediaStreamTrack, isCurrent: () => boolean, markChange: () => void): Promise<void> {
+  const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
+  // Independent calls: an unsupported optional control must not block AE/AWB.
+  if (caps.exposureMode?.includes('continuous')) {
+    await applyCameraStep(track, { exposureMode: 'continuous' }, 'AE continuo', isCurrent, markChange);
+  }
+  if (caps.whiteBalanceMode?.includes('continuous')) {
+    await applyCameraStep(track, { whiteBalanceMode: 'continuous' }, 'AWB continuo', isCurrent, markChange);
+  }
+}
+
+async function stabilizeTrack(track: MediaStreamTrack, isCurrent: () => boolean, markChange: () => void): Promise<void> {
+  const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
+  if (caps.frameRate && Number.isFinite(caps.frameRate.max)) {
+    const min = caps.frameRate.min ?? 0;
+    const target = Math.max(min, Math.min(30, caps.frameRate.max!));
+    if (target > 0) await applyCameraStep(track, { frameRate: target }, 'FPS', isCurrent, markChange);
+  }
+  // AE/AWB remain continuous throughout placement. Only focus can be fixed now.
+  await restoreAutomatic(track, isCurrent, markChange);
+  if (caps.focusMode?.includes('manual')) {
+    if (await applyCameraStep(track, { focusMode: 'manual' }, 'foco manual', isCurrent, markChange)) {
+      const near = caps.focusDistance?.min;
+      if (typeof near === 'number' && Number.isFinite(near)) {
+        await applyCameraStep(track, { focusDistance: near }, 'distancia de foco', isCurrent, markChange);
+      }
     }
-    if (caps.exposureCompensation) {
-      const minExp = caps.exposureCompensation.min ?? -2;
-      const maxExp = caps.exposureCompensation.max ?? 2;
-      const targetExp = Math.max(minExp, Math.min(maxExp, -0.35));
-      constraints.push({ exposureCompensation: targetExp });
-    }
-  } else {
-    if (caps.iso) {
-      const minISO = caps.iso.min ?? 50;
-      const maxISO = caps.iso.max ?? 800;
-      const targetISO = Math.max(minISO, Math.min(maxISO, 400));
-      constraints.push({ iso: targetISO });
-    }
-    if (caps.exposureCompensation) {
-      const minExp = caps.exposureCompensation.min ?? -2;
-      const maxExp = caps.exposureCompensation.max ?? 2;
-      const targetExp = Math.max(minExp, Math.min(maxExp, 0));
-      constraints.push({ exposureCompensation: targetExp });
+  } else if (caps.focusMode?.includes('continuous')) {
+    await applyCameraStep(track, { focusMode: 'continuous' }, 'foco continuo', isCurrent, markChange);
+  }
+}
+
+async function lockConvergedTrack(track: MediaStreamTrack, isCurrent: () => boolean, markChange: () => void): Promise<void> {
+  const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
+  // Read BEFORE changing modes: some drivers replace the measured values with
+  // defaults on entering manual. Preserve the scene that earned stable contact.
+  const before = (track.getSettings?.() ?? {}) as ExtendedSettings;
+  const temperature = measuredValue(before.colorTemperature, caps.colorTemperature);
+  const iso = measuredValue(before.iso, caps.iso);
+  const exposureTime = measuredValue(before.exposureTime, caps.exposureTime);
+  if (caps.whiteBalanceMode?.includes('manual') && temperature !== undefined) {
+    if (await applyCameraStep(track, { whiteBalanceMode: 'manual' }, 'WB manual', isCurrent, markChange)) {
+      if (!await applyCameraStep(track, { colorTemperature: temperature }, 'temperatura WB', isCurrent, markChange) &&
+        caps.whiteBalanceMode.includes('continuous')) {
+        await applyCameraStep(track, { whiteBalanceMode: 'continuous' }, 'restaurar AWB', isCurrent, markChange);
+      }
     }
   }
-
-  if (constraints.length > 0) {
-    try {
-      await track.applyConstraints({ advanced: constraints });
-    } catch (e) {
-      log.warn("No se pudieron aplicar parámetros post-torch", e);
+  // Without a measured manual value, leave automatic exposure running. A
+  // supported manual mode alone cannot reproduce the converged exposure.
+  if (caps.exposureMode?.includes('manual') && (iso !== undefined || exposureTime !== undefined)) {
+    if (await applyCameraStep(track, { exposureMode: 'manual' }, 'exposición manual', isCurrent, markChange)) {
+      let preserved = true;
+      if (iso !== undefined) preserved = await applyCameraStep(track, { iso }, 'ISO convergido', isCurrent, markChange) && preserved;
+      if (exposureTime !== undefined) preserved = await applyCameraStep(track, { exposureTime }, 'tiempo convergido', isCurrent, markChange) && preserved;
+      if (!preserved && caps.exposureMode.includes('continuous')) {
+        await applyCameraStep(track, { exposureMode: 'continuous' }, 'restaurar AE', isCurrent, markChange);
+      }
     }
   }
 }
@@ -189,7 +204,8 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
   const streamRef = useRef<MediaStream | null>(null);
 
-  const isStartingRef = useRef(false);
+  const cameraGenerationRef = useRef(0);
+  const retiringRef = useRef<Promise<void>>(Promise.resolve());
   const exposureRecoveryRef = useRef(new FingerExposureRecovery());
 
   // Último resultado del profiling de co-ubicación lente↔flash (solo diagnóstico).
@@ -198,6 +214,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
   useImperativeHandle(ref, () => ({
     getVideoElement: () => videoRef.current,
+    getAcquisitionState: () => exposureRecoveryRef.current.getAcquisitionState(),
     getDiagnostics: () => {
       const track = streamRef.current?.getVideoTracks?.()[0];
       if (!track) return { active: false };
@@ -243,154 +260,61 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
       const track = streamRef.current?.getVideoTracks?.()[0];
       if (track) void exposureRecoveryRef.current.observe(track, photometry, timestampMs);
     },
+    resumeFingerAcquisition: () => {
+      const track = streamRef.current?.getVideoTracks?.()[0];
+      if (track) {
+        void exposureRecoveryRef.current.resumeAcquisition(track, (isCurrent, markChange) => restoreAutomatic(track, isCurrent, markChange))
+          .catch(error => log.warn('No se pudo restaurar adquisición automática', error));
+      }
+    },
     optimizeForFinger: (redLevel: number) => {
       const track = streamRef.current?.getVideoTracks?.()[0];
-      if (!track) return;
-      void (async () => {
-        const recovery = exposureRecoveryRef.current;
-        if (!await recovery.beginFinalLock(track)) return;
-        try {
-          const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
-          let appliedSteps = 0;
-
-          // Bloqueo SECUENCIAL de controles analógicos (ISP): cada constraint va
-          // en su propia llamada y EN ORDEN. En un mismo array `advanced`, Chrome
-          // ignora el valor de exposición (iso/exposureTime/EC) enviado en la
-          // misma llamada que el cambio exposureMode→manual, y un entry que
-          // falla impide aplicar los siguientes. Modo primero, valor después.
-          const applyStep = async (c: AdvancedConstraint, what: string): Promise<boolean> => {
-            if (!recovery.isCurrentLock(track)) return false;
-            try {
-              await track.applyConstraints({ advanced: [c] });
-              appliedSteps++;
-              return true;
-            } catch (e) {
-              log.warn(`${what} no aceptado (best-effort)`, e);
-              return false;
-            }
-          };
-
-          if (caps.focusMode?.includes("manual")) {
-            const near = typeof caps.focusDistance?.min === "number" ? caps.focusDistance.min : 0;
-            await applyStep({ focusMode: "manual", focusDistance: near }, "focus manual");
-          } else {
-            log.warn("focus manual no soportado: el AF del ISP puede derivar sobre el dedo");
-          }
-          if (caps.whiteBalanceMode?.includes("manual")) {
-            if (await applyStep({ whiteBalanceMode: "manual" }, "WB manual")) {
-              // En WB manual, `colorTemperature` es el único valor expuesto por la
-              // API web (W3C Image Capture §9.4.1). Fijarlo al valor que el AWB ya
-              // había convergido sobre el dedo congela las ganancias por canal sin
-              // introducir un salto cromático.
-              const wbSettings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-              if (caps.colorTemperature && typeof wbSettings.colorTemperature === "number") {
-                const kMin = caps.colorTemperature.min ?? wbSettings.colorTemperature;
-                const kMax = caps.colorTemperature.max ?? wbSettings.colorTemperature;
-                await applyStep(
-                  { colorTemperature: clamp(wbSettings.colorTemperature, kMin, kMax) },
-                  "temperatura WB",
-                );
-              }
-            }
-          } else {
-            log.warn("WB manual no soportado: el AWB del ISP puede derivar");
-          }
-          if (caps.exposureMode?.includes("manual")) {
-            if (redLevel <= 0) {
-              log.warn("exposición manual disponible pero aún sin nivel de rojo del dedo");
-            } else if (await applyStep({ exposureMode: "manual" }, "exposure manual")) {
-              // El VALOR se negocia en una llamada POSTERIOR al cambio de modo,
-              // releyendo settings reales ya en manual.
-              const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-              const TARGET = 180;
-              const ratio = clamp(TARGET / redLevel, 0.45, 2.2);
-              const value: AdvancedConstraint = {};
-              if (caps.iso && typeof caps.iso.max === "number") {
-                const isoMin = caps.iso.min ?? 25;
-                const isoMax = caps.iso.max ?? 800;
-                const curIso = settings.iso ?? (isoMin + isoMax) / 2;
-                value.iso = clamp(Math.round(curIso * ratio), isoMin, isoMax);
-              } else if (caps.exposureCompensation) {
-                const evMin = caps.exposureCompensation.min ?? -2;
-                const evMax = caps.exposureCompensation.max ?? 2;
-                const curEv = settings.exposureCompensation ?? 0;
-                value.exposureCompensation = clamp(curEv + clamp(Math.log2(ratio), -1, 1), evMin, evMax);
-              } else if (caps.exposureTime && typeof settings.exposureTime === "number") {
-                const etMin = caps.exposureTime.min ?? settings.exposureTime;
-                const etMax = caps.exposureTime.max ?? settings.exposureTime;
-                value.exposureTime = clamp(settings.exposureTime * ratio, etMin, etMax);
-              }
-              if (Object.keys(value).length > 0) {
-                await applyStep(value, "valor de exposición");
-              }
-              // El tiempo de integración también es significativo en exposición
-              // manual (W3C Image Capture §9.4.1). Fijarlo explícitamente evita que
-              // el driver lo reajuste y promedie el pulso en ventanas más largas
-              // (efecto low-pass sobre la AC). Es best-effort y capability-gated.
-              const expSettings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-              if (caps.exposureTime && typeof expSettings.exposureTime === "number") {
-                const etMin = caps.exposureTime.min ?? expSettings.exposureTime;
-                const etMax = caps.exposureTime.max ?? expSettings.exposureTime;
-                await applyStep(
-                  { exposureTime: clamp(expSettings.exposureTime, etMin, etMax) },
-                  "tiempo de exposición",
-                );
-              }
-            }
-          } else {
-            log.warn("exposure manual no soportado: el AE del ISP puede modular la AC");
-          }
-
-          // Verificación real del bloqueo: settings post-aplicación (no la
-          // constraint enviada). Queda expuesto también vía getDiagnostics().
-          const after = (track.getSettings?.() ?? {}) as ExtendedSettings;
-          if (caps.focusMode?.includes("manual") && after.focusMode !== "manual") {
-            log.warn(`Focus no quedó bloqueado (settings.focusMode=${after.focusMode ?? 'n/a'})`);
-          }
-          if (caps.whiteBalanceMode?.includes("manual") && after.whiteBalanceMode !== "manual") {
-            log.warn(`WB no quedó bloqueado (settings.whiteBalanceMode=${after.whiteBalanceMode ?? 'n/a'})`);
-          }
-          if (caps.exposureMode?.includes("manual") && after.exposureMode !== "manual") {
-            log.warn(`Exposición no quedó bloqueada (settings.exposureMode=${after.exposureMode ?? 'n/a'})`);
-          }
-          log.info(
-            `ISP lock: exposure=${after.exposureMode ?? 'n/a'} iso=${after.iso ?? 'n/a'} tExp=${after.exposureTime ?? 'n/a'} wb=${after.whiteBalanceMode ?? 'n/a'} k=${after.colorTemperature ?? 'n/a'} focus=${after.focusMode ?? 'n/a'} (red=${redLevel.toFixed(0)}, ${appliedSteps} pasos)`,
-          );
-        } catch (e) {
-          log.warn("optimizeForFinger falló (best-effort)", e);
-        } finally {
-          recovery.finishFinalLock(track);
-        }
-      })();
+      if (!track || !Number.isFinite(redLevel) || redLevel <= 0) return;
+      void exposureRecoveryRef.current.lockForFinger(track, (isCurrent, markChange) => lockConvergedTrack(track, isCurrent, markChange))
+        .catch(error => log.warn('No se pudo fijar el ISP convergido', error));
     },
   }), []);
 
   useEffect(() => {
-    const mountedRef = { current: true };
+    const mountedVideo = videoRef.current;
+    const generation = ++cameraGenerationRef.current;
+    const abort = new AbortController();
+    const ownsCamera = () => cameraGenerationRef.current === generation && !abort.signal.aborted;
 
-    const stopCamera = async () => {
-      exposureRecoveryRef.current.clear();
+    const stopCamera = () => {
+      const recovery = exposureRecoveryRef.current;
+      recovery.clear();
       const stream = streamRef.current;
-      if (stream) {
+      // Detach synchronously. An older asynchronous teardown must never erase
+      // the reference/video belonging to a later startup.
+      streamRef.current = null;
+      if (mountedVideo?.srcObject === stream) mountedVideo.srcObject = null;
+      if (!stream) return retiringRef.current;
+      const pending = recovery.whenIdle();
+      const retirement = (async () => {
+        await pending;
         for (const track of stream.getVideoTracks()) {
           try {
-            await track.applyConstraints({
-              advanced: [{ torch: false } as TorchCapableConstraint],
-            });
-          } catch { log.debug('Torch off (advanced) failed — trying direct'); }
-          try {
-            await track.applyConstraints({ torch: false } as MediaTrackConstraints);
-          } catch { log.debug('Torch off (direct) failed — expected if unsupported'); }
-          track.stop();
+            if (track.readyState === 'live') {
+              try {
+                await track.applyConstraints({ advanced: [{ torch: false } as TorchCapableConstraint] });
+              } catch { log.debug('Torch off (advanced) failed — trying direct'); }
+              try {
+                await track.applyConstraints({ torch: false } as MediaTrackConstraints);
+              } catch { log.debug('Torch off (direct) failed — expected if unsupported'); }
+            }
+          } finally { track.stop(); }
         }
-        streamRef.current = null;
-      }
-      if (videoRef.current) videoRef.current.srcObject = null;
-
-      isStartingRef.current = false;
+      })();
+      retiringRef.current = retirement;
+      return retirement;
     };
 
-    const activateTorch = async (track: MediaStreamTrack): Promise<{ active: boolean; verified: boolean }> => {
+    const activateTorch = async (
+      track: MediaStreamTrack,
+      isCurrent: () => boolean,
+      markChange: () => void,
+    ): Promise<{ active: boolean; verified: boolean }> => {
       const attempts = [
         { advanced: [{ torch: true } as TorchCapableConstraint] },
         { torch: true } as TorchCapableConstraint,
@@ -398,168 +322,149 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         { advanced: [{ torchMode: 'torch' }] },
       ] as MediaTrackConstraints[];
       for (const constraints of attempts) {
+        if (!isCurrent()) return { active: false, verified: false };
         try {
+          markChange();
           await track.applyConstraints(constraints);
+          if (!isCurrent()) return { active: false, verified: false };
           const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
           if (settings.torch === true) return { active: true, verified: true };
         } catch { log.debug('Torch attempt failed — trying next syntax'); }
       }
-      // Último intento: sin verificar settings, confiar en que applyConstraints funcionó
+      // Safari may report stale torch settings. Preserve the unverified fallback.
+      if (!isCurrent()) return { active: false, verified: false };
       try {
+        markChange();
         await track.applyConstraints({ advanced: [{ torch: true } as TorchCapableConstraint] });
-        return { active: true, verified: false };
+        return { active: isCurrent(), verified: false };
       } catch { log.debug('Torch not available on this device'); }
-      log.warn("Torch no disponible en este dispositivo");
       return { active: false, verified: false };
     };
 
-    const waitForVideo = (video: HTMLVideoElement): Promise<void> => {
-      return new Promise(resolve => {
-        if (video.readyState >= 2 && video.videoWidth > 0) { resolve(); return; }
-        const onMeta = async () => {
-          video.removeEventListener("loadedmetadata", onMeta);
-          try { await video.play(); } catch { log.debug('Video play() rejected (autoplay policy)'); }
-          resolve();
-        };
-        video.addEventListener("loadedmetadata", onMeta);
-      });
-    };
+    const waitForVideo = (video: HTMLVideoElement): Promise<boolean> => new Promise((resolve, reject) => {
+      const cleanup = () => {
+        video.removeEventListener('loadeddata', onReady);
+        video.removeEventListener('canplay', onReady);
+        video.removeEventListener('error', onError);
+        abort.signal.removeEventListener('abort', onAbort);
+      };
+      const finish = (ready: boolean) => { cleanup(); resolve(ready); };
+      const onReady = () => {
+        if (video.readyState >= 2 && video.videoWidth > 0) finish(true);
+      };
+      const onAbort = () => finish(false);
+      const onError = () => { cleanup(); reject(new Error('No se pudo reproducir el stream de cámara')); };
+      if (!ownsCamera()) { resolve(false); return; }
+      video.addEventListener('loadeddata', onReady);
+      video.addEventListener('canplay', onReady);
+      video.addEventListener('error', onError);
+      abort.signal.addEventListener('abort', onAbort, { once: true });
+      try { void video.play().catch(() => log.debug('Video play() rejected (autoplay policy)')); }
+      catch { log.debug('Video play() unavailable'); }
+      onReady();
+    });
 
     const startCamera = async () => {
-      if (isStartingRef.current) return;
-      isStartingRef.current = true;
-
-      await stopCamera();
-      if (!mountedRef.current) { isStartingRef.current = false; return; }
-
-      // 1. Solicitar permiso nativo en APK antes de getUserMedia
+      // A previous instance can still be finishing a driver request. Open the
+      // next stream only after that instance has released its hardware.
+      await retiringRef.current;
+      if (!ownsCamera()) return;
       const permitted = await requestCameraPermission();
+      if (!ownsCamera()) return;
       if (!permitted) {
-        log.error("Permiso de cámara denegado");
         window.dispatchEvent(new CustomEvent('camera-error', {
           detail: { type: 'permission_denied', message: 'Permiso de cámara denegado' },
         }));
-        isStartingRef.current = false;
         return;
       }
 
       try {
-        // 2. Cámara Trasera (Dedo + PPG)
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 640, max: 960 },
-            height: { ideal: 480, max: 720 },
-            frameRate: { ideal: 30, min: 15, max: 30 },
-          },
-        });
-
-        if (!mountedRef.current) {
-          stream.getTracks().forEach(t => t.stop());
-          isStartingRef.current = false;
-          return;
+        let stream: MediaStream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 640, max: 960 },
+              height: { ideal: 480, max: 720 },
+              frameRate: { ideal: 30, min: 15, max: 30 },
+            },
+          });
+        } catch (error) {
+          if (classifyCameraError(error) !== 'overconstrained' || !ownsCamera()) throw error;
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: false, video: { facingMode: { ideal: 'environment' } },
+          });
         }
-
+        if (!ownsCamera()) { stream.getTracks().forEach(track => track.stop()); return; }
         streamRef.current = stream;
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await waitForVideo(videoRef.current);
-        }
+        const video = mountedVideo;
+        if (!video) { void stopCamera(); return; }
+        video.srcObject = stream;
+        if (!await waitForVideo(video) || !ownsCamera()) return;
 
         const track = stream.getVideoTracks()[0];
         if (track) {
-          await stabilizeTrack(track);
-          let torch = await activateTorch(track);
-          if (!torch.active) {
-            await new Promise(r => setTimeout(r, 400));
-            torch = await activateTorch(track);
-          }
-          if (torch.active && torch.verified) log.info("Flash activado (confirmado por settings)");
-          else if (torch.active) log.warn("Flash activado sin confirmación de settings — diagnóstico de lente limitado");
-          else log.warn("Flash no confirmado — se usará perfil de cámara tolerante");
-          await applyTorchDependentParams(track, torch.active);
-
-          // Profiling de co-ubicación lente↔flash: mide el flujo lumínico de los
-          // primeros ~500 ms con torch y alerta si el dedo cubrió una lente SIN
-          // flash (gran angular/tele en equipos multi-lente: `facingMode:
-          // environment` no garantiza la lente principal). Fire-and-forget: no
-          // retrasa onStreamReady y NO toca el pipeline de medición.
-          if (videoRef.current) {
-            lastLensScanRef.current = null;
-            void startLensCoLocationScan(videoRef.current, {
-              torchOn: torch.active,
-              torchVerified: torch.verified,
-            })
-              .then(result => {
-                lastLensScanRef.current = result;
-                if (result.verdict === 'lens-covered-dark') {
-                  toast({
-                    variant: "destructive",
-                    title: "Lente equivocada detectada",
-                    description:
-                      "El flash está activo pero la lente activa queda oscura. Apoya el dedo sobre la lente principal, junto al flash.",
-                    duration: 6000,
-                  });
-                }
-              })
-              .catch(e => log.debug("Escaneo lente/flash no disponible", e));
-          }
-        }
-
-        log.info(`Cámara trasera lista ${videoRef.current?.videoWidth ?? "?"}x${videoRef.current?.videoHeight ?? "?"}`);
-
-        onStreamReady?.(stream);
-
-
-      } catch (err) {
-        const errType = classifyCameraError(err);
-        log.error(`Error al inicializar cámara trasera (${errType})`, err);
-
-        // Reintentar con constraints relajados si es OverconstrainedError
-        if (errType === 'overconstrained' && mountedRef.current) {
-          log.warn("Reintentando con constraints relajados...");
-          try {
-            const fallbackStream = await navigator.mediaDevices.getUserMedia({
-              audio: false,
-              video: { facingMode: { ideal: "environment" } },
-            });
-            if (mountedRef.current) {
-              streamRef.current = fallbackStream;
-              if (videoRef.current) {
-                videoRef.current.srcObject = fallbackStream;
-                await waitForVideo(videoRef.current);
-              }
-              const track = fallbackStream.getVideoTracks()[0];
-              if (track) await stabilizeTrack(track);
-              log.info("Cámara iniciada con constraints relajados");
-              onStreamReady?.(fallbackStream);
-              isStartingRef.current = false;
-              return;
+          let torch = { active: false, verified: false };
+          await exposureRecoveryRef.current.resumeAcquisition(track, async (isCurrent, markChange) => {
+            await stabilizeTrack(track, isCurrent, markChange);
+            if (!isCurrent()) return;
+            torch = await activateTorch(track, isCurrent, markChange);
+            if (!torch.active && isCurrent()) {
+              await new Promise<void>(resolve => {
+                const timer = setTimeout(resolve, 400);
+                abort.signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+              });
+              torch = await activateTorch(track, isCurrent, markChange);
             }
-          } catch (fallbackErr) {
-            log.error("Reintento con constraints relajados también falló", fallbackErr);
-          }
-        }
+            // Torch activation may reset controls on a driver. Verify the
+            // acquisition modes again; never impose an arbitrary ISO/EV preset.
+            if (isCurrent()) await restoreAutomatic(track, isCurrent, markChange);
+          });
+          if (!ownsCamera()) return;
+          if (torch.active && torch.verified) log.info('Flash activado (confirmado por settings)');
+          else if (torch.active) log.warn('Flash activado sin confirmación de settings');
+          else log.warn('Flash no confirmado — se usará perfil de cámara tolerante');
 
+          lastLensScanRef.current = null;
+          void startLensCoLocationScan(video, { torchOn: torch.active, torchVerified: torch.verified })
+            .then(result => {
+              if (!ownsCamera() || streamRef.current !== stream) return;
+              lastLensScanRef.current = result;
+              if (result.verdict === 'lens-covered-dark') {
+                toast({
+                  variant: 'destructive',
+                  title: 'Lente equivocada detectada',
+                  description: 'El flash está activo pero la lente activa queda oscura. Apoya el dedo sobre la lente principal, junto al flash.',
+                  duration: 6000,
+                });
+              }
+            })
+            .catch(error => log.debug('Escaneo lente/flash no disponible', error));
+        }
+        if (ownsCamera()) onStreamReady?.(stream);
+      } catch (error) {
+        if (!ownsCamera()) return;
+        const type = classifyCameraError(error);
+        log.error(`Error al inicializar cámara trasera (${type})`, error);
+        void stopCamera();
         window.dispatchEvent(new CustomEvent('camera-error', {
-          detail: { type: errType, message: (err as Error)?.message || 'Error desconocido' },
+          detail: { type, message: (error as Error)?.message || 'Error desconocido' },
         }));
-      } finally {
-        isStartingRef.current = false;
       }
     };
 
-    if (isMonitoring) {
-      startCamera();
-    } else {
-      stopCamera();
-    }
-
+    if (isMonitoring) void startCamera();
+    else void stopCamera();
+    const releaseCamera = () => {
+      if (cameraGenerationRef.current === generation) {
+        cameraGenerationRef.current++;
+        void stopCamera();
+      }
+    };
     return () => {
-      mountedRef.current = false;
-      stopCamera();
+      abort.abort();
+      releaseCamera();
     };
   }, [isMonitoring, onStreamReady]);
 

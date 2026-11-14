@@ -5,7 +5,7 @@
 import { clamp } from '../utils/math';
 import { triggerHeartbeatHaptic } from '../utils/haptics';
 import { robustBounds } from '../utils/stats';
-import { CAPTURE_TIMING_DEFAULTS, PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS } from '../config/signalProcessing';
+import { CAPTURE_TIMING_DEFAULTS, PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS, minimumEnsembleSamples } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
 import { autocorrDominantLag } from './signal-processing/shared/dsp';
@@ -274,7 +274,7 @@ export class HeartBeatProcessor {
     // baja el costo en hilo UI sin modificar la captura ni los datos observados.
     // Un pico sigue admitiéndose solo tras confirmación temporal y refractario.
     const runEnsemble =
-      this.signalBuffer.length >= PEAK_DETECTION_DEFAULTS.minSamplesEnsemble &&
+      this.signalBuffer.length >= minimumEnsembleSamples(sampleRate) &&
       this.frameTick % PEAK_DETECTION_DEFAULTS.ensembleRunStrideFrames === 0 &&
       (gateOk || this.fingerContactConfirmed);
 
@@ -291,6 +291,7 @@ export class HeartBeatProcessor {
         sqi: ensSqi,
         perfusionIndex: this.ppgPerfusionIndex,
         beatWindowMs: this.adaptiveBeatWindowMs(),
+        preFiltered: true,
       });
       ensembleConf = ens.confidence;
 

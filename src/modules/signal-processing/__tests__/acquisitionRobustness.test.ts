@@ -91,7 +91,10 @@ describe('RGB → filtros → detector, sin sustituir la señal entre etapas', (
       reference.start();
       try {
         reference.processFrame(image, 5000);
-        expect(outputs.at(-1)).toEqual(fresh[0]);
+        expect(outputs.at(-1)?.diagnostics?.continuity?.epoch).toBeGreaterThan(outputs[0].diagnostics?.continuity?.epoch ?? 0);
+        const omitEpoch = (signal: ProcessedSignal) => ({ ...signal, diagnostics: { ...signal.diagnostics,
+          continuity: { ...signal.diagnostics?.continuity, epoch: 0 } } });
+        expect(omitEpoch(outputs.at(-1)!)).toEqual(omitEpoch(fresh[0]));
       } finally { reference.stop(); }
     } finally { proc.stop(); }
   });

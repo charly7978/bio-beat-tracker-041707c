@@ -2,7 +2,7 @@
  * Detección de picos PPG con Elgendi optimizado.
  */
 import type { PeakDetectionResult } from '../../../types/measurements';
-import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
+import { PEAK_DETECTION_DEFAULTS, minimumEnsembleSamples } from '../../../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
 import { clamp } from '../../../utils/math';
 import { median } from '../../../utils/stats';
@@ -20,6 +20,7 @@ export interface PeakDetectionEnsembleInput {
   /** Beat-window adaptativo (ms) según ritmo detectado; default Elgendi si se omite. */
   beatWindowMs?: number;
   legacyPeakIndices?: number[];
+  preFiltered?: boolean;
 }
 
 export class PeakDetectionEnsemble {
@@ -27,7 +28,7 @@ export class PeakDetectionEnsemble {
     const log: PeakDetectionResult['rejectedPeaks'] = [];
     const { signal, timestampsMs, samplingRateHz, sqi, perfusionIndex = 0 } = input;
 
-    if (signal.length < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble || signal.length !== timestampsMs.length) {
+    if (signal.length < minimumEnsembleSamples(samplingRateHz) || signal.length !== timestampsMs.length) {
       return {
         peaks: [],
         peakTimes: [],
@@ -76,6 +77,7 @@ export class PeakDetectionEnsemble {
       minProminence: calibration.elgendiMinProminence,
       offsetWeight: calibration.elgendiOffsetWeight,
       beatWindowMs: input.beatWindowMs,
+      preFiltered: input.preFiltered,
     });
 
     const elTimeAt = (j: number): number => {

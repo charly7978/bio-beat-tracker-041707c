@@ -1,3 +1,4 @@
+import type { CameraCaptureState } from '@/types/measurements';
 import { useRef, useCallback } from 'react';
 import type { CameraViewHandle } from '@/components/CameraView';
 import { acceptVideoFrame, createVideoFrameIdentityState, resolveFrameClock } from '@/lib/device/frameClock';
@@ -7,7 +8,7 @@ interface UseFrameLoopInput {
   cameraRef: React.RefObject<CameraViewHandle>;
   canvasRef: React.MutableRefObject<HTMLCanvasElement | null>;
   ctxRef: React.MutableRefObject<CanvasRenderingContext2D | null>;
-  processFrame: (imageData: ImageData, timestamp?: number) => void;
+  processFrame: (imageData: ImageData, timestamp?: number, captureState?: CameraCaptureState) => void;
 }
 
 export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: UseFrameLoopInput) {
@@ -46,7 +47,9 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
         }
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        processFrame(imageData, frameTimestampMs);
+        const captureState = cameraRef.current?.getAcquisitionState?.();
+        if (captureState) processFrame(imageData, frameTimestampMs, { ...captureState });
+        else processFrame(imageData, frameTimestampMs);
       } catch {
         logWarn('useFrameLoop', 'drawImage/getImageData failed (video teardown)');
       }
