@@ -6,6 +6,8 @@ export interface ProcessedSignal {
   timestamp: number;
   rawValue: number;
   filteredValue: number;
+  /** Realce exclusivamente visual, excluido de estimadores y SQI. */
+  displayValue?: number;
   /** SeÃ±al verde suavizada para morfologÃ­a PA (menos AGC que HR) */
   morphologyValue?: number;
   /** Canal 3 del banco de filtros: morfologÃ­a con Bessel de fase lineal (preserva fiduciales) */
@@ -45,6 +47,7 @@ export interface ProcessedSignal {
    */
   accelRespiration?: { rpm: number; quality: number };
   diagnostics?: {
+    continuity?: { epoch: number; valid: boolean; reason: string; overlap: number; agreement: number };
     message: string;
     hasPulsatility: boolean;
     pulsatilityValue: number;

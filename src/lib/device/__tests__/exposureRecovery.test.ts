@@ -93,6 +93,18 @@ describe('recuperación universal de exposición antes del lock', () => {
     expect(control.getDiagnostics().reason).toBe('ev-change-unverified');
   });
 
+  it('la retirada sostenida renueva el presupuesto aunque nunca se alcanzó contacto estable', async () => {
+    const control = new FingerExposureRecovery();
+    const c = camera();
+    await feed(control, c.track, 1000, 6000);
+    expect(control.getDiagnostics().status).toBe('blocked');
+    await feed(control, c.track, 6100, 6700, { sealRatio: 0, tissueRed: 50, clippedRatio: 0 });
+    expect(control.getDiagnostics()).toEqual({ status: 'idle', reason: 'uncovered-new-placement', attempts: 0 });
+    await feed(control, c.track, 6800, 7400);
+    expect(c.calls).toHaveLength(3);
+    expect(control.getDiagnostics().attempts).toBe(1);
+  });
+
   it('respeta el límite inferior de EV sin repetir requests idénticas', async () => {
     const control = new FingerExposureRecovery();
     const c = camera({ ev: -2 });
@@ -108,19 +120,20 @@ describe('recuperación universal de exposición antes del lock', () => {
     const c = camera({ deferred });
     await feed(control, c.track, 1000, 1500);
     const adjustment = control.observe(c.track, CLIPPED, 1600);
-    let lockReady = false;
-    const lock = control.beginFinalLock(c.track).then(value => { lockReady = value; return value; });
+    let locks = 0;
+    const lock = control.lockForFinger(c.track, async (isCurrent, markChange) => { expect(isCurrent()).toBe(true); markChange(); locks++; });
     await Promise.resolve();
-    expect(lockReady).toBe(false);
-    expect(await control.beginFinalLock(c.track)).toBe(false);
+    expect(locks).toBe(0);
+    expect(control.getAcquisitionState().settling).toBe(true);
+    await control.lockForFinger(c.track, async () => { locks++; });
     release();
     await adjustment;
-    expect(await lock).toBe(true);
-    expect(control.isCurrentLock(c.track)).toBe(true);
-    control.finishFinalLock(c.track);
+    await lock;
+    expect(locks).toBe(1);
     await feed(control, c.track, 1700, 6000);
     expect(c.calls).toHaveLength(1);
     expect(control.getDiagnostics().status).toBe('locked');
+    expect(control.getAcquisitionState()).toEqual({ revision: 2, settling: false });
   });
 
   it('un resultado atrasado de otra track no modifica el estado de la nueva', async () => {
@@ -130,12 +143,80 @@ describe('recuperación universal de exposición antes del lock', () => {
     const old = camera({ deferred });
     await feed(control, old.track, 1000, 1500);
     const pending = control.observe(old.track, CLIPPED, 1600);
+    // Let the old request reach the driver, then replace the track.
+    await Promise.resolve();
     control.clear();
     const current = camera();
-    await feed(control, current.track, 2000, 2600);
-    const before = control.getDiagnostics();
-    release(); await pending;
-    expect(control.getDiagnostics()).toEqual(before);
+    await feed(control, current.track, 2000, 2500);
+    const next = control.observe(current.track, CLIPPED, 2600);
+    expect(current.calls).toHaveLength(0);
+    release(); await pending; await next;
     expect(current.calls).toHaveLength(1);
+    expect(control.getDiagnostics()).toEqual({ status: 'waiting', reason: 'awaiting-image-response', attempts: 1 });
+  });
+
+  it('la pérdida y reentrada no reviven el lease de un lock antiguo', async () => {
+    let release!: () => void;
+    const deferred = new Promise<void>(resolve => { release = resolve; });
+    const control = new FingerExposureRecovery();
+    const c = camera();
+    const steps: string[] = [];
+    const first = control.lockForFinger(c.track, async (isCurrent, markChange) => {
+      markChange();
+      steps.push('old-mode');
+      await deferred;
+      if (isCurrent()) steps.push('old-value');
+    });
+    await Promise.resolve();
+    const restore = control.resumeAcquisition(c.track, async (isCurrent, markChange) => {
+      markChange();
+      expect(isCurrent()).toBe(true); steps.push('continuous');
+    });
+    const second = control.lockForFinger(c.track, async (isCurrent, markChange) => {
+      markChange();
+      expect(isCurrent()).toBe(true); steps.push('new-lock');
+    });
+    expect(steps).toEqual(['old-mode']);
+    expect(control.getAcquisitionState().settling).toBe(true);
+    release();
+    await Promise.all([first, restore, second]);
+    expect(steps).toEqual(['old-mode', 'continuous', 'new-lock']);
+    expect(control.getAcquisitionState()).toEqual({ revision: 3, settling: false });
+    expect(control.getDiagnostics().status).toBe('locked');
+  });
+
+  it('restaura después de un EV pendiente y permite recuperar el nuevo contacto', async () => {
+    let release!: () => void;
+    const deferred = new Promise<void>(resolve => { release = resolve; });
+    const control = new FingerExposureRecovery();
+    const c = camera({ deferred });
+    await feed(control, c.track, 1000, 1500);
+    const old = control.observe(c.track, CLIPPED, 1600);
+    await Promise.resolve();
+    let restored = false;
+    const restore = control.resumeAcquisition(c.track, async () => { restored = true; });
+    await control.observe(c.track, CLIPPED, 2000);
+    expect(restored).toBe(false);
+    release(); await old; await restore;
+    expect(restored).toBe(true);
+    await feed(control, c.track, 3000, 3600);
+    expect(c.calls).toHaveLength(2);
+    expect(control.getDiagnostics().attempts).toBe(1);
+  });
+
+  it('una track detenida no ejecuta un lock encolado', async () => {
+    let release!: () => void;
+    const deferred = new Promise<void>(resolve => { release = resolve; });
+    const control = new FingerExposureRecovery();
+    const c = camera({ deferred });
+    await feed(control, c.track, 1000, 1500);
+    const pending = control.observe(c.track, CLIPPED, 1600);
+    await Promise.resolve();
+    let locked = false;
+    const lock = control.lockForFinger(c.track, async () => { locked = true; });
+    Object.defineProperty(c.track, 'readyState', { value: 'ended' });
+    release(); await pending; await lock;
+    expect(locked).toBe(false);
+    expect(control.getAcquisitionState().settling).toBe(false);
   });
 });

@@ -12,6 +12,18 @@ export const CAPTURE_TIMING_DEFAULTS = {
   motionRecoveryMs: 650,
 };
 
+export const SPATIAL_OBSERVATION_DEFAULTS = {
+  regionColumns: 3, regionRows: 3, minMatchedPixels: 12, minRegionPixels: 4,
+  minRegions: 3, minOverlapRatio: 0.6, nominalFrameIntervalMs: 1000 / 30,
+  statisticsTimeConstantMs: 459.3, baselineTimeConstantMs: 2500,
+  maxFrameGapMs: 250, regionNoiseFloor: 0.0015, regionDisagreementFraction: 0.75,
+};
+
+export const OPTICAL_ANALYSIS_DEFAULTS = {
+  maxLogStep: 0.08, amplitudeGain: 4400, greenWeight: 0.75,
+  perfusionWindowMs: 2500, minObservedPerfusionMs: 1000,
+};
+
 /** Recuperación óptica previa al bloqueo manual, sin presuponer marca de cámara. */
 export const CAMERA_EXPOSURE_RECOVERY_DEFAULTS = {
   clippingDwellMs: 600,
@@ -126,8 +138,10 @@ export const PEAK_DETECTION_DEFAULTS = {
   minSQI: 10,
   /** Ventana para emitir pico respecto al frame actual (ms) — ~½ RR @ 45 BPM */
   peakEmitWindowMs: 720,
-  /** Mínimo de muestras en ventana para correr ensemble */
-  minSamplesEnsemble: 48,
+  /** Discrete support floor, in addition to the elapsed observation window. */
+  minSamplesEnsemble: 12,
+  /** Same observed duration at every cadence; 48 samples at the 30 Hz baseline. */
+  minEnsembleWindowMs: 1600,
   /** Ejecutar el ensemble cada 2 muestras válidas: menor carga de CPU principal. */
   ensembleRunStrideFrames: 2,
   /** Ventana suficiente para varias pulsaciones sin recorrer 10 s de historial. */
@@ -162,6 +176,12 @@ export const PEAK_DETECTION_DEFAULTS = {
     SQI_REFERENCE: 48,
   },
 } as const;
+
+/** Keep a physical observation window instead of a 3.2 s penalty at 15 Hz. */
+export function minimumEnsembleSamples(sampleRateHz: number): number {
+  const rate = Number.isFinite(sampleRateHz) && sampleRateHz > 0 ? sampleRateHz : 30;
+  return Math.max(PEAK_DETECTION_DEFAULTS.minSamplesEnsemble, Math.ceil(PEAK_DETECTION_DEFAULTS.minEnsembleWindowMs * rate / 1000 - 1e-6));
+}
 
 /**
  * Constantes DSP centralizadas — única fuente de verdad.

@@ -1,6 +1,6 @@
 import { PPGSignalProcessor } from '../modules/signal-processing/PPGSignalProcessor';
 import type { ProcessedSignal, ProcessingError } from '../types/signal';
-import type { MotionObservation } from '../types/measurements';
+import type { CameraCaptureState, MotionObservation } from '../types/measurements';
 
 let processor: PPGSignalProcessor | null = null;
 
@@ -57,9 +57,9 @@ self.onmessage = async (event: MessageEvent) => {
           self.postMessage({ type: 'frameProcessed' });
           return;
         }
-        const { imageData, timestamp } = data as { imageData: ImageData; timestamp?: number };
+        const { imageData, timestamp, captureState } = data as { imageData: ImageData; timestamp?: number; captureState?: CameraCaptureState };
         try {
-          processor.processFrame(imageData, timestamp);
+          processor.processFrame(imageData, timestamp, captureState);
         } finally {
           // ACK único por frame: signalReady es dato, frameProcessed es control
           // de flujo. Así un error accesorio nunca libera dos veces la misma imagen.

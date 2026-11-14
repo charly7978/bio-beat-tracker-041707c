@@ -27,15 +27,23 @@ function makeFrame(w: number, h: number, r: number, g: number, b: number): Image
 describe('PPGSignalProcessor', () => {
   let proc: PPGSignalProcessor;
   let signals: ProcessedSignal[] = [];
+  let frameTimestampMs = 1_000;
+
+  // Capture time follows the fixture's 30 fps, independently of CPU loop speed.
+  const processFrameAt30Fps = (frame: ImageData): void => {
+    proc.processFrame(frame, frameTimestampMs);
+    frameTimestampMs += 1_000 / 30;
+  };
 
   beforeEach(() => {
     signals = [];
+    frameTimestampMs = 1_000;
     proc = new PPGSignalProcessor((s) => signals.push(s));
     proc.start();
   });
 
   it('reports NO_CONTACT and quality=0 on dark/empty frames', () => {
-    for (let i = 0; i < 10; i++) proc.processFrame(makeFrame(64, 64, 5, 5, 5));
+    for (let i = 0; i < 10; i++) processFrameAt30Fps(makeFrame(64, 64, 5, 5, 5));
     expect(signals.length).toBeGreaterThan(0);
     const last = signals[signals.length - 1];
     expect(last.contactState).toBe('NO_CONTACT');
@@ -48,7 +56,7 @@ describe('PPGSignalProcessor', () => {
     // Simulate noisy red-dominant pulsatile signal
     for (let i = 0; i < 200; i++) {
       const pulse = Math.round(180 + 8 * Math.sin(2 * Math.PI * 1.2 * (i / 30)));
-      proc.processFrame(makeFrame(64, 64, pulse, 90, 70));
+      processFrameAt30Fps(makeFrame(64, 64, pulse, 90, 70));
     }
     for (const s of signals) {
       expect(Number.isFinite(s.filteredValue)).toBe(true);
@@ -61,7 +69,7 @@ describe('PPGSignalProcessor', () => {
   it('progresses contact state when red-dominant pulsatile signal is fed', () => {
     for (let i = 0; i < 120; i++) {
       const pulse = Math.round(180 + 6 * Math.sin(2 * Math.PI * 1.2 * (i / 30)));
-      proc.processFrame(makeFrame(64, 64, pulse, 95, 75));
+      processFrameAt30Fps(makeFrame(64, 64, pulse, 95, 75));
     }
     const states = new Set(signals.map(s => s.contactState));
     // At minimum should leave NO_CONTACT and reach UNSTABLE or STABLE
@@ -69,15 +77,15 @@ describe('PPGSignalProcessor', () => {
   });
 
   it('stop() halts emission of new signals', () => {
-    proc.processFrame(makeFrame(64, 64, 200, 80, 60));
+    processFrameAt30Fps(makeFrame(64, 64, 200, 80, 60));
     proc.stop();
     const before = signals.length;
-    proc.processFrame(makeFrame(64, 64, 200, 80, 60));
+    processFrameAt30Fps(makeFrame(64, 64, 200, 80, 60));
     expect(signals.length).toBe(before);
   });
 
   it('rejects oversaturated (blown out) frames as NO_CONTACT', () => {
-    for (let i = 0; i < 30; i++) proc.processFrame(makeFrame(64, 64, 255, 255, 255));
+    for (let i = 0; i < 30; i++) processFrameAt30Fps(makeFrame(64, 64, 255, 255, 255));
     const last = signals[signals.length - 1];
     expect(last.contactState).toBe('NO_CONTACT');
   });
@@ -87,7 +95,7 @@ describe('PPGSignalProcessor', () => {
       // El usuario acaba de apoyar el dedo y la cámara aún no converge: es el
       // momento en que más necesita la instrucción "apoya el dedo en la lente".
       // Si la evidencia se anulara en cada rechazo, no recibiría ninguna guía.
-      for (let i = 0; i < 10; i++) proc.processFrame(makeFrame(64, 64, 5, 5, 5));
+      for (let i = 0; i < 10; i++) processFrameAt30Fps(makeFrame(64, 64, 5, 5, 5));
 
       const last = signals[signals.length - 1];
       const evidence = last.diagnostics?.placementEvidence as
@@ -103,7 +111,7 @@ describe('PPGSignalProcessor', () => {
     it('expone sellado y perfusión en los diagnósticos del frame', () => {
       for (let i = 0; i < 60; i++) {
         const pulse = Math.round(180 + 6 * Math.sin(2 * Math.PI * 1.2 * (i / 30)));
-        proc.processFrame(makeFrame(64, 64, pulse, 95, 75));
+        processFrameAt30Fps(makeFrame(64, 64, pulse, 95, 75));
       }
 
       const last = signals[signals.length - 1];
@@ -115,7 +123,7 @@ describe('PPGSignalProcessor', () => {
     it('con dedo bien apoyado y pulso real, la guía no pide corregir la presión', () => {
       for (let i = 0; i < 180; i++) {
         const pulse = Math.round(180 + 8 * Math.sin(2 * Math.PI * 1.2 * (i / 30)));
-        proc.processFrame(makeFrame(64, 64, pulse, 95, 75));
+        processFrameAt30Fps(makeFrame(64, 64, pulse, 95, 75));
       }
 
       const last = signals[signals.length - 1];
@@ -138,7 +146,7 @@ describe('PPGSignalProcessor', () => {
       // ejecutaría. Se comprueba que el estado NO es de rechazo en contacto real.
       for (let i = 0; i < 120; i++) {
         const pulse = Math.round(180 + 6 * Math.sin(2 * Math.PI * 1.2 * (i / 30)));
-        proc.processFrame(makeFrame(64, 64, pulse, 95, 75));
+        processFrameAt30Fps(makeFrame(64, 64, pulse, 95, 75));
       }
 
       const last = signals[signals.length - 1];

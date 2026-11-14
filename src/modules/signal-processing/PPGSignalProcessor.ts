@@ -9,16 +9,17 @@ import {
   sanitizeBackpressureConfig,
   type BackpressureConfig,
 } from '../../lib/perf/backpressureConfig';
-import type { MeasurementStatus, SignalQualityMetrics, MotionObservation } from '../../types/measurements';
+import type { MeasurementStatus, SignalQualityMetrics, MotionObservation, CameraCaptureState } from '../../types/measurements';
 import {
   SignalQualityIndex,
   createDiagnosticStatusState,
   type DiagnosticStatusState,
 } from '../signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
-import { CAMERA_EXPOSURE_RECOVERY_DEFAULTS, CAPTURE_TIMING_DEFAULTS, DSP_CONSTANTS } from '../../config/signalProcessing';
+import { CAMERA_EXPOSURE_RECOVERY_DEFAULTS, CAPTURE_TIMING_DEFAULTS, OPTICAL_ANALYSIS_DEFAULTS, DSP_CONSTANTS } from '../../config/signalProcessing';
 import {
   AdaptivePixelRoi,
+  type AdaptivePixelRoiFrame,
   redSeriesCoefficientOfVariation,
 } from '../../lib/signal/adaptivePixelRoi';
 import {
@@ -63,11 +64,6 @@ import {
   updateAcquisition,
   type AcquisitionState,
 } from '../../lib/acquisition/AcquisitionStabilizer';
-import {
-  createActiveStabilizer,
-  stabilizeSample,
-  resetActiveStabilizer,
-} from '../../lib/signal/activeStabilizer';
 import { bandLimitedDominantFreq } from './shared/dsp';
 import { IMU_RESPIRATION_DEFAULTS, RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
 import { resampleTimedSignal, type TimedSignalSample } from '../../lib/signal/timedSamples';
@@ -83,6 +79,7 @@ const log = createLogger('PPGSignalProcessor');
 const MIN_ACCEPTABLE_PPG_FPS = 12;
 
 interface ROIMetrics {
+  spatialObservation: AdaptivePixelRoiFrame['spatialObservation'];
   rawRed: number;
   rawGreen: number;
   rawBlue: number;
@@ -146,6 +143,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   // Buffers (ring buffers Float32 — sin Array.shift O(n) por frame)
   private readonly rawBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
   private readonly filteredBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
+  private readonly filteredTimestampBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
   private readonly redBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
   private readonly greenBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
   private readonly blueBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
@@ -156,6 +154,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly statScratch = new Float32Array(this.ACDC_WINDOW);
   private readonly sortedScratch = new Float32Array(this.ACDC_WINDOW);
   private readonly periodicityScratch = new Float32Array(DSP_CONSTANTS.BUFFER_SIZE);
+  private readonly perfusionTimeScratch = new Float32Array(DSP_CONSTANTS.BUFFER_SIZE);
+  private readonly perfusionValueScratch = new Float32Array(DSP_CONSTANTS.BUFFER_SIZE);
   // Scratch dedicados R/G/B para AC/DC: las 3 ventanas se necesitan vivas a la vez
   // (DC de las 3 antes del early-return, luego AC de cada una). Asignados una vez.
   private readonly acdcRedScratch = new Float32Array(this.ACDC_WINDOW);
@@ -178,6 +178,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private lastFrameTimestamp = 0;
   private lastAcquisitionTimestampMs = 0;
 
+  private analysisAnchor: { red: number; green: number; blue: number } | null = null;
+  private analysisEpoch = 0;
+  private lastSpatialEpoch: number | null = null;
+  private lastCameraRevision: number | null = null;
+  private analysisValid = false;
+  private analysisReason = 'INITIALIZING';
   private frameCount = 0;
   private lastLogTime = 0;
 
@@ -247,7 +253,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private lastRawRedForMotion = 0;
 
   // Acondicionador ACTIVO de seÃ±al (denoise edge-preserving + estabilizaciÃ³n baseline).
-  private readonly activeStabilizer = createActiveStabilizer();
 
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
@@ -265,17 +270,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   // EstabilizaciÃ³n de adquisiciÃ³n (fase inicial de colocaciÃ³n del dedo):
   // fusiona PI/periodicidad/SQI/cobertura/movimiento en una confianza firme.
   private readonly acquisitionState: AcquisitionState = createAcquisitionState();
-
-  // === MULTI-SOURCE RANKING (CHROM eliminado â€” amplifica ruido sin dedo) ===
-  private readonly sourceBuffers: { [key: string]: RingF32 } = {
-    R: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
-    G: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
-    RG: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
-  };
-  private activeSource: string = 'RG';
-  private sourceScores: { [key: string]: number } = { R: 0, G: 0, RG: 0 };
-  private lastSourceSwitch = 0;
-  private readonly SOURCE_HYSTERESIS_MS = 4000;
 
   constructor(
     public onSignalReady?: (signal: ProcessedSignal) => void,
@@ -312,7 +306,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.cameraHints = inferCameraRuntimeHints(diag);
   }
 
-  processFrame(imageData: ImageData, frameTimestampMs?: number): void {
+  processFrame(imageData: ImageData, frameTimestampMs?: number, captureState?: CameraCaptureState): void {
     if (!this.isProcessing || !this.onSignalReady) return;
 
     const timestamp = typeof frameTimestampMs === 'number' && Number.isFinite(frameTimestampMs)
@@ -335,8 +329,22 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.maybeAdaptBackpressure(timestamp);
 
     const endRoi = ppgPerf.start('roi');
-    const roi = this.extractROI(imageData);
+    const roi = this.extractROI(imageData, timestamp);
     endRoi();
+
+    const observation = roi.spatialObservation;
+    const photometricStep = observation.valid && [observation.red, observation.green]
+      .some(channel => Math.abs(channel.fractionalChange) > OPTICAL_ANALYSIS_DEFAULTS.maxLogStep);
+    const observationValid = observation.valid && !captureState?.settling && !photometricStep;
+    const cameraChanged = captureState && this.lastCameraRevision !== null && captureState.revision !== this.lastCameraRevision;
+    if (this.lastSpatialEpoch !== observation.epoch || cameraChanged || (this.analysisValid && !observationValid)) {
+      this.beginAnalysisEpoch();
+    }
+    if (photometricStep || cameraChanged) this.pixelRoi.reset();
+    this.lastSpatialEpoch = observation.epoch;
+    if (captureState) this.lastCameraRevision = captureState.revision;
+    this.analysisValid = observationValid;
+    this.analysisReason = captureState?.settling ? 'CAMERA_SETTLING' : photometricStep ? 'PHOTOMETRIC_STEP' : observation.valid ? 'OBSERVED' : 'SPATIAL_SUPPORT';
 
     this.roiRedPulseRing.push(roi.rawRed);
     const Fpulse = VITAL_THRESHOLDS.FINGER;
@@ -466,16 +474,24 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       return;
     }
 
-    // Tenemos contacto (UNSTABLE o STABLE)
-    this.updateChannelBaselines(roi.rawRed, roi.rawGreen, roi.rawBlue, motionArtifact);
+    if (!observationValid) {
+      this.signalQuality = 0;
+      this.stepAcquisition(false);
+      this.onSignalReady({ timestamp, rawValue: 0, filteredValue: 0, displayValue: 0, quality: 0,
+        fingerDetected: false, contactState: this.contactState, motionArtifact,
+        roi: this.signalRoiFromMetrics(roi), perfusionIndex: 0,
+        rawRed: roi.rawRed, rawGreen: roi.rawGreen, rawBlue: roi.rawBlue,
+        diagnostics: this.buildFingerDiagnostics(roi, motionArtifact, 'NO_VALID_SIGNAL') });
+      return;
+    }
 
-    const zlo = getZlo();
-    const zloAdjR = zlo.calibrated ? Math.max(0, roi.rawRed - zlo.r) : roi.rawRed;
-    const zloAdjG = zlo.calibrated ? Math.max(0, roi.rawGreen - zlo.g) : roi.rawGreen;
-    const zloAdjB = zlo.calibrated ? Math.max(0, roi.rawBlue - zlo.b) : roi.rawBlue;
-    this.redBuffer.push(zloAdjR);
-    this.greenBuffer.push(zloAdjG);
-    this.blueBuffer.push(zloAdjB);
+    this.analysisAnchor ??= { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue };
+    const measuredRed = this.analysisAnchor.red * Math.exp(-observation.red.pulse);
+    const measuredGreen = this.analysisAnchor.green * Math.exp(-observation.green.pulse);
+    const measuredBlue = observation.blue.valid === false ? 0 : this.analysisAnchor.blue * Math.exp(-observation.blue.pulse);
+    this.redBuffer.push(measuredRed);
+    this.greenBuffer.push(measuredGreen);
+    this.blueBuffer.push(measuredBlue);
 
     this.updateSignalMotion(
       roi.rawRed,
@@ -486,9 +502,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (this.redBuffer.length >= 36 && this.frameCount % 2 === 0) {
       this.calculateACDCPrecise();
     }
-    const acPi = this.calculatePerfusionIndex();
-    const pulsePi = this.estimatePulsePiFromRoi();
-    this.cachedPI = Math.max(acPi, pulsePi);
 
     const placementInstant = classifyFingerPlacement({
       coverageRatio: this.smoothedCoverage || roi.coverageRatio,
@@ -503,21 +516,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.placementMode = smoothedPlacement.mode;
     this.placementStreak = smoothedPlacement.streak;
 
-    this.reconcileStableContact();
-
-    // Multi-source extraction
-    const pulseSource = this.extractBestPulseSignal(
-      roi.rawRed,
-      roi.rawGreen,
-      motionArtifact,
-      this.placementMode,
-    );
-    const morphSource = this.extractMorphologySignal(
-      roi.rawRed,
-      roi.rawGreen,
-      roi.rawBlue,
-      this.placementMode,
-    );
+    // Observaciones normalizadas en soporte común. La mezcla queda fija: no
+    // cambia escala/offset en función de la fase ni de la colocación.
+    const pulse = (observation.red.pulse * (1 - OPTICAL_ANALYSIS_DEFAULTS.greenWeight) +
+      observation.green.pulse * OPTICAL_ANALYSIS_DEFAULTS.greenWeight);
+    const pulseSource = { value: pulse * OPTICAL_ANALYSIS_DEFAULTS.amplitudeGain,
+      label: 'SPATIAL_RG', strength: Math.abs(pulse) * 1000 };
+    const morphSource = observation.green.pulse * OPTICAL_ANALYSIS_DEFAULTS.amplitudeGain;
 
     const jitterScale =
       1 -
@@ -529,11 +534,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.rawBuffer.push(pulseValue);
 
     const endFilt = ppgPerf.start('bandpass');
-    // ACONDICIONAMIENTO ACTIVO en vivo: estabiliza la lÃ­nea base (quita deriva) y
-    // hace denoise que PRESERVA los picos sistÃ³licos, ANTES del bandpass â†’ la seÃ±al
-    // que se mide y se muestra es genuinamente mÃ¡s limpia y firme (no recorta el pulso).
-    const stabilizedInput = stabilizeSample(this.activeStabilizer, pulseValue);
-    const filtered = this.bandpassFilter.filter(stabilizedInput);
+    // Un único acondicionamiento lineal tras normalizar cada píxel. El AGC
+    // siguiente es sólo presentación y no vuelve a SQI ni a los estimadores.
+    const filtered = this.bandpassFilter.filter(pulseValue);
     const morphFiltered = this.morphBandpassFilter.filter(morphValue);
     const enhanced = applyPulseAgc(
       this.pulseAgcState,
@@ -544,14 +547,19 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.contactState === 'STABLE_CONTACT',
     );
     endFilt();
-    this.filteredBuffer.push(enhanced);
+    this.filteredBuffer.push(filtered);
+    this.filteredTimestampBuffer.push(timestamp);
+    // Fractional cardiac-band AC, before display AGC. Unfiltered channel drift
+    // and raw scene CV cannot establish pulsatile perfusion.
+    this.cachedPI = this.calculateCardiacPerfusion(timestamp);
+    this.reconcileStableContact();
 
     // === BANCO DE FILTROS POR CANAL VITAL (PPGSignalSplitter) ===
     // Cada signo vital recibe la seÃ±al pre-procesada con los requisitos DSP de su canal.
     const splitOut = this.signalSplitter.process(
-      roi.rawRed,
-      roi.rawGreen,
-      roi.rawBlue,
+      measuredRed,
+      measuredGreen,
+      measuredBlue,
       this.lastKnownBpm,
     );
 
@@ -649,6 +657,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         (hemoglobinScene || ensembleScene) &&
         this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85)) &&
       !motionArtifact &&
+      this.cachedPI >= VITAL_THRESHOLDS.QUALITY.MIN_PI &&
       timestamp >= this.postMotionRecoveryUntilMs;
     const displayQuality = signalPathActive
       ? fingerUi
@@ -688,10 +697,20 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     // Refresca (throttled) la estimaciÃ³n respiratoria del acelerÃ³metro antes de emitir.
     const accelRespiration = this.getAccelRespirationEstimate(timestamp);
 
+    const diagnostics = this.buildFingerDiagnostics(roi, motionArtifact, displayStatus, {
+      message: `${pulseSource.label}:${pulseSource.strength.toFixed(1)} PI:${perfusionIndex.toFixed(4)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.placementMode} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
+      placementMode: this.placementMode, placementHint: placementHintText(this.placementMode),
+      hasPulsatility: fingerUi && (SignalQualityIndex.isClinicallyValid(rawSqiOut, perfusionIndex) ||
+        SignalQualityIndex.isAdequateForLiveVitals(rawSqiOut, perfusionIndex)),
+      pulsatilityValue: this.contactState === 'STABLE_CONTACT' ? perfusionIndex : 0,
+    });
+    diagnostics.continuity.valid = this.analysisValid && signalPathActive;
+    if (!signalPathActive && this.analysisValid) diagnostics.continuity.reason = 'NO_CARDIAC_EVIDENCE';
     this.onSignalReady({
       timestamp,
       rawValue: signalPathActive ? pulseSource.value : 0,
-      filteredValue: signalPathActive ? enhanced : 0,
+      filteredValue: signalPathActive ? filtered : 0,
+      displayValue: signalPathActive ? enhanced : 0,
       morphologyValue: signalPathActive ? morphFiltered : 0,
       // Canales del banco de filtros especializado por signo vital
       morphologyFiltered: signalPathActive ? splitOut.morphology : 0,
@@ -710,22 +729,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       rawBlue: roi.rawBlue,
       accelRespiration: accelRespiration ?? undefined,
       diagnostics: {
-        ...this.buildFingerDiagnostics(roi, motionArtifact, displayStatus, {
-          message:
-            `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
-            `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
-            `C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.placementMode} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
-          placementMode: this.placementMode,
-          placementHint: placementHintText(this.placementMode),
-          hasPulsatility:
-            fingerUi &&
-            (SignalQualityIndex.isClinicallyValid(rawSqiOut, perfusionIndex) ||
-              SignalQualityIndex.isAdequateForLiveVitals(rawSqiOut, perfusionIndex)),
-          pulsatilityValue:
-            this.contactState === 'STABLE_CONTACT'
-              ? Math.max(perfusionIndex, pulseSource.strength * 0.02)
-              : 0,
-        }),
+        ...diagnostics,
         sqm: {
           sqi: rawSqiOut,
           perfusionIndex: perfusionIndex,
@@ -1120,6 +1124,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   ) {
     const coverageRatio = roi.coverageRatio;
     return {
+      continuity: { epoch: this.analysisEpoch, valid: this.analysisValid, reason: this.analysisReason,
+        overlap: roi.spatialObservation.overlapRatio, agreement: roi.spatialObservation.regionAgreement },
       placementEvidence: this.lastPlacementEvidence ?? undefined,
       message:
         extras?.message ??
@@ -1170,9 +1176,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
   }
 
-  private extractROI(imageData: ImageData): ROIMetrics {
-    const frame = this.pixelRoi.processFrame(imageData, this.pixelStride);
+  private extractROI(imageData: ImageData, timestamp: number): ROIMetrics {
+    const frame = this.pixelRoi.processFrame(imageData, this.pixelStride, timestamp);
     return {
+      spatialObservation: frame.spatialObservation,
       rawRed: frame.rawRed,
       rawGreen: frame.rawGreen,
       rawBlue: frame.rawBlue,
@@ -1195,180 +1202,20 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     };
   }
 
-  private updateChannelBaselines(rawRed: number, rawGreen: number, rawBlue: number, motionArtifact: boolean): void {
-    if (this.redBaseline === 0) {
-      this.redBaseline = rawRed;
-      this.greenBaseline = rawGreen;
-      this.blueBaseline = rawBlue;
-      return;
-    }
-
-    // Durante motion el DC salta â€” aceleramos el tracking para evitar que el
-    // bandpass reciba una senal mal normalizada que genera ringing post-motion.
-    // Ademas, si salimos de motion saltamos la baseline al valor actual (el DC
-    // ya cambio y no tiene sentido converger lentamente).
-    const motionAlpha = this.motionScore > 0.3 ? 0.20 : motionArtifact ? 0.12 : 0;
-    const alpha = motionArtifact
-      ? motionAlpha
-      : this.contactState === 'STABLE_CONTACT'
-        ? 0.02
-        : 0.04;
-    const redBlPrev = this.redBaseline;
-    this.redBaseline = this.redBaseline * (1 - alpha) + rawRed * alpha;
-    this.greenBaseline = this.greenBaseline * (1 - alpha) + rawGreen * alpha;
-    this.blueBaseline = this.blueBaseline * (1 - alpha) + rawBlue * alpha;
-    // Si el baseline previo era muy distinto al raw y el nuevo alpha se quedo
-    // corto, aproximamos en un solo salto: el DC ya cambio y la convergencia
-    // lenta solo prolonga el ringing.
-    if (motionArtifact && this.motionScore > 0.3) {
-      const step = Math.abs(rawRed - redBlPrev) / Math.max(1, redBlPrev);
-      if (step > 0.03) {
-        const fastAlpha = clamp(step * 2, 0.15, 0.6);
-        this.redBaseline = this.redBaseline * (1 - fastAlpha) + rawRed * fastAlpha;
-        this.greenBaseline = this.greenBaseline * (1 - fastAlpha) + rawGreen * fastAlpha;
-        this.blueBaseline = this.blueBaseline * (1 - fastAlpha) + rawBlue * fastAlpha;
-      }
-    }
-  }
-
-  // === MULTI-SOURCE COMPETITIVE EXTRACTION ===
-  private extractMorphologySignal(
-    rawRed: number,
-    rawGreen: number,
-    rawBlue: number,
-    placement: FingerPlacementMode,
-  ): number {
-    const gNorm =
-      this.greenBaseline > 0 ? (this.greenBaseline - rawGreen) / this.greenBaseline : 0;
-    const rNorm = this.redBaseline > 0 ? (this.redBaseline - rawRed) / this.redBaseline : 0;
-    const clampMorph = (v: number) => clamp(v, -0.08, 0.08);
-    const gPulse = clampMorph(gNorm);
-    const rPulse = clampMorph(rNorm * 0.35);
-    const greenWeight = placement === 'pad' ? 0.88 : placement === 'tip' ? 0.62 : 0.78;
-    return (gPulse * greenWeight + rPulse * (1 - greenWeight)) * 4000;
-  }
-
-  private extractBestPulseSignal(
-    rawRed: number,
-    rawGreen: number,
-    motionArtifact: boolean,
-    placement: FingerPlacementMode,
-  ): { value: number; label: string; strength: number } {
-    const rNorm = this.redBaseline > 0 ? (this.redBaseline - rawRed) / this.redBaseline : 0;
-    const gNorm = this.greenBaseline > 0 ? (this.greenBaseline - rawGreen) / this.greenBaseline : 0;
-
-    const clampMax = placement === 'pad' ? 0.07 : placement === 'tip' ? 0.05 : 0.06;
-    const clampPulse = (v: number) => clamp(v, -clampMax, clampMax);
-    const rPulse = clampPulse(rNorm);
-    const gPulse = clampPulse(gNorm);
-    const amp = 4400;
-
-    // Contacto iluminado por flash: R/G conservan la modulación compartida
-    // por la sangre. Una proyección que cancela color común puede cancelar ese
-    // pulso y elevar cuantización; no compite como fuente de PPG de contacto.
-    const sources: { [key: string]: number } = {
-      R: rPulse * amp,
-      G: gPulse * amp,
-      RG: this.blendRG(rPulse, gPulse, rawRed, rawGreen, motionArtifact) * amp,
-    };
-
-    // Update per-source buffers (ring auto-evicts mÃ¡s viejo)
-    this.sourceBuffers.R.push(sources.R);
-    this.sourceBuffers.G.push(sources.G);
-    this.sourceBuffers.RG.push(sources.RG);
-
-    // La cadencia observada gobierna el ranking y el reloj de histéresis.
-    if (this.frameCount % Math.max(1, Math.round(this.estimatedSampleRate)) === 0 && this.redBuffer.length >= 60) {
-      this.rankSources(this.lastFrameTimestamp);
-    }
-
-    const value = clamp(sources[this.activeSource] ?? sources['RG'], -95, 95);
-    const strength = Math.max(Math.abs(rPulse), Math.abs(gPulse)) * 1000;
-
-    return { value, label: this.activeSource, strength };
-  }
-
-  private blendRG(rPulse: number, gPulse: number, rawRed: number, rawGreen: number, motionArtifact: boolean): number {
-    const redPI = this.redDC > 0 ? this.redAC / this.redDC : 0;
-    const greenPI = this.greenDC > 0 ? this.greenAC / this.greenDC : 0;
-    const piSum = redPI + greenPI;
-
-    // Verde tiene mejor SNR para HR en PPG por cÃ¡mara (Tyapochkin 2019, OpenPPG 2025)
-    let greenWeight = 0.75;
-    let redWeight = 0.25;
-
-    if (piSum > 0) {
-      greenWeight = clamp(greenPI / piSum, 0.65, 0.92);
-      redWeight = 1 - greenWeight;
-    }
-
-    // Clipping: reducir peso del canal saturado sin invertir completamente la mezcla
-    if (rawGreen > 248) { greenWeight = clamp(greenWeight * 0.25, 0.15, 0.5); redWeight = 1 - greenWeight; }
-    else if (rawRed > 248) { redWeight = clamp(redWeight * 0.25, 0.15, 0.5); greenWeight = 1 - redWeight; }
-    
-    if (this.placementMode === 'pad') {
-      greenWeight = clamp(greenWeight + 0.12, 0.72, 0.95);
-      redWeight = 1 - greenWeight;
-    } else if (this.placementMode === 'tip') {
-      greenWeight = clamp(greenWeight - 0.08, 0.38, 0.72);
-      redWeight = 1 - greenWeight;
-    } else if (this.contactState === 'STABLE_CONTACT' && !motionArtifact) {
-      greenWeight = clamp(greenWeight + 0.15, 0.6, 0.95);
-      redWeight = 1 - greenWeight;
-    }
-
-    return rPulse * redWeight + gPulse * greenWeight;
-  }
-
-  private rankSources(now: number): void {
-    // Hysteresis: don't switch too often
-    if (this.lastSourceSwitch > 0 && now - this.lastSourceSwitch < this.SOURCE_HYSTERESIS_MS) return;
-
-    let bestSource = this.activeSource;
-    let bestScore = -1;
-
-    for (const key of Object.keys(this.sourceBuffers)) {
-      const buf = this.sourceBuffers[key];
-      if (buf.length < 45) continue;
-
-      const recent = buf.tail(90);
-      const score = this.computeSourceScore(recent);
-      this.sourceScores[key] = score;
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestSource = key;
-      }
-    }
-
-    // Solo cambia si la nueva fuente es CLARAMENTE mejor (>50%). Umbral alto +
-    // histÃ©resis larga (4 s) â†’ el switching R/G/RG es raro: evita los saltos de
-    // escala/offset al alternar fuente, que se veÃ­an como onda inestable/ruidosa.
-    const currentScore = this.sourceScores[this.activeSource] ?? 0;
-    if (bestSource !== this.activeSource && bestScore > currentScore * 1.5) {
-      this.activeSource = bestSource;
-      this.lastSourceSwitch = now;
-    }
-  }
-
-  private computeSourceScore(buffer: number[]): number {
-    if (buffer.length < 30) return 0;
-
-    const sorted = [...buffer].sort((a, b) => a - b);
-    const p10 = sorted[Math.floor(sorted.length * 0.1)] ?? 0;
-    const p90 = sorted[Math.floor(sorted.length * 0.9)] ?? 0;
-    const range = p90 - p10;
-    if (range < 0.3) return 0;
-
-    const mean = buffer.reduce((a, b) => a + b, 0) / buffer.length;
-    const variance = buffer.reduce((a, v) => a + (v - mean) ** 2, 0) / buffer.length;
-    const snr = range / (Math.sqrt(variance) + 0.1);
-
-    // Check for clipping
-    const clipped = buffer.filter(v => Math.abs(v) > 70).length / buffer.length;
-    const clipPenalty = clipped * 30;
-
-    return Math.max(0, snr * 15 - clipPenalty);
+  /** Segmento nuevo sin borrar evidencia óptica ni volver a exigir centrado. */
+  private beginAnalysisEpoch(): void {
+    this.analysisEpoch++;
+    this.analysisAnchor = null;
+    this.rawBuffer.reset(); this.filteredBuffer.reset();
+    this.filteredTimestampBuffer.reset();
+    this.redBuffer.reset(); this.greenBuffer.reset(); this.blueBuffer.reset();
+    this.bandpassFilter.reset(); this.morphBandpassFilter.reset(); this.signalSplitter.reset();
+    resetPulseAgc(this.pulseAgcState);
+    this.cachedPI = 0; this.cachedPeriodicity = 0; this.periodicityEma = 0;
+    this.cachedSqi = 0; this.displaySqiEma = 0;
+    this.redAC = 0; this.greenAC = 0; this.blueAC = 0;
+    this.redDC = 0; this.greenDC = 0; this.blueDC = 0;
+    Object.assign(this.acquisitionState, createAcquisitionState());
   }
 
   private calculateACDCPrecise(): void {
@@ -1465,32 +1312,24 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return maxCorr;
   }
 
-  private calculatePerfusionIndex(): number {
-    // PI como ratio (0.0-1.0), NO porcentaje. La UI multiplica *100 para display.
-    if (this.greenDC > 0) return this.greenAC / this.greenDC;
-    if (this.redDC > 0) return this.redAC / this.redDC;
-    return 0;
-  }
-
-  /** PI proxy desde CV temporal del ROI (antes de que ACDC llene la ventana). */
-  private estimatePulsePiFromRoi(): number {
-    const snap = this.rgbSnapshotFromSmoothed();
-    if (isOpenFlashWithoutContact(snap)) return 0;
-    if (
-      isExposureFlickerNotFingerPulse(
-        this.lastRoiRedCv,
-        snap,
-        VITAL_THRESHOLDS.FINGER.ACQUIRE_RB_STRICT,
-      )
-    ) {
-      return 0;
+  private calculateCardiacPerfusion(timestamp: number): number {
+    const values = this.perfusionValueScratch;
+    const times = this.perfusionTimeScratch;
+    const length = this.filteredBuffer.copyTailInto(values, this.filteredBuffer.length);
+    this.filteredTimestampBuffer.copyTailInto(times, length);
+    const cutoff = timestamp - OPTICAL_ANALYSIS_DEFAULTS.perfusionWindowMs;
+    let first = length - 1;
+    while (first > 0 && times[first - 1] >= cutoff) first--;
+    const count = length - first;
+    if (count < 3 || timestamp - times[first] < OPTICAL_ANALYSIS_DEFAULTS.minObservedPerfusionMs) return 0;
+    let sum = 0, squareSum = 0;
+    for (let i = first; i < length; i++) {
+      sum += values[i]; squareSum += values[i] * values[i];
     }
-    const cv = this.lastRoiRedCv;
-    if (cv < VITAL_THRESHOLDS.FINGER.ROI_RED_CV_MIN * 0.75) return 0;
-    if (this.lastEnsembleScore < VITAL_THRESHOLDS.FINGER.ENSEMBLE_FINGER_THRESHOLD * 0.6) {
-      if (!hasFingerHemoglobinSignature(snap)) return 0;
-    }
-    return clamp(cv * 0.016, 0.00012, 0.01);
+    const variance = Math.max(0, squareSum / count - (sum / count) ** 2);
+    // Small-signal log absorption ≈ AC/DC. This is an optical amplitude
+    // proxy on camera bytes, not an absolute or clinically calibrated PI.
+    return Math.sqrt(2 * variance) / OPTICAL_ANALYSIS_DEFAULTS.amplitudeGain;
   }
 
   private resetBaselines(): void {
@@ -1500,17 +1339,16 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private resetSignalTrackingBuffers(): void {
+    this.analysisAnchor = null;
     this.rawBuffer.reset();
     this.filteredBuffer.reset();
+    this.filteredTimestampBuffer.reset();
     this.redBuffer.reset();
     this.greenBuffer.reset();
     this.blueBuffer.reset();
     this.redDC = 0; this.redAC = 0;
     this.greenDC = 0; this.greenAC = 0;
     this.blueDC = 0; this.blueAC = 0;
-    this.sourceBuffers.R.reset();
-    this.sourceBuffers.G.reset();
-    this.sourceBuffers.RG.reset();
     this.bandpassFilter.reset();
     this.morphBandpassFilter.reset();
     this.signalSplitter.reset();
@@ -1520,8 +1358,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.lastRoiRedCv = 0;
     this.signalMotionScore = 0;
     this.lastRawRedForMotion = 0;
-    this.pixelRoi.reset();
-    resetActiveStabilizer(this.activeStabilizer);
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
     // Resetear contadores y caches para que el WARMUP gate (frameCount < 28)
@@ -1554,6 +1390,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   reset(): void {
+    this.pixelRoi.reset();
     resetPlacementEvidence();
     this.lastPlacementEvidence = null;
     this.resetSignalTrackingBuffers();
@@ -1567,9 +1404,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.instantLostStreak = 0;
     this.lastInstantFinger = false;
     this.resetMotionAcquisition();
-    this.sourceScores = { R: 0, G: 0, RG: 0 };
-    this.activeSource = 'RG';
-    this.lastSourceSwitch = 0;
     this.bandpassFilter.setSampleRate(this.estimatedSampleRate);
     this.morphBandpassFilter.setSampleRate(this.estimatedSampleRate);
     Object.assign(this.acquisitionState, createAcquisitionState());
@@ -1869,7 +1703,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return {
       pixelStride: this.pixelStride,
       estimatedSampleRate: this.estimatedSampleRate,
-      activeSource: this.activeSource,
+      activeSource: 'SPATIAL_RG',
       config: { ...this.backpressureConfig },
     };
   }

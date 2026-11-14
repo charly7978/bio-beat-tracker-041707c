@@ -56,7 +56,7 @@ La medición **no asume** torch ni FPS solicitados: baja `confidence` o bloquea 
 
 - **Lock secuencial**: `stabilizeTrack` deja AE/AWB en `continuous` durante la colocación; al entrar en `STABLE_CONTACT`, `optimizeForFinger` aplica `focusMode`, `whiteBalanceMode` y `exposureMode` en llamadas `advanced` separadas (modo primero, valor después) porque Chrome ignora el valor de exposición enviado junto al cambio de modo y un entry fallido bloquea los siguientes. La verificación se hace leyendo `getSettings()`, no la constraint enviada.
 - **Recuperación antes del lock**: la fotometría incluye tejido y fracción recortada incluso cuando el ROI todavía no puede confirmar pulso. Si el recorte de un dedo sellado persiste, se reduce compensación EV sólo con AE automático y controles/rango/valor reales disponibles. Hay dwell, cooldown, límite de intentos y verificación de settings/respuesta de imagen. La operación termina antes de fijar el ISP; no convierte píxeles saturados en señal válida.
-- **Valores fijados**: foco a distancia mínima, WB manual con `colorTemperature` actual (único valor WB expuesto por la API web) e ISO/tiempo de exposición hacia rojo ≈180 (sin clipping; el ROI rechaza R ≥ 250). El tiempo de integración se fija explícitamente porque en exposición manual es significativo y una ventana larga actúa como low-pass sobre la AC.
+- **Valores fijados**: foco cercano según capacidades; al confirmar contacto estable, se capturan ISO, tiempo de exposición y temperatura WB **antes** de cambiar modos. Se conservan esos valores medidos en llamadas separadas, sin salto de ganancia hacia un rojo objetivo. Si el valor manual no queda verificado, se intenta restaurar el modo continuo. Al perder contacto se restauran AE/AWB continuos; las transiciones se serializan y cancelan por generación. La revisión ISP y el estado pendiente viajan con cada cuadro al Worker para abrir un segmento nuevo y excluir muestras durante constraints.
 - **Límite conocido del web**: el tone mapping adaptativo de Android (`toneMappingMode` de Camera2) no es accesible desde `getUserMedia`; bloquear AE/AWB y evitar la saturación reduce su variación, pero no se declara linealidad fotométrica ni se usa para cocientes clínicos.
 - **Timestamps**: `resolveFrameClock` usa `captureTime` (captura real del sensor) con `presentationTime` como respaldo y `now` solo como último recurso; `mediaTime` identifica frames pero no es reloj. `captureTime` y `presentationTime` comparten la base de `performance.now()`; una desviación > 250 ms se trata como otra época y se descarta.
 - **Co-ubicación lente↔flash**: escaneo de 500 ms con torch; `lens-covered-dark` solo se emite con torch confirmado por `getSettings()` (diagnóstico de colocación, nunca gate de medición).
@@ -66,12 +66,12 @@ La medición **no asume** torch ni FPS solicitados: baja `confidence` o bloquea 
 `PPGSignalProcessor` + `adaptivePixelRoi` / `fingerSceneClassifier`:
 
 - Ventana de búsqueda adaptativa que sigue el centroide de la máscara; el ROI publicado es el bounding box de los píxeles válidos, no un cuadrado fijo.
-- Máscara **Beer-Lambert diferencial** por píxel: densidad óptica temporal en verde, AC/DC en [0.1%, 3%], exclusión estricta de saturación (R ≥ 250) y subexposición (R ≤ 15).
-- Agregación ponderada por pulsatilidad OD y actividad |ΔOD| — sin promedio estático ni fusión fija por celdas.
-- **Anti-jitter espacial**: correlación Jaccard de la máscara entre `t` y `t−1` + desplazamiento de centroide; la señal se atenúa antes de entrar al detector de latidos y el movimiento se fusiona con el IMU.
+- La fotometría RGB describe la escena expuesta completa; la evidencia de tejido y perfusión se calcula por separado. El pulso compara sitios de tejido en las mismas coordenadas consecutivas, con DC lento propio por canal; un cambio de pertenencia a la máscara fisiológica no cambia los pesos de la onda.
+- Las observaciones de absorbancia relativa se agregan por mediana entre regiones. Se publican soporte común, acuerdo espacial y validez por canal; azul oscuro/recortado no invalida R/G. Un sitio nuevo no hereda el DC del sitio que salió. Recorte rojo (R ≥ 250) y subexposición (R ≤ 15) siguen excluidos. Es una medida relativa sobre bytes del ISP, no una calibración óptica.
+- **Movimiento**: Jaccard del tejido y desplazamiento del centroide, fusionados con IMU. El filtro temporal es lineal y la mezcla R/G fija. La amplitud usada como evidencia de pulso se mide en la banda cardíaca sobre 2.5 s de muestras observadas, con al menos 1 s de soporte; la deriva lenta y el AGC de presentación no acreditan perfusión. Observaciones sin esa evidencia no entran al detector.
 - La política de contacto es común a todas las marcas. FPS y jitter observados pueden ampliar la tolerancia temporal; el user agent no acredita calidad ni cambia umbrales.
 - Los cuadros se deduplican por identidad de vídeo, nunca por brillo: dos cuadros nuevos pueden contener píxeles iguales. Los timestamps repetidos o invertidos no entran al DSP; pausas mayores de 250 ms abren una ventana nueva en PPG y latidos.
-- Las fuentes de pulso son R, G y R–G ponderadas. La proyección POS no compite en PPG por contacto: en el caso de regresión con modulación RGB común elevaba cuantización y deformaba la onda. La histéresis de selección usa el reloj de captura.
+- La onda usa una mezcla fija de absorbancia R/G sobre soporte común. `filteredValue` conserva el filtro lineal para estimación; `displayValue` contiene el AGC de presentación. Los cambios de soporte, cámara y pausas abren una época nueva, sin RR entre segmentos.
 - **No se acepta dedo solo por color**: hace falta evidencia pulsátil (perfusión, estabilidad temporal).
 - Estados: `NO_CONTACT`, `UNSTABLE_CONTACT`, `VALID_CONTACT`, saturación, movimiento, etc.
 
@@ -83,7 +83,7 @@ Basado en medias móviles de evento (MApeak / MAbeat), offset adaptativo, un pic
 
 ### Ensemble (`PeakDetectionEnsemble.ts`)
 
-1. Ejecuta `ElgendiPeakDetector` sobre la ventana PPG.
+1. Ejecuta `ElgendiPeakDetector` sobre la ventana PPG. La ruta en vivo indica que la entrada ya está filtrada y evita un segundo filtro sobre cada ventana creciente; las entradas crudas conservan su acondicionamiento. El mínimo temporal del ensemble equivale a 1.6 s a cualquier cadencia (48 muestras a 30 Hz), con un piso discreto de 12 muestras.
 2. Puntuación de picos individual con `scorePeakCandidate` (SQI + perfusión + RR + acuerdo Elgendi).
 3. Devuelve `PeakDetectionResult`: `peaks`, `peakTimes`, `peakScores`, `rrIntervalsMs`, `bpmInstant`, `confidence`, `agreement`, `diagnostics` (incluye `elgendiPeakTimes`, `elgendiConfidence`, `fusedPeakTimes` para UI).
 
@@ -126,7 +126,7 @@ npm run check:all
 npm run check:architecture
 ```
 
-Tests relevantes: `Detectors.test.ts`, `PPGSignalProcessor.test.ts`, `adaptivePixelRoi.test.ts`, `resolveAcquisitionStatus.test.ts`.
+Tests relevantes: `Detectors.test.ts`, `PPGSignalProcessor.test.ts`, `adaptivePixelRoi.test.ts`, `acquisitionEnvelope.test.ts`, `CameraView.test.ts`, `exposureRecovery.test.ts`, `resolveAcquisitionStatus.test.ts`. Diseño y mediciones reproducibles: `docs/acquisition-observation-design.md`.
 
 ## Limitaciones explícitas
 

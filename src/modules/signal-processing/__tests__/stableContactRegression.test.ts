@@ -34,16 +34,24 @@ function makeFrame(w: number, h: number, r: number, g: number, b: number): Image
 describe('STABLE_CONTACT no se alcanza sin pulso real (anti falso-positivo)', () => {
   let proc: PPGSignalProcessor;
   let signals: ProcessedSignal[] = [];
+  let frameTimestampMs = 1_000;
+
+  // Capture time follows the fixture's 30 fps, independently of CPU loop speed.
+  const processFrameAt30Fps = (frame: ImageData): void => {
+    proc.processFrame(frame, frameTimestampMs);
+    frameTimestampMs += 1_000 / 30;
+  };
 
   beforeEach(() => {
     signals = [];
+    frameTimestampMs = 1_000;
     proc = new PPGSignalProcessor((s) => signals.push(s));
     proc.start();
   });
 
   it('escena roja CONSTANTE (flash sin pulso) nunca llega a STABLE_CONTACT', () => {
     for (let i = 0; i < 300; i++) {
-      proc.processFrame(makeFrame(64, 64, 200, 80, 60));
+      processFrameAt30Fps(makeFrame(64, 64, 200, 80, 60));
     }
     const states = signals.map(s => s.contactState);
     expect(states).not.toContain('STABLE_CONTACT');
@@ -53,7 +61,7 @@ describe('STABLE_CONTACT no se alcanza sin pulso real (anti falso-positivo)', ()
     // Deriva DC lenta: el PI instantáneo por frame es ~0 — no hay pulso.
     for (let i = 0; i < 300; i++) {
       const r = 180 + Math.round(4 * (i / 300));
-      proc.processFrame(makeFrame(64, 64, r, 80, 60));
+      processFrameAt30Fps(makeFrame(64, 64, r, 80, 60));
     }
     const states = signals.map(s => s.contactState);
     expect(states).not.toContain('STABLE_CONTACT');
@@ -64,7 +72,7 @@ describe('STABLE_CONTACT no se alcanza sin pulso real (anti falso-positivo)', ()
     // 1.2 Hz, AC≈4-8% del DC por canal — típico de un dedo bien perfundido.
     for (let i = 0; i < 300; i++) {
       const s = Math.sin(2 * Math.PI * 1.2 * (i / 30));
-      proc.processFrame(makeFrame(64, 64,
+      processFrameAt30Fps(makeFrame(64, 64,
         Math.round(180 + 8 * s),
         Math.round(95 + 5 * s),
         Math.round(75 + 4 * s)));
@@ -73,3 +81,4 @@ describe('STABLE_CONTACT no se alcanza sin pulso real (anti falso-positivo)', ()
     expect(states).toContain('STABLE_CONTACT');
   });
 });
+

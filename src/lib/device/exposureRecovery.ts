@@ -37,10 +37,16 @@ export class FingerExposureRecovery {
   private track: MediaStreamTrack | null = null;
   private generation = 0;
   private pending: Promise<void> | null = null;
+  // Keep the hardware queue even when a contact/track is invalidated: an
+  // applyConstraints already sent to the driver cannot be cancelled.
+  private queue: Promise<void> = Promise.resolve();
+  private acquisitionRevision = 0;
+  private transitionsPending = 0;
   private finalLockRequested = false;
-  private finalLockInFlight = false;
+  private acquisitionRestoring = false;
   private lastObservationMs: number | null = null;
   private clippingSinceMs: number | null = null;
+  private uncoveredSinceMs: number | null = null;
   private lastAttemptMs: number | null = null;
   private previousImage: FingerExposurePhotometry | null = null;
   private noProgress = 0;
@@ -53,9 +59,10 @@ export class FingerExposureRecovery {
     this.track = null;
     this.pending = null;
     this.finalLockRequested = false;
-    this.finalLockInFlight = false;
+    this.acquisitionRestoring = false;
     this.lastObservationMs = null;
     this.clippingSinceMs = null;
+    this.uncoveredSinceMs = null;
     this.lastAttemptMs = null;
     this.previousImage = null;
     this.noProgress = 0;
@@ -75,36 +82,83 @@ export class FingerExposureRecovery {
     return { status: this.status, reason: this.reason, attempts: this.attempts };
   }
 
-  /** Called synchronously before optimizeForFinger starts changing ISP modes. */
-  async beginFinalLock(track: MediaStreamTrack): Promise<boolean> {
+  getAcquisitionState(): { revision: number; settling: boolean } {
+    return { revision: this.acquisitionRevision, settling: this.transitionsPending > 0 };
+  }
+
+  private transition(
+    track: MediaStreamTrack,
+    generation: number,
+    operation: (isCurrent: () => boolean, markChange: () => void) => Promise<void>,
+  ): Promise<void> {
+    const isCurrent = () => this.generation === generation && this.track === track && track.readyState === 'live';
+    this.transitionsPending++;
+    const next = this.queue.then(async () => {
+      if (isCurrent()) {
+        let marked = false;
+        const markChange = () => {
+          if (!marked && isCurrent()) { this.acquisitionRevision++; marked = true; }
+        };
+        await operation(isCurrent, markChange);
+      }
+    }).finally(() => { this.transitionsPending--; });
+    this.queue = next.catch(() => undefined);
+    return next;
+  }
+
+  /** Wait before retiring a track so an earlier driver request cannot race teardown. */
+  whenIdle(): Promise<void> { return this.queue; }
+
+  /** Invalidate the old lock immediately, then restore AE/AWB after pending work. */
+  resumeAcquisition(
+    track: MediaStreamTrack,
+    restore: (isCurrent: () => boolean, markChange: () => void) => Promise<void>,
+  ): Promise<void> {
     this.bind(track);
-    if (this.finalLockInFlight || track.readyState !== 'live') return false;
+    // Reset evidence and retry limits for the next placement, retaining queue.
+    this.clear();
+    this.track = track;
+    this.acquisitionRestoring = true;
+    this.status = 'waiting';
+    this.reason = 'restoring-automatic-camera';
+    return this.transition(track, this.generation, async (isCurrent, markChange) => {
+      try { await restore(isCurrent, markChange); }
+      finally {
+        if (isCurrent()) {
+          this.acquisitionRestoring = false;
+          this.status = 'idle';
+          this.reason = 'waiting-for-photometry';
+        }
+      }
+    });
+  }
+
+  /** One lock per placement; every step must check the generation lease. */
+  lockForFinger(
+    track: MediaStreamTrack,
+    lock: (isCurrent: () => boolean, markChange: () => void) => Promise<void>,
+  ): Promise<void> {
+    this.bind(track);
+    if (this.finalLockRequested || track.readyState !== 'live') return Promise.resolve();
     this.finalLockRequested = true;
-    this.finalLockInFlight = true;
-    const generation = this.generation;
-    if (this.pending) await this.pending;
-    if (this.generation !== generation || this.track !== track || track.readyState !== 'live') return false;
-    this.status = 'locked';
-    this.reason = 'stable-contact-lock';
-    return true;
-  }
-
-  isCurrentLock(track: MediaStreamTrack): boolean {
-    return this.track === track && this.finalLockRequested && this.finalLockInFlight && track.readyState === 'live';
-  }
-
-  finishFinalLock(track: MediaStreamTrack): void {
-    if (this.track === track) this.finalLockInFlight = false;
+    return this.transition(track, this.generation, async (isCurrent, markChange) => {
+      await lock(isCurrent, markChange);
+      if (isCurrent()) {
+        this.status = 'locked';
+        this.reason = 'stable-contact-lock';
+      }
+    });
   }
 
   observe(track: MediaStreamTrack, p: FingerExposurePhotometry, timestampMs: number): Promise<void> {
     this.bind(track);
-    if (this.pending) return this.pending;
-    if (this.finalLockRequested || track.readyState !== 'live' || this.status === 'unsupported' || this.status === 'blocked') {
+    if (this.acquisitionRestoring || this.finalLockRequested || track.readyState !== 'live') {
       return Promise.resolve();
     }
+    if (this.pending) return this.pending;
     if (!Number.isFinite(timestampMs) || timestampMs <= 0 || !validPhotometry(p)) {
       this.clippingSinceMs = null;
+      this.uncoveredSinceMs = null;
       this.reason = 'invalid-photometry';
       return Promise.resolve();
     }
@@ -112,10 +166,28 @@ export class FingerExposureRecovery {
       if (timestampMs === this.lastObservationMs) return Promise.resolve();
       if (timestampMs < this.lastObservationMs || timestampMs - this.lastObservationMs > C.observationGapMs) {
         this.clippingSinceMs = null;
+        this.uncoveredSinceMs = null;
       }
       if (timestampMs < this.lastObservationMs) this.lastAttemptMs = null;
     }
     this.lastObservationMs = timestampMs;
+    // Recovery can fail before the DSP ever confirms contact. A sustained
+    // uncovered lens starts a new placement budget without requiring a lock.
+    if (p.sealRatio < VITAL_THRESHOLDS.PRESSURE.COVER_MIN) {
+      this.uncoveredSinceMs ??= timestampMs;
+      this.clippingSinceMs = null;
+      if (timestampMs - this.uncoveredSinceMs >= C.clippingDwellMs && this.status !== 'unsupported') {
+        this.attempts = 0;
+        this.noProgress = 0;
+        this.previousImage = null;
+        this.lastAttemptMs = null;
+        this.status = 'idle';
+        this.reason = 'uncovered-new-placement';
+      }
+      return Promise.resolve();
+    }
+    this.uncoveredSinceMs = null;
+    if (this.status === 'unsupported' || this.status === 'blocked') return Promise.resolve();
     const clippedFinger = p.sealRatio >= VITAL_THRESHOLDS.PRESSURE.COVER_GOOD &&
       p.tissueRed >= VITAL_THRESHOLDS.PIXEL_ROI.SATURATION_RED && p.clippedRatio >= C.clippedFraction;
     if (!clippedFinger) {
@@ -143,14 +215,16 @@ export class FingerExposureRecovery {
       }
     }
     const generation = this.generation;
-    const operation = this.apply(track, p, timestampMs, generation).finally(() => {
+    const operation = this.transition(track, generation, async (_isCurrent, markChange) => {
+      await this.apply(track, p, timestampMs, generation, markChange);
+    }).finally(() => {
       if (this.pending === operation) this.pending = null;
     });
     this.pending = operation;
     return operation;
   }
 
-  private async apply(track: MediaStreamTrack, image: FingerExposurePhotometry, timestampMs: number, generation: number): Promise<void> {
+  private async apply(track: MediaStreamTrack, image: FingerExposurePhotometry, timestampMs: number, generation: number, markChange: () => void): Promise<void> {
     try {
       const caps = (track.getCapabilities?.() ?? {}) as ExposureCapabilities;
       const before = (track.getSettings?.() ?? {}) as ExposureSettings;
@@ -170,6 +244,7 @@ export class FingerExposureRecovery {
       this.attempts++;
       this.lastAttemptMs = timestampMs;
       this.previousImage = { ...image };
+      markChange();
       await track.applyConstraints({ advanced: [{ exposureCompensation: target } as MediaTrackConstraintSet] });
       if (this.generation !== generation || this.track !== track || track.readyState !== 'live') return;
       const after = (track.getSettings?.() ?? {}) as ExposureSettings;

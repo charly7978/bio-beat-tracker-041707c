@@ -183,6 +183,7 @@ const Index = () => {
   useEffect(() => {
     const cs = lastSignal?.contactState;
     if (cs === 'NO_CONTACT' || cs == null) {
+      if (exposureLockedRef.current) cameraRef.current?.resumeFingerAcquisition();
       exposureLockedRef.current = false;
       return;
     }

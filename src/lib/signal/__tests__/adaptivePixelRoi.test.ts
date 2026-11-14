@@ -128,7 +128,7 @@ describe('AdaptivePixelRoi — máscara por píxel', () => {
     expect(last.rawRed).toBeLessThan(190);
   });
 
-  it('pondera la agregación hacia la región con pulsatilidad real', () => {
+  it('mantiene el RGB de escena independiente de la selección fisiológica', () => {
     const roi = new AdaptivePixelRoi();
     const w = 180;
     const frameAt = (t: number) =>
@@ -141,9 +141,133 @@ describe('AdaptivePixelRoi — máscara por píxel', () => {
     let last = roi.processFrame(frameAt(0), 3);
     for (let t = 1; t < 60; t++) last = roi.processFrame(frameAt(t), 3);
 
-    expect(last.rawRed).toBeGreaterThan(180);
+    expect(last.rawRed).toBeGreaterThan(165);
+    expect(last.rawRed).toBeLessThan(175);
+    expect(last.physiologicalPixels).toBeGreaterThan(0);
     expect(last.rawGreen).toBeGreaterThan(90);
     expect(last.rawGreen).toBeLessThan(102);
+  });
+
+  it('no crea modulación roja cuando solo pulsa el verde de regiones con DC distintos', () => {
+    const roi = new AdaptivePixelRoi();
+    const raw: number[] = [];
+    const redPulse: number[] = [];
+    for (let t = 0; t < 240; t++) {
+      const phase = Math.sin(2 * Math.PI * 1.2 * t / 30);
+      const out = roi.processFrame(makeFrame(180, 180, x =>
+        x < 90 ? [140, 96 + phase, 70] : [220, 96 + 2 * phase, 70]), 3, t * 1000 / 30);
+      if (t > 120) {
+        expect(out.spatialObservation.valid).toBe(true);
+        raw.push(out.rawRed);
+        redPulse.push(out.spatialObservation.red.pulse);
+        expect(out.spatialObservation.red.fractionalChange).toBe(0);
+      }
+    }
+    expect(Math.max(...raw) - Math.min(...raw)).toBeLessThan(1e-10);
+    expect(Math.max(...redPulse) - Math.min(...redPulse)).toBeLessThan(1e-10);
+  });
+
+  it('compara el mismo soporte aunque se desplace la búsqueda sobre una escena estática', () => {
+    const roi = new AdaptivePixelRoi();
+    const frame = makeFrame(180, 180, x => x < 120 ? [100 + x, 96, 70] : [5, 4, 3]);
+    let minRaw = Infinity;
+    let maxRaw = -Infinity;
+    for (let t = 0; t < 30; t++) {
+      const out = roi.processFrame(frame, 3, t * 1000 / 30);
+      minRaw = Math.min(minRaw, out.rawRed); maxRaw = Math.max(maxRaw, out.rawRed);
+      if (t > 0) {
+        expect(out.spatialObservation.valid).toBe(true);
+        expect(out.spatialObservation.red.fractionalChange).toBe(0);
+        expect(out.spatialObservation.red.pulse).toBe(0);
+      }
+    }
+    // The scene DC really changes with the scan; its paired pulse remains zero.
+    expect(maxRaw - minRaw).toBeGreaterThan(4);
+  });
+
+  it('el soporte que entra o sale no inyecta diferencias de DC en el pulso', () => {
+    const roi = new AdaptivePixelRoi();
+    const both = makeFrame(180, 180, x => x < 90 ? [140, 96, 70] : [220, 96, 70]);
+    const clipped = makeFrame(180, 180, x => x < 90 ? [140, 96, 70] : [255, 255, 255]);
+    let before = roi.processFrame(both);
+    for (let i = 0; i < 14; i++) before = roi.processFrame(both);
+    const after = roi.processFrame(clipped);
+    expect(before.rawRed - after.rawRed).toBeGreaterThan(30);
+    expect(after.spatialObservation.red.current).toBe(140);
+    expect(after.spatialObservation.red.previous).toBe(140);
+    expect(after.spatialObservation.red.fractionalChange).toBe(0);
+    expect(after.spatialObservation.red.pulse).toBe(0);
+    expect(after.spatialObservation.valid).toBe(false);
+    expect(after.spatialObservation.epoch).toBeGreaterThan(before.spatialObservation.epoch);
+    const returned = roi.processFrame(both);
+    expect(returned.spatialObservation.red.fractionalChange).toBe(0);
+    expect(returned.spatialObservation.red.pulse).toBe(0);
+  });
+
+  it('descarta la memoria fisiológica tras exclusión y exige historia consecutiva nueva', () => {
+    const roi = new AdaptivePixelRoi();
+    let out = roi.processFrame(makeFrame(150, 150, () => [180, 96, 70]));
+    for (let t = 1; t < 120; t++) {
+      out = roi.processFrame(makeFrame(150, 150, () => [180, 96 + 2 * Math.sin(2 * Math.PI * 1.2 * t / 30), 70]));
+    }
+    expect(out.physiologicalPixels).toBeGreaterThan(0);
+    const dark = makeFrame(150, 150, () => [5, 4, 3]);
+    for (let t = 0; t < 100; t++) roi.processFrame(dark);
+    const stationary = makeFrame(150, 150, () => [180, 96, 70]);
+    for (let t = 0; t < 80; t++) {
+      out = roi.processFrame(stationary);
+      expect(out.physiologicalPixels).toBe(0);
+      expect(out.perfusionRatio).toBe(0);
+      expect(out.spatialObservation.green.pulse).toBe(0);
+    }
+  });
+
+  it('no atribuye pulsatilidad fisiológica a una superficie neutra modulada', () => {
+    const roi = new AdaptivePixelRoi();
+    for (let t = 0; t < 100; t++) {
+      const brightness = 120 + 2 * Math.sin(2 * Math.PI * 1.25 * t / 30);
+      const out = roi.processFrame(makeFrame(120, 120, () => [brightness, brightness, brightness]));
+      expect(out.physiologicalPixels).toBe(0);
+      expect(out.spatialObservation.valid).toBe(false);
+      expect(out.spatialObservation.matchedPixels).toBe(0);
+    }
+  });
+
+  it.each([0, 255])('conserva R/G cuando el canal azul no es utilizable (%s)', blue => {
+    const roi = new AdaptivePixelRoi();
+    let largestGreenPulse = 0;
+    for (let t = 0; t < 120; t++) {
+      const phase = Math.sin(2 * Math.PI * 1.2 * t / 30);
+      const out = roi.processFrame(makeFrame(120, 120, () => [220 + phase, 96 + 2 * phase, blue]));
+      if (t > 0) {
+        expect(out.spatialObservation.valid).toBe(true);
+        expect(out.spatialObservation.red.valid).toBe(true);
+        expect(out.spatialObservation.green.valid).toBe(true);
+        expect(out.spatialObservation.blue.valid).toBe(false);
+        expect(out.spatialObservation.blue.pulse).toBe(0);
+        expect(out.rawBlue).toBe(blue);
+        largestGreenPulse = Math.max(largestGreenPulse, Math.abs(out.spatialObservation.green.pulse));
+      }
+    }
+    expect(largestGreenPulse).toBeGreaterThan(0.01);
+  });
+
+  it('abre una época nueva ante pausa, cambio de malla o reinicio explícito', () => {
+    const roi = new AdaptivePixelRoi();
+    const frame = makeFrame(120, 120, () => [180, 96, 70]);
+    roi.processFrame(frame, 3, 0);
+    const before = roi.processFrame(frame, 3, 33);
+    expect(before.spatialObservation.valid).toBe(true);
+    const afterGap = roi.processFrame(frame, 3, 500);
+    expect(afterGap.spatialObservation.valid).toBe(false);
+    expect(afterGap.spatialObservation.epoch).toBeGreaterThan(before.spatialObservation.epoch);
+    const afterStride = roi.processFrame(frame, 4, 533);
+    expect(afterStride.spatialObservation.valid).toBe(false);
+    expect(afterStride.spatialObservation.epoch).toBeGreaterThan(afterGap.spatialObservation.epoch);
+    roi.reset();
+    const afterReset = roi.processFrame(frame, 4, 566);
+    expect(afterReset.spatialObservation.epoch).toBeGreaterThan(afterStride.spatialObservation.epoch);
+    expect(afterReset.spatialObservation.matchedPixels).toBe(0);
   });
 
   it('detecta desplazamiento del dedo por correlación temporal de máscaras', () => {
@@ -231,3 +355,4 @@ describe('AdaptivePixelRoi — máscara por píxel', () => {
     });
   });
 });
+
